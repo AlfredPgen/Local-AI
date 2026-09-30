@@ -1464,12 +1464,15 @@ def _line_key(line):
 
 
 def _lower_priority():
+    """Below-normal priority, so the PC stays responsive. Never raises it: a
+    process started at idle (or a worker of one) stays idle."""
     try:
         import psutil
         proc = psutil.Process()
         if sys.platform == "win32":
-            proc.nice(psutil.BELOW_NORMAL_PRIORITY_CLASS)
-        else:
+            if proc.nice() != psutil.IDLE_PRIORITY_CLASS:
+                proc.nice(psutil.BELOW_NORMAL_PRIORITY_CLASS)
+        elif proc.nice() < 10:
             proc.nice(10)
     except Exception:  # noqa: BLE001 - priority is a courtesy, never fatal
         pass

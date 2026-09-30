@@ -896,9 +896,16 @@ def plan_targets(files, args):
 
 
 def _lower_priority():
+    """Below-normal priority, so the PC stays responsive. Never raises it: a worker
+    of a process set to idle stays idle (it inherits idle from its parent)."""
     try:
         import psutil
-        psutil.Process().nice(psutil.BELOW_NORMAL_PRIORITY_CLASS if sys.platform == "win32" else 10)
+        proc = psutil.Process()
+        if sys.platform == "win32":
+            if proc.nice() != psutil.IDLE_PRIORITY_CLASS:
+                proc.nice(psutil.BELOW_NORMAL_PRIORITY_CLASS)
+        elif proc.nice() < 10:
+            proc.nice(10)
     except Exception:  # noqa: BLE001
         pass
 
