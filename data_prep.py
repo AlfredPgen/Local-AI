@@ -1618,6 +1618,15 @@ def _validate(args, parser):
         parser.error(f"--wiki-dir not found: {args.wiki_dir}")
     if args.tokenizer_from and not os.path.exists(args.tokenizer_from):
         parser.error(f"--tokenizer-from not found: {args.tokenizer_from}")
+    # file patterns are expanded by Python, not the shell: check them now, not after an hour of reading.
+    # Git Bash passes /c/Users/... for patterns with * (it converts only plain paths): accept that form.
+    for flag, patterns in (("--parquet", args.parquet), ("--jsonl", args.jsonl)):
+        for i, pattern in enumerate(patterns):
+            m = re.match(r"^/([A-Za-z])/(.*)$", pattern) if sys.platform == "win32" else None
+            if m and not glob.glob(pattern):
+                patterns[i] = pattern = f"{m.group(1).upper()}:/{m.group(2)}"
+            if not glob.glob(pattern):
+                parser.error(f"{flag}: no files match {pattern}")
     if args.superbpe and args.tokenizer_from:
         parser.error("--superbpe trains a new tokenizer; a reused one (--tokenizer-from) keeps its own pieces")
     if not 0 < args.superbpe_fraction < 0.5:

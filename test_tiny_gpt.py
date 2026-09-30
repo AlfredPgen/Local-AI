@@ -666,6 +666,56 @@ class TestPipeline(unittest.TestCase):
                 data_prep.prepare(["--out", os.path.join(self.tmp, "refused"), "--md-dir", a] + extra)
             self.assertIn(message, str(ctx.exception.code))
 
+    def test_arxiv_latex_to_markdown(self):
+        """arXiv e-print -> Markdown: included files, figure captions, numbered
+        citations, back matter dropped, e-mails masked; archive members outside
+        the archive and local files named in the LaTeX are never read."""
+        import tarfile
+        import download_arxiv as da
+        self.assertEqual(da.paper_group("cs.LG q-bio.PE"), "biology")
+        self.assertEqual(da.paper_group("math.PR stat.TH"), "statistics")
+        self.assertIsNone(da.paper_group("hep-th"))
+        self.assertEqual(da.number_citations("A [@b; @c] then @d and [@b]; mail a@b.org"),
+                         "A [1, 2] then [3] and [1]; mail a@b.org")
+        oai = (b'<OAI-PMH xmlns="http://www.openarchives.org/OAI/2.0/"><ListRecords><record><header/><metadata>'
+               b'<arXiv xmlns="http://arxiv.org/OAI/arXiv/"><id>2101.00001</id><created>2021-01-01</created>'
+               b'<title>Drift  and\n selection</title><categories>q-bio.PE</categories><abstract> A b. </abstract>'
+               b'</arXiv></metadata></record><resumptionToken>tok</resumptionToken></ListRecords></OAI-PMH>')
+        records, token, error = da.parse_oai_page(oai)
+        self.assertEqual((records[0]["title"], records[0]["abstract"], token, error),
+                         ("Drift and selection", "A b.", "tok", None))
+        pandoc = da.pandoc_path()
+        if not pandoc:
+            self.skipTest("pandoc is not installed")
+        secret = os.path.join(self.tmp, "local_secret.txt")
+        with open(secret, "w", encoding="utf-8") as f:
+            f.write("TOPSECRET")
+        main = ("\\documentclass{article}\\begin{document}\\section{Introduction}\n"
+                "Genetic drift changes allele frequencies \\citep{kimura1968,ohta1973}, as \\citet{wright1931} "
+                "showed. Contact: someone@example.org.\n\\input{methods}\n\\input{../evil}\n"
+                f"\\lstinputlisting{{{secret.replace(os.sep, '/')}}}\n"
+                "\\begin{figure}\\includegraphics{f.png}\\caption{Allele frequency over time.}\\label{fig:a}"
+                "\\end{figure}\n\\section{Acknowledgements}We thank the funders.\n\\end{document}\n")
+        blob = io.BytesIO()
+        with tarfile.open(fileobj=blob, mode="w:gz") as tar:
+            for name, text in (("main.tex", main), ("methods.tex", "\\section{Methods}We use $N_e = 100$."),
+                               ("../evil.tex", "EVIL")):
+                data = text.encode("utf-8")
+                info = tarfile.TarInfo(name)
+                info.size = len(data)
+                tar.addfile(info, io.BytesIO(data))
+        md, method = da.latex_markdown(blob.getvalue(), "Drift", "An abstract.", pandoc)
+        self.assertEqual(method, "latex")
+        self.assertTrue(md.startswith("# Drift\n\n## Abstract\n\nAn abstract."))
+        self.assertIn("## Methods", md)
+        self.assertIn("$N_e = 100$", md)
+        self.assertIn("[1, 2]", md)
+        self.assertIn("[3]", md)
+        self.assertIn("Figure: Allele frequency over time.", md)
+        self.assertIn("[email]", md)
+        for absent in ("Acknowledgements", "funders", "EVIL", "TOPSECRET", "\\label", "@"):
+            self.assertNotIn(absent, md)
+
     def test_superbpe_tokenizer(self):
         """--superbpe adds tokens spanning up to 4 words (never digits), text stays
         lossless and byte_tables still count exactly the bytes of the text."""
