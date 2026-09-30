@@ -866,6 +866,32 @@ step 400/11870 | train 4.912 | val 4.470 @400 [md 4.51 wiki 4.43] | ppl 87.36
 - Existing files are never overwritten unless you pass `--overwrite`. Saves are atomic: written to a temporary file,
   then renamed.
 
+## More data later: training further from the first model
+
+After adding more text to `ai_training_data`, the model does not have to start from zero:
+
+```
+python run_pipeline.py continue --hours 24
+```
+
+This does two things:
+
+1. **Builds a new dataset, `datasets\bio_v5`, from all of `ai_training_data`** (old and new text) with the
+   *same tokenizer* as the first dataset (`data_prep.py --tokenizer-from datasets\bio_v4`). The same tokenizer is
+   essential: the model's weights belong to its vocabulary, and a new tokenizer would give every token a different
+   meaning. Keeping the old text in stops the model from forgetting it while it learns the new.
+2. **Trains further from the first model's weights**
+   (`tiny_gpt.py --dataset datasets\bio_v5 --init-from tinyGPT_best.pt --name tinyGPT_continued
+   --time-budget-hours 24`): same model size, a fresh learning-rate schedule, and as much of the new dataset as fits
+   in the hours given.
+
+Why not LoRA? LoRA freezes the model and trains small add-on matrices. It saves memory when the model has billions
+of parameters (it is the plan for fine-tuning large open models on the Mac Studio), but it limits how much new
+knowledge a model can take in. tinyGPT is small enough to keep training all of its weights, which learns more.
+
+Two limits: the model size stays that of the first run (a bigger model starts from zero), and a tokenizer from the
+first data splits new-field words into more pieces (slightly less efficient, still correct).
+
 ## The experiments table
 
 `experiments.csv`, next to the checkpoints, gets one row for every training run (when it ends or is stopped),

@@ -2222,8 +2222,8 @@ def cmd_train(args):
             settings["steps"] = args.steps
             settings["planned_train_tokens"] = args.steps * settings["tokens_per_step"]
     elif init_obj is not None:
-        cfg = config_from_checkpoint(init_obj)
-        _, settings, plan_lines = plan_run(_args_with_shape(args, cfg), manifest, device, amp_dtype)
+        cfg = config_from_checkpoint(init_obj)  # --time-budget-hours then sets how much of the new data is read
+        _, settings, plan_lines = plan_with_time_budget(_args_with_shape(args, cfg), manifest, device, amp_dtype)
         cfg.dropout = args.dropout if args.dropout is not None else 0.0
         plan_lines.append(f"architecture taken from --init-from {args.init_from}; dropout {cfg.dropout} "
                           f"({'set' if args.dropout is not None else 'default 0 when continuing from weights'}, "

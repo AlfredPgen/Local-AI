@@ -422,6 +422,20 @@ class TestPipeline(unittest.TestCase):
             table = f.read()
         self.assertIn("training run", table)
         self.assertIn("benchmark", table)
+        # continued pre-training: a new dataset with the same tokenizer, then --init-from the first model, with a
+        # time budget (which must also apply to --init-from runs)
+        ds2 = os.path.join(self.tmp, "dataset_more")
+        with redirect_stdout(io.StringIO()):
+            data_prep.prepare(["--out", ds2, "--md-dir", f"more={self.corpus.md}", "--tokenizer-from", self.ds,
+                               "--val-fraction", "0.3"])
+        code, out_i = run(["tiny_gpt.py", "--dataset", ds2, "--init-from", os.path.join(self.runs, "A_best.pt"),
+                           "--name", "A_more", "--out-dir", self.runs, "--log-file", log, "--device", "cpu",
+                           "--time-budget-hours", "0.01", "--batch-size", "8", "--grad-accum", "1",
+                           "--eval-every", "4", "--eval-tokens", "1024", "--sample-tokens", "4", "--no-probes",
+                           "--tariff", "25"])
+        self.assertEqual(code, 0, out_i)
+        self.assertIn("initialised from", out_i)
+        self.assertIn("time budget 0.01 h", out_i)
         # energy and carbon: metrics line, run summary, table, and a checkpoint total that adds up across --resume
         self.assertRegex(out, r"\| \d+\.\d{2} kWh, [\d,]+ g CO2e, £\d+\.\d{2} \|")
         self.assertIn("whole run", out)

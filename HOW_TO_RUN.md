@@ -25,6 +25,7 @@ python run_pipeline.py build               # build the dataset datasets\bio_v4 (
 python run_pipeline.py plan --hours 48     # show which model fits in 48 hours (trains nothing)
 python run_pipeline.py train --hours 48    # train it
 python run_pipeline.py resume              # continue after Ctrl+C or a shutdown
+python run_pipeline.py continue --hours 24 # after adding more text: train further from the first model
 ```
 
 - `--hours` is how long you are willing to wait. The planner picks the largest model that can read about 20
@@ -228,6 +229,32 @@ tariff, add for example `--tariff AGILE-24-10-01` (Agile) or `--tariff GO-VAR-22
 `--tariff 24.5` (pence per kWh).
 
 ---
+
+## Later: more data, and training further from the first model
+
+After adding more text to `ai_training_data`, the model does not have to start from zero:
+
+```
+python run_pipeline.py continue --hours 24
+```
+
+This does two things:
+
+1. **Builds a new dataset, `datasets\bio_v5`, from all of `ai_training_data`** (old and new text) with the
+   *same tokenizer* as the first dataset (`data_prep.py --tokenizer-from datasets\bio_v4`). The same tokenizer is
+   essential: the model's weights belong to its vocabulary, and a new tokenizer would give every token a different
+   meaning. Keeping the old text in stops the model from forgetting it while it learns the new.
+2. **Trains further from the first model's weights**
+   (`tiny_gpt.py --dataset datasets\bio_v5 --init-from tinyGPT_best.pt --name tinyGPT_continued
+   --time-budget-hours 24`): same model size, a fresh learning-rate schedule, and as much of the new dataset as fits
+   in the hours given.
+
+Why not LoRA? LoRA freezes the model and trains small add-on matrices. It saves memory when the model has billions
+of parameters (it is the plan for fine-tuning large open models on the Mac Studio), but it limits how much new
+knowledge a model can take in. tinyGPT is small enough to keep training all of its weights, which learns more.
+
+Two limits: the model size stays that of the first run (a bigger model starts from zero), and a tokenizer from the
+first data splits new-field words into more pieces (slightly less efficient, still correct).
 
 ## Step 5: look at the results
 
