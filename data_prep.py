@@ -527,14 +527,23 @@ def _re2_term(words, case_sensitive, lead, trail):
     return f"(?-i:{rx})" if case_sensitive else rx
 
 
+PREFILTER_TERMS_PER_PATTERN = 200
+
+
 def _prefilter_patterns(terms):
     """RE2 patterns for the vectorised C++ prefilter; the SUM of their match
     counts is never below the Python matcher's count, so no document the full
     check would keep is rejected early. One pattern counts overlapping terms
     once ('genetic drift' also contains 'genetic*'), so terms whose matches
-    could overlap go to different patterns (2,385 terms -> 5 patterns).
+    could overlap go to different groups (2,385 terms -> 5 groups).
     Words are joined by any non-word run, as the Python matcher allows; word
-    boundaries are only required next to ASCII word characters."""
+    boundaries are only required next to ASCII word characters.
+
+    Each group is split into patterns of at most 200 terms (2,385 terms -> 16
+    patterns): a larger alternation outgrows RE2's fast automaton memory and
+    falls back to a far slower matcher (one pattern of 2,104 terms ran at 0.22
+    MB/s on Wikipedia text; 16 patterns of <= 200 terms at 14.4 MB/s, with
+    identical counts, since terms within a group never overlap)."""
     groups = []
     items = sorted(((t,) + _term_words(t) for t in terms), key=lambda it: (-len(it[1]), it[0]))
     for term, words, shape, case_sensitive, lead, trail in items:
@@ -547,7 +556,12 @@ def _prefilter_patterns(terms):
                 break
         else:
             groups.append([(shape, rx)])
-    return ["(?:" + "|".join(sorted((rx for _, rx in g), key=len, reverse=True)) + ")" for g in groups]
+    patterns = []
+    for group in groups:
+        rxs = sorted((rx for _, rx in group), key=len, reverse=True)
+        for i in range(0, len(rxs), PREFILTER_TERMS_PER_PATTERN):
+            patterns.append("(?:" + "|".join(rxs[i:i + PREFILTER_TERMS_PER_PATTERN]) + ")")
+    return patterns
 
 
 class _Affixes:

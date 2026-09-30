@@ -682,9 +682,14 @@ Importance resampling towards it would make the corpus narrower. Keyword selecti
 - **Prefilter:** a C++ regular-expression engine (RE2, inside pyarrow) first discards documents with too few
   keyword matches. It scans all 6.4 million Wikipedia articles in about 2 minutes on 4 threads. Its count is never
   below the exact count: terms whose matches could overlap ("genetic drift" and "genetic\*") are counted by
-  separate patterns (still five for the 2,385 terms). On 100,000 FineWeb-Edu and peS2o documents it rejected none
+  separate groups (five for the 2,385 terms). On 100,000 FineWeb-Edu and peS2o documents it rejected none
   that the exact count keeps. For the 2,385-term list, every term was also written out in nine spellings (plural,
-  capitals, punctuation around it; 21,438 test texts): the prefilter never counted fewer matches than the exact check.
+  capitals, punctuation around it; 21,465 test texts): the prefilter never counted fewer matches than the exact check.
+- **Pattern size matters:** each group is split into patterns of at most 200 terms (16 patterns for 2,385 terms).
+  One pattern of 2,104 terms outgrew the regular-expression engine's fast memory and fell back to a far slower
+  method: 0.22 MB of Wikipedia text per second, against 14.4 MB/s for the 16 smaller patterns, with identical
+  counts. Before the split, growing the list from 608 to 2,385 terms had made the full build's Wikipedia step about
+  25 times slower (an estimated 8 hours instead of minutes).
 - **Counting:** the survivors are counted with dictionary lookups instead of one large regular expression. Speed rose
   from 0.5 to 5.7 MB of text per second per thread.
 - **Accuracy:** it made the same decision as the old method on 2,979 of 3,000 test documents (99.3%). The differences
