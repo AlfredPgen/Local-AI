@@ -1,9 +1,12 @@
 # tinyGPT pipeline. Install:  python -m pip install -r requirements.txt
 #
 # PyTorch: install the wheel for your platform from https://pytorch.org first
-#   Windows or Linux + NVIDIA: the CUDA wheel (PyTorch 2.6 or newer is recommended: CVE-2025-32434)
+#   Windows or Linux + NVIDIA: the CUDA wheel, PyTorch 2.6 or newer (CVE-2025-32434); tested with 2.10:
+#     python -m pip install torch==2.10.0 torchvision==0.25.0 --index-url https://download.pytorch.org/whl/cu126
+#   Windows, for torch.compile (about 1.45x faster training): the Triton build matching PyTorch's minor version,
+#     python -m pip install "triton-windows>=3.6,<3.7"      (PyTorch 2.10; 2.9 -> 3.5, 2.8 -> 3.4 ...)
 #   Apple silicon: the default macOS wheel, which includes MPS
-torch>=2.3
+torch>=2.6
 sentencepiece>=0.2      # tokenizer (training and encoding)
 numpy>=1.26
 pyarrow>=14             # Wikipedia (Hugging Face save_to_disk Arrow files), Parquet (FineWeb-Edu), JSON Lines (peS2o)

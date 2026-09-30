@@ -964,6 +964,9 @@ def _reflow(block):
 
 def convert_to_file(path, target, args):
     """Convert one file and write it; returns (status, detail)."""
+    if os.path.exists(target) and not getattr(args, "overwrite", False):
+        # written since this batch was planned (for example by a separate --ocr run): never replace it
+        return "skipped", f"{target} already exists (use --overwrite)"
     text, kind = convert_one(path, args, getattr(args, "image_dir", None))
     text = text.replace("\r\n", "\n").replace("\r", "\n").strip()
     ocr_note = ""
@@ -1033,6 +1036,8 @@ def main():
             cmd.append("--no-gwas")
         if getattr(args, "ocr", False):
             cmd.append("--ocr")
+        if args.overwrite:
+            cmd.append("--overwrite")
         if args.extract_images:
             cmd += ["--extract-images", "--image-dir", args.out or os.path.dirname(target)]
         try:

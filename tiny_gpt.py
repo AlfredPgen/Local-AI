@@ -2761,10 +2761,13 @@ def maybe_compile(model, mode, device):
         have_triton = True
     except ImportError:
         have_triton = False
-    if mode == "auto" and not (device.type == "cuda" and have_triton and sys.platform != "win32"):
+    # auto: compile on CUDA whenever Triton is importable, Windows included (the triton-windows package; measured
+    # 1.45x faster training on an RTX 3070 laptop for 36.6M and 70M models). The first steps then take ~10-30 s longer.
+    if mode == "auto" and not (device.type == "cuda" and have_triton):
         return model
     if not have_triton and device.type == "cuda":
-        print("torch.compile skipped: Triton is not installed (not available on Windows); using eager mode.")
+        print("torch.compile skipped: Triton is not installed (on Windows: python -m pip install triton-windows, the "
+              "version matching PyTorch); using eager mode.")
         return model
     try:
         compiled = torch.compile(model)

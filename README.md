@@ -53,7 +53,9 @@ Not included: model weights, datasets, and personal run records (see `.gitignore
 
 ## Requirements
 
-- Python 3.10 or newer (developed on 3.12), PyTorch 2.3 or newer (2.6+ recommended, see Safety).
+- Python 3.10 or newer (developed on 3.12), PyTorch 2.6 or newer (tested with 2.10, see Safety).
+- For about 1.45 times faster training on an NVIDIA GPU: Triton, used by `torch.compile` (on Windows the
+  `triton-windows` package matching your PyTorch version; see `requirements.txt`).
 - An NVIDIA GPU for training in reasonable time; Apple silicon (MPS) and CPU also work, more slowly.
 - The packages in `requirements.txt`. Optional tools (yt-dlp, faster-whisper, Tesseract OCR, pandoc) are listed
   there with what needs them.

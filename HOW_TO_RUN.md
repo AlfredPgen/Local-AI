@@ -214,6 +214,8 @@ and, without more text, not better.
 
 ### During training
 
+- The first minute or so of a run is spent compiling the model for the GPU (`torch.compile`); after that it trains
+  about 1.45 times faster. The header line says `compile: on`.
 - Every 200 steps a **metrics line**: training loss, validation loss per source, bits per byte, speed, energy used,
   CO2 and electricity cost, time left. `NEW BEST` means the model improved; `tinyGPT_best.pt` is saved then.
 - **Pause:** press Ctrl+C. **Continue:** `python tiny_gpt.py --resume` (same `--name` if you used one).

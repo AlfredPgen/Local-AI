@@ -125,7 +125,9 @@ Every script was reviewed for bugs, stale code and speed. What you will notice:
   is handled correctly.
 - **compare_models.py** needs at least 20 documents for a verdict. **detect_text.py** counts each (previous token,
   token) pair once and reports an exact p-value (Section 9.7).
-- **Security:** see the note on PyTorch 2.5.1 in Section 13.2.
+- **PyTorch 2.10 and torch.compile (same day):** PyTorch was upgraded from 2.5.1 to 2.10, which also closes the
+  checkpoint-loading flaw CVE-2025-32434, and the `triton-windows` package makes `torch.compile` work on this
+  laptop: training is about 1.45 times faster (Section 3.1).
 - **New tools the same day:**
   - `download_pmc.py`: 100,000 open-access genetics and genomics papers from PubMed Central as Markdown
     (Section 4.8).
@@ -372,7 +374,8 @@ additions), final normalisation and the tied output layer. **b**, causal attenti
 | Attention | **Grouped-query attention (GQA)** once there are 8 or more heads | Several query heads share one key/value head; less memory at generation. Your run has 6 heads, so it uses ordinary multi-head attention |
 | Output | **Tied embeddings** | The output layer reuses the embedding matrix, saving 3.1M parameters (18% of your model) |
 | Biases | None | They add little and complicate weight decay |
-| Attention kernel | PyTorch SDPA, `repeat_kv` path chosen by a timing race | On Windows with torch 2.5.1, the native GQA path fell back to a kernel about 17 times slower |
+| Attention kernel | PyTorch SDPA, `repeat_kv` path chosen by a timing race | On Windows the native GQA path falls back to a kernel about 5 times slower (17 times with torch 2.5.1) |
+| Compilation | `torch.compile` when Triton is installed (`triton-windows` on Windows) | Fuses many small GPU operations into few: 1.46 times faster for 36.6M and 1.44 times for 70M parameters on the RTX 3070, measured alternating both modes; the first steps take 10-30 s longer to compile |
 
 ## Why decoder-only, and not encoder-decoder?
 
@@ -1611,7 +1614,8 @@ operations, about 6 hours ($20).
 **Steps with tiny_gpt.py:**
 
 1. Build the dataset at home. Only the token files are needed: bio_v2 is about 400 MB.
-2. Rent one H100 with Linux, where `torch.compile` works (it needs Triton, which Windows lacks).
+2. Rent one H100 with Linux, where `torch.compile` works out of the box (on Windows it needs the `triton-windows`
+   package).
 3. Upload the dataset and scripts.
 4. Run `python tiny_gpt.py --dataset datasets\bio_v3 --time-budget-hours 25`.
 5. Download the best checkpoint and experiments.csv.
@@ -1893,8 +1897,8 @@ a 5–50M model: S (a few percent), M (noticeable) or L (large). **Effort:** S i
   estimation.
 - **Architecture:** multi-token prediction, RoPE context extension and mixture of experts.
 - **Data:** quality classifiers, suffix-array deduplication and synthetic textbook data.
-- **Efficiency:** chunked cross-entropy, activation checkpointing, 8-bit optimisers and `torch.compile` with
-  FlashAttention (on Linux or the Mac).
+- **Efficiency:** chunked cross-entropy, activation checkpointing, 8-bit optimisers and FlashAttention kernels
+  (`torch.compile` is already on).
 - **Interpretability:** logit lens, linear probes, sparse autoencoders.
 - **Uncertainty:** conformal answer sets and semantic entropy.
 
@@ -1927,10 +1931,9 @@ a 5–50M model: S (a few percent), M (noticeable) or L (large). **Effort:** S i
 
 - **Safe loading.** Checkpoints are loaded with `weights_only=True`, so they can't run code. `--trust-checkpoint`
   exists only for your own old files. Exports use safetensors.
-  - **Caveat for PyTorch 2.5.1 (installed here):** CVE-2025-32434 showed that `weights_only=True` can be bypassed in
-    PyTorch before 2.6. Until PyTorch is upgraded, load only checkpoints you made yourself. The upgrade (not done;
-    it needs your approval): `python -m pip install --upgrade torch --index-url https://download.pytorch.org/whl/cu126`,
-    then rerun the tests.
+  - CVE-2025-32434 showed that `weights_only=True` can be bypassed in PyTorch before 2.6. PyTorch 2.10 is
+    installed here, so this is closed; on another machine with an older PyTorch, load only checkpoints you made
+    yourself.
 - **No overwriting.**
   - New names are required; `--overwrite` is always explicit.
   - Saves are atomic.
