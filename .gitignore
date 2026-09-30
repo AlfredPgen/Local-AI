@@ -1,0 +1,25 @@
+# model weights and datasets (hundreds of MB; GitHub refuses files over 100 MB)
+*.pt
+*.safetensors
+*.bin
+*.pt.bak-*
+datasets/
+export*/
+exported_model/
+
+# personal run records and local backups (they contain local paths)
+experiments.csv
+experiments.csv.*
+*_metrics.jsonl
+*_benchmark_*.csv
+compare_*.csv
+backup_v3_2026-09-29/
+tinyGPT_advanced_techniques.docx
+
+# regenerable
+__pycache__/
+*.pyc
+*.docx.previous
+*_dashboard.png
+*_embeddings.html
+log.txt

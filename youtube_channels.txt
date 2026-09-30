@@ -1,0 +1,31 @@
+# Channels for youtube_transcripts.py: one per line (@handle, channel name, or URL). # starts a comment.
+# Only videos that match keywords_biology.txt are kept, so broad channels are fine.
+# Run:    python youtube_transcripts.py --channels-file youtube_channels.txt
+# Later:  python youtube_transcripts.py --channels-file youtube_channels.txt --whisper
+
+# Genetics, genomics, biology research talks
+Broad Institute                     # 1,459 videos: genomics talks, Medical and Population Genetics primers
+Computational Genomics Summer Institute CGSI   # 421 videos, 261 hours
+Genetics Society of America         # 470 videos, 241 hours
+Bioinformatics DotCa                # 735 videos, 755 hours: Canadian Bioinformatics Workshops
+Sanger Institute Scientific Training and Events   # 245 videos, 172 hours
+Human Cell Atlas                    # 667 videos, 572 hours
+@IBiologyvideos                     # talks by leading biologists
+National Human Genome Research Institute
+EMBL-EBI
+@YaleCourses                        # Open Yale Courses (CC BY-NC-SA), incl. evolution, ecology and behaviour
+
+# Statistics and machine learning
+@statquest                          # 264 videos
+Ben Lambert                         # 497 videos: Bayesian statistics, econometrics
+@rmcelreath                         # Statistical Rethinking lectures (148 hours)
+@3blue1brown                        # linear algebra, probability, neural networks
+@Eigensteve                         # Steve Brunton: data-driven science, SVD, dynamics
+@AndrejKarpathy                     # neural networks and language models from scratch
+
+# Broad courses (large; the keyword filter keeps the relevant part)
+@crashcourse                        # 1,702 videos
+@AmoebaSisters                      # introductory biology
+@mitocw                             # 8,112 videos, 5,474 hours: MIT OpenCourseWare (CC BY-NC-SA)
+@stanfordonline
+@khanacademy

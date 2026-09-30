@@ -1,0 +1,12 @@
+{"prompt": "What is an allele?", "chosen": "One of the alternative forms of a gene or DNA sequence at a given position in the genome.", "rejected": "A type of protein that copies DNA during cell division."}
+{"prompt": "What does a p-value measure?", "chosen": "The probability, assuming the null hypothesis is true, of data at least as extreme as those observed.", "rejected": "The probability that the null hypothesis is true."}
+{"prompt": "What is narrow-sense heritability?", "chosen": "The share of phenotypic variance explained by additive genetic variance.", "rejected": "The fraction of a trait that is caused by genes in each individual."}
+{"prompt": "What is a confidence interval?", "chosen": "An interval from a procedure that contains the true value in a stated share of repeated samples, for example 95%.", "rejected": "An interval that contains the true value with 95% probability once it has been calculated."}
+{"prompt": "Why use a genome-wide significance threshold?", "chosen": "To control false positives when testing around a million independent variants.", "rejected": "Because smaller p-values mean larger effects."}
+{"prompt": "What is linkage disequilibrium?", "chosen": "The non-random association of alleles at different loci in a population.", "rejected": "The physical distance between two genes on a chromosome."}
+{"prompt": "What does Mendelian randomization estimate?", "chosen": "A causal effect of an exposure on an outcome, using genetic variants as instrumental variables.", "rejected": "The heritability of a disease from twin studies."}
+{"prompt": "What does the ribosome do?", "chosen": "It translates messenger RNA into protein.", "rejected": "It replicates DNA before cell division."}
+{"prompt": "What is overfitting?", "chosen": "Fitting noise in the training data so that performance on new data suffers.", "rejected": "Training a model for too few steps so it learns nothing."}
+{"prompt": "What is the effective population size?", "chosen": "The size of an idealised population that loses diversity by drift at the same rate as the real one.", "rejected": "The number of individuals counted in a census."}
+{"prompt": "What is a polygenic score?", "chosen": "A weighted sum of an individual's risk alleles, using effect sizes from a GWAS.", "rejected": "The number of genes that cause a disease."}
+{"prompt": "What does colocalisation test?", "chosen": "Whether two traits share the same causal variant in a region.", "rejected": "Whether two genes are expressed in the same cell."}

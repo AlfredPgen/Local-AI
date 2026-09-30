@@ -1,0 +1,22 @@
+# tinyGPT pipeline. Install:  python -m pip install -r requirements.txt
+#
+# PyTorch: install the wheel for your platform from https://pytorch.org first
+#   Windows or Linux + NVIDIA: the CUDA wheel (PyTorch 2.6 or newer is recommended: CVE-2025-32434)
+#   Apple silicon: the default macOS wheel, which includes MPS
+torch>=2.3
+sentencepiece>=0.2      # tokenizer (training and encoding)
+numpy>=1.26
+pyarrow>=14             # Wikipedia (Hugging Face save_to_disk Arrow files), Parquet (FineWeb-Edu), JSON Lines (peS2o)
+matplotlib>=3.8         # view_pt.py dashboard
+scipy>=1.11             # exact p-values; clustered token-similarity heatmap
+psutil>=5.9             # CPU share for the energy estimate; RAM budget; lower process priority during data prep
+protobuf>=3.20          # data_prep.py clears build details from the tokenizer (reproducible fingerprints)
+pymupdf4llm>=0.0.17     # convert_to_markdown.py: PDF files
+python-docx>=1.1        # convert_to_markdown.py: .docx files; guide/build_guide.py
+datasets>=2.14          # test_tiny_gpt.py builds a small test Arrow folder; download_wikipedia.py
+#
+# Optional, for single tools:
+# yt-dlp>=2026.8        # youtube_transcripts.py (also needs Node.js for YouTube's JavaScript challenge)
+# faster-whisper>=1.1   # youtube_transcripts.py --whisper (GPU: also nvidia-cublas-cu12 and nvidia-cudnn-cu12)
+# Tesseract OCR         # convert_to_markdown.py --ocr for scanned PDFs (Windows: winget install UB-Mannheim.TesseractOCR)
+# pandoc                # guide/build_guide.py (Word is used only to fill in the table of contents)

@@ -1,0 +1,650 @@
+# Include-keyword list for data_prep.py (--include-keywords keywords_biology.txt)
+#
+# Matching is case-insensitive and whole-word. A trailing * matches any word
+# ending (genom* -> genome, genomic, genomics). A hyphen or space inside a term
+# also matches en/em dashes and hyphens (Hardy-Weinberg matches Hardy–Weinberg).
+# Lines starting with # are comments. Ambiguous everyday words (cell, nucleus,
+# matrix, fitness, dose) are deliberately omitted or used only in phrases;
+# combine this list with --keyword-min-distinct 3 so one stray word is not
+# enough for a document to count as biology/quantitative material.
+
+# --- genetics and genomics -------------------------------------------------
+gene
+genes
+genetic*
+genom*
+allele*
+chromosom*
+DNA
+RNA
+mRNA
+tRNA
+rRNA
+microRNA
+lncRNA
+nucleotide*
+genotyp*
+phenotyp*
+heritab*
+heredit*
+mutation*
+polymorphism*
+SNP
+SNPs
+haplotyp*
+locus
+loci
+linkage disequilibrium
+recombination
+meiosis
+mitosis
+epigenetic*
+methylation
+transcription factor*
+gene expression
+exome*
+DNA sequencing
+RNA-seq
+CRISPR
+PCR
+genome-wide
+GWAS
+eQTL*
+QTL*
+pleiotrop*
+epistasis
+recessive
+Mendelian
+Mendel
+karyotyp*
+telomer*
+centromer*
+codon*
+exon*
+intron*
+transcriptom*
+proteom*
+metabolom*
+bioinformatic*
+sequence alignment
+
+# --- population, quantitative and statistical genetics; evolution ----------
+population genetics
+genetic drift
+natural selection
+Hardy-Weinberg
+Wright-Fisher
+coalescen*
+effective population size
+gene flow
+admixture
+fixation index
+inbreeding
+heterozyg*
+homozyg*
+breeding value*
+additive genetic variance
+quantitative genetics
+statistical genetics
+polygenic
+fine-mapping
+colocalization
+colocalisation
+Mendelian randomization
+Mendelian randomisation
+summary statistics
+evolutionary
+speciation
+phylogen*
+Darwin*
+selective sweep*
+neutral theory
+molecular clock
+
+# --- cell and molecular biology, biochemistry, structure, histology --------
+cell biology
+molecular biology
+cytoplasm*
+organelle*
+mitochondri*
+ribosom*
+endoplasmic reticulum
+Golgi
+lysosom*
+cytoskelet*
+apoptosis
+cell cycle
+stem cell*
+signal transduction
+enzym*
+protein
+proteins
+amino acid*
+peptide*
+receptor*
+antibod*
+antigen*
+immunolog*
+immune system
+histolog*
+histopatholog*
+epitheli*
+connective tissue
+biopsy
+biochemi*
+metabolism
+metabolic
+protein folding
+protein structure
+structural biology
+crystallograph*
+cryo-EM
+molecular dynamics
+phosphorylation
+kinase*
+AlphaFold
+
+# --- medicine, pharmacology, drug discovery ---------------------------------
+medicine
+medical
+clinical trial*
+clinical
+disease*
+diagnos*
+therapeutic*
+pharmacolog*
+pharmacokinetic*
+pharmacodynamic*
+drug discovery
+drug target*
+drug development
+drug design
+pharmaceutical*
+toxicolog*
+inhibitor*
+agonist*
+antagonist*
+ligand*
+biomarker*
+oncolog*
+carcinogen*
+tumour*
+tumor*
+diabetes
+cardiovascular
+neurolog*
+vaccin*
+antibiotic*
+pathogen*
+epidemiolog*
+cohort stud*
+biobank*
+UK Biobank
+All of Us Research
+China Kadoorie
+FinnGen
+1000 Genomes
+gnomAD
+Ensembl
+Reactome
+KEGG
+Open Targets
+UniProt
+Protein Data Bank
+ChEMBL
+DrugBank
+GTEx
+dbSNP
+ClinVar
+OMIM
+GWAS Catalog
+PubMed
+Pfizer
+Novartis
+Roche
+AstraZeneca
+GlaxoSmithKline
+Sanofi
+Eli Lilly
+Bristol-Myers Squibb
+AbbVie
+Amgen
+Gilead
+Novo Nordisk
+Takeda
+Moderna
+BioNTech
+Regeneron
+
+# --- life science in general ------------------------------------------------
+biology
+biological
+biologist*
+life science*
+organism*
+species
+ecolog*
+physiolog*
+anatom*
+microbiolog*
+bacteri*
+virolog*
+zoolog*
+botan*
+neurosci*
+neuron*
+embryo*
+developmental biology
+photosynthesis
+
+# --- mathematics, statistics, probability, optimisation --------------------
+mathematic*
+statistic*
+probabilit*
+algebra*
+calculus
+linear algebra
+eigenvalue*
+eigenvector*
+vector space*
+differential equation*
+theorem*
+lemma
+convex
+optimization
+optimisation
+gradient descent
+likelihood
+maximum likelihood
+Bayesian
+posterior distribution
+prior distribution
+regression
+variance
+covariance
+standard deviation
+hypothesis test*
+p-value*
+confidence interval*
+random variable*
+stochastic
+Markov
+Monte Carlo
+estimator*
+graph theory
+combinatori*
+
+# ===========================================================================
+# Added 2026-09-29. Syntax reminders: =TERM is case-sensitive (gene symbols that
+# are also English words: =MET, =RET, =APP); *suffix matches word endings
+# (drug classes: *mab antibodies, *nib kinase inhibitors, *vir antivirals).
+# ===========================================================================
+
+# --- machine learning and deep learning -------------------------------------
+machine learning
+deep learning
+neural network*
+artificial intelligence
+large language model*
+language model*
+transformer model*
+attention mechanism
+self-attention
+reinforcement learning
+supervised learning
+unsupervised learning
+self-supervised
+representation learning
+convolutional
+recurrent neural
+=LSTM
+autoencoder*
+diffusion model*
+generative adversarial
+=GAN
+=GANs
+=BERT
+=GPT
+backpropagation
+stochastic gradient descent
+overfitting
+regularization
+regularisation
+hyperparameter*
+cross-validation
+random forest*
+gradient boosting
+support vector machine*
+k-means
+principal component analysis
+dimensionality reduction
+t-SNE
+=UMAP
+embedding*
+tokenization
+tokenisation
+variational inference
+Bayesian optimization
+Bayesian optimisation
+graph neural network*
+federated learning
+PyTorch
+TensorFlow
+scikit-learn
+=CUDA
+=GPU
+=GPUs
+
+# --- rendering, 3D and scientific visualisation -----------------------------
+rendering
+ray tracing
+path tracing
+rasterization
+rasterisation
+shader*
+global illumination
+subsurface scattering
+volume rendering
+computer graphics
+3D model*
+3D modelling
+3D modeling
+polygon mesh
+texture mapping
+photogrammetry
+motion capture
+=Blender
+Manim
+OpenGL
+=Vulkan
+=GLSL
+molecular visualization
+molecular visualisation
+PyMOL
+ChimeraX
+=VMD
+scientific visualization
+scientific visualisation
+
+# --- animals ---------------------------------------------------------------
+animal*
+mammal*
+vertebrate*
+invertebrate*
+reptile*
+amphibian*
+insect*
+primate*
+rodent*
+zoology
+ethology
+Drosophila
+Caenorhabditis elegans
+=C. elegans
+zebrafish
+mouse model*
+Mus musculus
+Homo sapiens
+chimpanzee*
+Neanderthal*
+Denisovan*
+livestock
+cattle
+bovine
+porcine
+canine
+feline
+avian
+marine biology
+phylum
+genus
+taxonomy
+
+# --- plants, fungi and microbes ----------------------------------------------
+plant biology
+plant breeding
+plant genetics
+Arabidopsis
+maize
+wheat
+cultivar*
+crop*
+chlorophyll
+angiosperm*
+gymnosperm*
+pollination
+pollen
+horticultur*
+agronom*
+phytochemical*
+fungi
+fungus
+fungal
+algae
+yeast
+Saccharomyces
+Escherichia coli
+=E. coli
+microbiome*
+metagenom*
+archaea
+
+# --- well-known genes and proteins (case-sensitive symbols) ----------------
+=TP53
+=BRCA1
+=BRCA2
+=APOE
+=CFTR
+=HBB
+=EGFR
+=KRAS
+=NRAS
+=HRAS
+=BRAF
+=MYC
+=ERBB2
+=HER2
+=PTEN
+=RB1
+=VHL
+=BCL2
+=TNF
+=IL6
+=LEP
+=FTO
+=MC4R
+=PCSK9
+=LDLR
+=HMGCR
+=ACE2
+=HLA
+=MTHFR
+=CYP2D6
+=CYP3A4
+=CYP2C19
+=CYP2C9
+=VKORC1
+=TPMT
+=DPYD
+=SLCO1B1
+=G6PD
+=DMD
+=HTT
+=FMR1
+=SMN1
+=MECP2
+=PAH
+=LRRK2
+=SNCA
+=PSEN1
+=MAPT
+=TREM2
+=SOD1
+=TCF7L2
+=PPARG
+=KCNJ11
+=HNF1A
+=NOD2
+=IL23R
+=CTLA4
+=PTPN22
+=FOXP3
+=SOX2
+=POU5F1
+=NANOG
+=KLF4
+=PAX6
+=NOTCH1
+=TGFB1
+=VEGFA
+=IGF1
+=ESR1
+=MTOR
+=AKT1
+=PIK3CA
+=JAK2
+=STAT3
+=CDKN2A
+=MDM2
+=CHEK2
+=PALB2
+=MLH1
+=MSH2
+=TERT
+=GAPDH
+=LCT
+=OCA2
+=HERC2
+=MC1R
+=SLC24A5
+=EDAR
+=ALDH2
+=EPAS1
+=APOL1
+=CCR5
+=TLR4
+=MET
+=RET
+=APP
+=ATM
+=ALK
+p53
+insulin receptor
+hemoglobin
+haemoglobin
+dystrophin
+huntingtin
+amyloid
+tau protein
+cytokine*
+interleukin*
+interferon*
+immunoglobulin*
+kinase*
+phosphatase*
+transcription factor
+histone*
+chromatin
+
+# --- chemistry, molecules and drugs ------------------------------------------
+chemistry
+chemical*
+molecule*
+molecular weight
+compound*
+organic chemistry
+medicinal chemistry
+catalysis
+catalyst*
+isomer*
+enantiomer*
+chiral
+polymer*
+solubility
+lipophilicity
+=SMILES
+=InChI
+PubChem
+aspirin
+ibuprofen
+paracetamol
+acetaminophen
+penicillin
+amoxicillin
+metformin
+atorvastatin
+warfarin
+heparin
+morphine
+opioid*
+caffeine
+nicotine
+ethanol
+glucose
+fructose
+sucrose
+cholesterol
+dopamine
+serotonin
+adrenaline
+epinephrine
+acetylcholine
+cortisol
+testosterone
+estrogen*
+oestrogen*
+progesterone
+glutathione
+lisinopril
+ramipril
+*mab
+*nib
+*vir
+*statin
+*cillin
+*mycin
+*oxacin
+*sartan
+*olol
+*prazole
+monoclonal antibod*
+small molecule*
+
+# --- genomics technology and other areas -----------------------------------
+=BLAST
+=FASTA
+=FASTQ
+=VCF
+=PLINK
+=GATK
+Bioconductor
+single-cell
+scRNA-seq
+ChIP-seq
+ATAC-seq
+Hi-C
+long-read
+nanopore
+PacBio
+Illumina
+ancient DNA
+mitochondrial DNA
+copy number
+structural variant*
+de novo mutation*
+archaeogenetic*
+demograph*
+systems biology
+synthetic biology
+gene regulatory network*
+protein-protein interaction*
+enzyme kinetics
+pharmacogenomic*
+precision medicine
+public health
+genetic counselling
+genetic counseling
+virus*
+viral
+bacterial
+immune response
