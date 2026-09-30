@@ -976,19 +976,20 @@ def convert_to_file(path, target, args):
         return "skipped", f"{target} already exists (use --overwrite)"
     text, kind = convert_one(path, args, getattr(args, "image_dir", None))
     text = text.replace("\r\n", "\n").replace("\r", "\n").strip()
-    ocr_note = ""
+    ocr_note, ocr_tried = "", False
     if kind == "pdf":
         pages = _pdf_page_count(path)
         if len(text) < SCAN_CHARS_PER_PAGE * pages:  # a nearly empty text layer: a scan (maybe with a cover line)
             if getattr(args, "ocr", False):
+                ocr_tried = True
                 ocr_text = ocr_pdf(path).strip()
                 if len(ocr_text) > 2 * len(text):
                     text, ocr_note = ocr_text, " (read with OCR)"
             else:
                 ocr_note = " (text layer nearly empty: a scan? rerun with --ocr --overwrite)"
     if kind == "pdf" and len(text) < MIN_TEXT_CHARS:
-        return "skipped", ("no text layer (a scanned PDF? rerun with --ocr); nothing written" if not ocr_note
-                           else "OCR found no text; nothing written")
+        return "skipped", ("OCR found no text; nothing written" if ocr_tried
+                           else "no text layer (a scanned PDF? rerun with --ocr); nothing written")
     if not text:
         return "skipped", "no text found; nothing written"
     os.makedirs(os.path.dirname(target), exist_ok=True)
