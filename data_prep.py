@@ -1540,6 +1540,9 @@ def parse_args(argv=None):
                    help="over-sample sources in the tokenizer's training text, e.g. md=4 (default: proportional). "
                         "Domain words then get their own tokens instead of being split into pieces")
     g.add_argument("--tokenizer-from", help="reuse a tokenizer: .model file, dataset folder or tiny_gpt checkpoint")
+    g.add_argument("--keep-split-from", help="earlier dataset folder: its training documents stay in training and its "
+                                             "validation documents in validation (for training further from a model "
+                                             "built on it); only new documents are split")
     g.add_argument("--leakage-check", choices=("on", "off"), default="on")
     g.add_argument("--threads", type=int, default=max(1, os.cpu_count() or 2),
                    help="threads for the C++ keyword prefilter and SentencePiece (default: all CPU threads)")
@@ -1590,6 +1593,8 @@ def _validate(args, parser):
         parser.error(f"--wiki-dir not found: {args.wiki_dir}")
     if args.tokenizer_from and not os.path.exists(args.tokenizer_from):
         parser.error(f"--tokenizer-from not found: {args.tokenizer_from}")
+    if args.keep_split_from and not os.path.isfile(os.path.join(args.keep_split_from, "docs.tsv")):
+        parser.error(f"--keep-split-from: no docs.tsv in {args.keep_split_from}")
 
 
 def prepare(argv=None):
@@ -1874,6 +1879,8 @@ def _prepare(args, state=None):
     cross_source = {r for r, m in clusters.items() if len({docs[i][0] for i in m}) > 1}
     split_of = {}
     forced_train = collections.Counter()
+    previous = _previous_split(args.keep_split_from) if args.keep_split_from else {}
+    kept_split = collections.Counter()
     for name in sources:
         idxs = [i for i in range(len(docs)) if docs[i][0] == name and i not in dropped]
         groups = collections.defaultdict(list)  # cluster root -> members (labels alone could collide)
@@ -1883,6 +1890,22 @@ def _prepare(args, state=None):
         budget = min(args.val_fraction * total_chars, args.val_max_chars)
         order = sorted(groups, key=lambda g: stable_unit(args.seed, "split", group_of[g]))
         val_chars = 0
+        if previous:
+            # --keep-split-from: a document the earlier model trained on must never become validation (its loss
+            # there would look too good); earlier validation documents stay validation. Only new documents are split.
+            fresh = []
+            for g in order:
+                before = {previous.get((docs[i][0], str(docs[i][1]))) for i in groups[g]}
+                target = "train" if "train" in before else ("val" if "val" in before else None)
+                if target is None:
+                    fresh.append(g)
+                    continue
+                kept_split[target] += len(groups[g])
+                for i in groups[g]:
+                    split_of[i] = target
+                if target == "val":
+                    val_chars += sum(docs[i][3] for i in groups[g])
+            order = fresh
         for g in order:
             chars = sum(docs[i][3] for i in groups[g])
             target = "train"
@@ -1900,6 +1923,9 @@ def _prepare(args, state=None):
         sources[name]["val_chars"] = int(val_chars)
         sources[name]["train_chars"] = int(total_chars - val_chars)
 
+    if previous:
+        notes.append(f"Split kept from {args.keep_split_from}: {kept_split['train']:,} documents stay in training and "
+                     f"{kept_split['val']:,} in validation as before; only new documents were split.")
     nothing_kept = len(docs) == len(dropped)
     if nothing_kept and not args.scan_only:
         notes.append("No document passed the filters, so nothing was tokenized.")
@@ -2063,6 +2089,21 @@ def _prepare(args, state=None):
 
 _OUTPUT_NAMES = {"_work", "tokenizer.model", "report.md", "docs.tsv", "duplicates.tsv", "boilerplate.tsv",
                  "keyword_hits.tsv", "leakage.tsv", "manifest.json.tmp"}
+
+
+def _previous_split(dataset_dir):
+    """{(source, doc_id): 'train' | 'val'} from an earlier dataset's docs.tsv."""
+    path = os.path.join(dataset_dir, "docs.tsv")
+    if not os.path.isfile(path):
+        raise SystemExit(f"--keep-split-from: {path} not found (the earlier dataset folder is needed).")
+    out = {}
+    with open(path, encoding="utf-8") as handle:
+        head = handle.readline().rstrip("\n").split("\t")
+        for line in handle:
+            row = dict(zip(head, line.rstrip("\n").split("\t")))
+            if row.get("status") in ("train", "val"):
+                out[(row["source"], row["doc_id"])] = row["status"]
+    return out
 
 
 def _is_incomplete_build(folder):

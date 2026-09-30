@@ -118,8 +118,8 @@ def step_continue(hours, name, new_dataset):
         cmd = build_command()
         cmd[cmd.index("--out") + 1] = new_dataset
         print(f"Building {new_dataset} from all of {DATA} (old and new text, so the model does not forget), with the "
-              f"tokenizer of {DATASET}.")
-        if run(cmd + ["--tokenizer-from", DATASET]):
+              f"tokenizer and the train/validation split of {DATASET}.")
+        if run(cmd + ["--tokenizer-from", DATASET, "--keep-split-from", DATASET]):
             return 1
     if gpu_busy():
         print("The GPU is busy (another training run?); wait for it or stop it first.")

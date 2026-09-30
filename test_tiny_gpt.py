@@ -426,8 +426,16 @@ class TestPipeline(unittest.TestCase):
         # time budget (which must also apply to --init-from runs)
         ds2 = os.path.join(self.tmp, "dataset_more")
         with redirect_stdout(io.StringIO()):
-            data_prep.prepare(["--out", ds2, "--md-dir", f"more={self.corpus.md}", "--tokenizer-from", self.ds,
-                               "--val-fraction", "0.3"])
+            data_prep.prepare(["--out", ds2, "--md-dir", self.corpus.md, "--tokenizer-from", self.ds,
+                               "--keep-split-from", self.ds, "--val-fraction", "0.3", "--seed", "99"])
+        before = {(d["source"], d["doc_id"]): d["status"] for d in self.read_docs() if d["status"] in ("train", "val")}
+        with open(os.path.join(ds2, "docs.tsv"), encoding="utf-8") as f:
+            head = f.readline().rstrip("\n").split("\t")
+            after = [dict(zip(head, line.rstrip("\n").split("\t"))) for line in f]
+        shared = [d for d in after if (d["source"], d["doc_id"]) in before and d["status"] in ("train", "val")]
+        self.assertGreater(len(shared), 10)
+        for d in shared:  # a different seed would split differently: the earlier split must win
+            self.assertEqual(d["status"], before[(d["source"], d["doc_id"])], d["doc_id"])
         code, out_i = run(["tiny_gpt.py", "--dataset", ds2, "--init-from", os.path.join(self.runs, "A_best.pt"),
                            "--name", "A_more", "--out-dir", self.runs, "--log-file", log, "--device", "cpu",
                            "--time-budget-hours", "0.01", "--batch-size", "8", "--grad-accum", "1",

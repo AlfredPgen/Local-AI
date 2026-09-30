@@ -879,7 +879,9 @@ This does two things:
 1. **Builds a new dataset, `datasets\bio_v5`, from all of `ai_training_data`** (old and new text) with the
    *same tokenizer* as the first dataset (`data_prep.py --tokenizer-from datasets\bio_v4`). The same tokenizer is
    essential: the model's weights belong to its vocabulary, and a new tokenizer would give every token a different
-   meaning. Keeping the old text in stops the model from forgetting it while it learns the new.
+   meaning. Keeping the old text in stops the model from forgetting it while it learns the new, and the old
+   train/validation split is kept too (`--keep-split-from datasets\bio_v4`): a document the first model trained on
+   never becomes a validation document, where its loss would look better than the model really is.
 2. **Trains further from the first model's weights**
    (`tiny_gpt.py --dataset datasets\bio_v5 --init-from tinyGPT_best.pt --name tinyGPT_continued
    --time-budget-hours 24`): same model size, a fresh learning-rate schedule, and as much of the new dataset as fits
@@ -888,6 +890,11 @@ This does two things:
 Why not LoRA? LoRA freezes the model and trains small add-on matrices. It saves memory when the model has billions
 of parameters (it is the plan for fine-tuning large open models on the Mac Studio), but it limits how much new
 knowledge a model can take in. tinyGPT is small enough to keep training all of its weights, which learns more.
+
+Reusing the same text is fine and intended. What matters is how often each text is read in total, over both
+runs: keep it to about 4 passes. For example, if the first run read the old text 0.4 times and the second reads the
+combined data 0.8 times, the old text has been read 1.2 times. Duplicated documents count several times, which is
+why `--near-dup drop` matters.
 
 Two limits: the model size stays that of the first run (a bigger model starts from zero), and a tokenizer from the
 first data splits new-field words into more pieces (slightly less efficient, still correct).
