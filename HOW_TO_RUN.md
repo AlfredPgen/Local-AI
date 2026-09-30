@@ -68,7 +68,7 @@ python convert_to_markdown.py "D:\SomeFolder" --out $HOME\ai_training_data `
 - `--name-prefix` avoids name clashes between collections.
 - Rerunning skips files already converted.
 - `--ocr` also reads scanned PDFs (pages that are only pictures) with Tesseract OCR. It is slow, a few seconds
-  per page, so it is used only for PDFs that have no text layer.
+  per page, so it is used only for PDFs with (almost) no text layer: under 200 characters per page on average.
 
 **Open-access papers from PubMed Central**
 

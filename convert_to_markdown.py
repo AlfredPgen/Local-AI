@@ -903,6 +903,18 @@ def _lower_priority():
         pass
 
 
+SCAN_CHARS_PER_PAGE = 200   # a page of text has 2,000-4,000 characters; fewer than this on average means a scan
+
+
+def _pdf_page_count(path):
+    try:
+        import pymupdf
+        with pymupdf.open(path) as doc:
+            return max(doc.page_count, 1)
+    except Exception:  # noqa: BLE001
+        return 1
+
+
 def find_tessdata():
     """Folder of Tesseract's language files (TESSDATA_PREFIX, the tesseract
     program's folder, or the usual install places), or None."""
@@ -933,8 +945,21 @@ def ocr_pdf(path, dpi=300):
     with pymupdf.open(path) as doc:
         for page in doc:
             textpage = page.get_textpage_ocr(language="eng", dpi=dpi, full=True, tessdata=tessdata)
-            pages.append(page.get_text("text", textpage=textpage).strip())
+            blocks = [_reflow(b[4]) for b in page.get_text("blocks", textpage=textpage, sort=True) if b[6] == 0]
+            pages.append("\n\n".join(b for b in blocks if b))
     return "\n\n".join(p for p in strip_page_furniture(pages) if p.strip())
+
+
+def _reflow(block):
+    """One OCR text block as a paragraph: lines joined, words split by a line-end hyphen rejoined."""
+    lines = [ln.strip() for ln in block.splitlines() if ln.strip()]
+    out = ""
+    for ln in lines:
+        if out.endswith("-") and len(out) > 1 and out[-2].isalpha() and ln[:1].islower():
+            out = out[:-1] + ln
+        else:
+            out = f"{out} {ln}" if out else ln
+    return out
 
 
 def convert_to_file(path, target, args):
@@ -942,8 +967,15 @@ def convert_to_file(path, target, args):
     text, kind = convert_one(path, args, getattr(args, "image_dir", None))
     text = text.replace("\r\n", "\n").replace("\r", "\n").strip()
     ocr_note = ""
-    if kind == "pdf" and len(text) < MIN_TEXT_CHARS and getattr(args, "ocr", False):
-        text, ocr_note = ocr_pdf(path).strip(), " (read with OCR)"
+    if kind == "pdf":
+        pages = _pdf_page_count(path)
+        if len(text) < SCAN_CHARS_PER_PAGE * pages:  # a nearly empty text layer: a scan (maybe with a cover line)
+            if getattr(args, "ocr", False):
+                ocr_text = ocr_pdf(path).strip()
+                if len(ocr_text) > 2 * len(text):
+                    text, ocr_note = ocr_text, " (read with OCR)"
+            else:
+                ocr_note = " (text layer nearly empty: a scan? rerun with --ocr --overwrite)"
     if kind == "pdf" and len(text) < MIN_TEXT_CHARS:
         return "skipped", ("no text layer (a scanned PDF? rerun with --ocr); nothing written" if not ocr_note
                            else "OCR found no text; nothing written")
