@@ -24,3 +24,4 @@ __pycache__/
 *_dashboard.png
 *_embeddings.html
 log.txt
+posttrain_data/

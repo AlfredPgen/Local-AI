@@ -8,6 +8,8 @@ r"""The tinyGPT pipeline in a few simple commands.
     python run_pipeline.py all --hours 48      # 1 + 2 + 3, asking before the training starts
     python run_pipeline.py continue --hours 24 # later, after adding more text: rebuild with the same
                                                # tokenizer and train further from the first model's weights
+    python run_pipeline.py posttrain           # 4. teach the pre-trained model to answer questions (SFT, then
+                                               # DPO, then a before/after evaluation; posttrain.py)
 
 Every step prints the full command it runs, so you can also copy it and change
 options by hand (HOW_TO_RUN.md explains them). The settings below say where
@@ -130,9 +132,24 @@ def step_continue(hours, name, new_dataset):
                 f"{name}_continued", "--time-budget-hours", str(hours)])
 
 
+def step_posttrain(name):
+    """Post-training of <name>_best.pt: data (once), SFT, DPO, evaluation."""
+    base = os.path.join(HERE, f"{name}_best.pt")
+    if not os.path.isfile(base):
+        print(f"No pre-trained model {base}: train one first (python run_pipeline.py train --hours N).")
+        return 1
+    if not os.path.isfile(os.path.join(HERE, "posttrain_data", "sft.jsonl")):
+        if run([sys.executable, "posttrain.py", "data"]):
+            return 1
+    if gpu_busy():
+        print("The GPU is busy (another training run?); wait for it or stop it first.")
+        return 1
+    return run([sys.executable, "posttrain.py", "run", "--base", base, "--name", name])
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("step", choices=("estimate", "build", "plan", "train", "resume", "continue", "all"))
+    p.add_argument("step", choices=("estimate", "build", "plan", "train", "resume", "continue", "posttrain", "all"))
     p.add_argument("--hours", type=float, default=24, help="training time you are willing to wait (default 24)")
     p.add_argument("--name", default=RUN_NAME, help=f"name of the model run (default {RUN_NAME})")
     p.add_argument("--new-dataset", default=os.path.join(HERE, "datasets", "bio_v5"),
@@ -140,6 +157,8 @@ def main():
     args = p.parse_args()
     if args.step == "continue":
         return step_continue(args.hours, args.name, args.new_dataset)
+    if args.step == "posttrain":
+        return step_posttrain(args.name)
     if args.step == "estimate":
         # the same data settings as 'build' (everything after data_prep.py --out <folder>)
         return run([sys.executable, "estimate_dataset.py", "--hours", "12,24,48,72"] + build_command()[4:])
