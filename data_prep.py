@@ -219,6 +219,8 @@ def token_category(tok, token_id):
     piece = tok.piece(token_id)
     if piece in ("\n", "\t") or set(piece) <= {"\u2581", " "}:
         return "whitespace/newline"
+    if _piece_words(piece) > 1:
+        return "multi-word"
     body = piece.replace("\u2581", "")
     if any(ch.isdigit() for ch in body) and all(ch.isdigit() or ch in ".,+-" for ch in body):
         return "number"
@@ -1540,6 +1542,12 @@ def parse_args(argv=None):
                    help="over-sample sources in the tokenizer's training text, e.g. md=4 (default: proportional). "
                         "Domain words then get their own tokens instead of being split into pieces")
     g.add_argument("--tokenizer-from", help="reuse a tokenizer: .model file, dataset folder or tiny_gpt checkpoint")
+    g.add_argument("--superbpe", action="store_true",
+                   help="SuperBPE tokenizer: after ordinary BPE, the last --superbpe-fraction of the vocabulary is "
+                        "learnt with word boundaries open, giving tokens such as 'of the' (fewer tokens per text)")
+    g.add_argument("--superbpe-fraction", type=float, default=0.1,
+                   help="share of the vocabulary for SuperBPE's multi-word stage (default 0.1, the paper's best)")
+    g.add_argument("--superbpe-max-words", type=int, default=4, help="most words in one SuperBPE token (default 4)")
     g.add_argument("--keep-split-from", help="earlier dataset folder: its training documents stay in training and its "
                                              "validation documents in validation (for training further from a model "
                                              "built on it); only new documents are split")
@@ -1593,6 +1601,12 @@ def _validate(args, parser):
         parser.error(f"--wiki-dir not found: {args.wiki_dir}")
     if args.tokenizer_from and not os.path.exists(args.tokenizer_from):
         parser.error(f"--tokenizer-from not found: {args.tokenizer_from}")
+    if args.superbpe and args.tokenizer_from:
+        parser.error("--superbpe trains a new tokenizer; a reused one (--tokenizer-from) keeps its own pieces")
+    if not 0 < args.superbpe_fraction < 0.5:
+        parser.error("--superbpe-fraction must be between 0 and 0.5")
+    if not 2 <= args.superbpe_max_words <= 8:
+        parser.error("--superbpe-max-words must be between 2 and 8")
     if args.keep_split_from and not os.path.isfile(os.path.join(args.keep_split_from, "docs.tsv")):
         parser.error(f"--keep-split-from: no docs.tsv in {args.keep_split_from}")
 
@@ -2148,12 +2162,14 @@ def _train_tokenizer(spool2, docs, split_of, sources, vocab, args, work):
                 for start in range(0, len(ln), 4000):
                     dst.write(ln[start:start + 4000] + "\n")
             written[rec["s"]] += len(rec["x"])
-    print(f"\nTraining SentencePiece BPE (vocab {vocab:,}) on {sum(written.values()) / 1e6:,.1f}M characters "
+    extra = max(1, round(vocab * args.superbpe_fraction)) if getattr(args, "superbpe", False) else 0
+    plan = f"{vocab - extra:,} + {extra:,} SuperBPE" if extra else f"{vocab:,}"
+    print(f"\nTraining SentencePiece BPE (vocab {plan}) on {sum(written.values()) / 1e6:,.1f}M characters "
           f"from training documents {dict(written)} ...", flush=True)
     t0 = time.time()
     prefix = os.path.join(work, "spm")
     spm.SentencePieceTrainer.train(
-        input=corpus, model_prefix=prefix, model_type="bpe", vocab_size=vocab,
+        input=corpus, model_prefix=prefix, model_type="bpe", vocab_size=vocab - extra,
         character_coverage=0.9995, byte_fallback=True, split_digits=True,
         unk_id=0, bos_id=1, eos_id=2, pad_id=-1, user_defined_symbols=["\n", "\t"],
         remove_extra_whitespaces=False, allow_whitespace_only_pieces=True,
@@ -2177,9 +2193,178 @@ def _train_tokenizer(spool2, docs, split_of, sources, vocab, args, work):
               "fingerprint depends on the folder it was built in. Installing protobuf fixes this "
               "(python -m pip install protobuf).")
     tok = Tokenizer.from_file(prefix + ".model", "lines")
+    info = {"trained": True, "sample_chars": dict(written), "sample_weights": weights, "character_coverage": 0.9995,
+            "split_digits": True, "requested_vocab": vocab}
+    if extra:
+        print(f"SuperBPE stage 2: learning up to {extra:,} tokens that may span words (at most "
+              f"{args.superbpe_max_words}) on top of {tok.vocab_size:,} ordinary pieces ...", flush=True)
+        t1 = time.time()
+        proto, info["superbpe"] = superbpe_extend(tok.proto, corpus, extra, args.superbpe_max_words,
+                                                  seed=args.seed, threads=args.threads)
+        with open(prefix + ".model", "wb") as handle:
+            handle.write(proto)
+        tok = Tokenizer(proto, "lines")
+        sb = info["superbpe"]
+        print(f"  {sb['added_pieces']:,} added ({sb['multiword_pieces']:,} span several words) in "
+              f"{time.time() - t1:,.0f} s; {sb['token_saving']:.1%} fewer tokens on "
+              f"{'held-out ' if sb['held_out'] else ''}lines of the tokenizer text; e.g. "
+              + ", ".join(repr(t) for t in sb["examples"][:8]))
     print(f"Tokenizer trained in {time.time() - t0:,.0f} s ({tok.vocab_size:,} pieces)")
-    return tok, {"trained": True, "sample_chars": dict(written), "sample_weights": weights, "character_coverage": 0.9995,
-                 "split_digits": True, "requested_vocab": vocab}
+    return tok, info
+
+
+def _piece_words(piece):
+    """Number of words in a piece: '▁of▁the' -> 2, 'ing▁the' -> 2, '▁▁' -> 0."""
+    return sum(1 for part in piece.split("\u2581") if part)
+
+
+def superbpe_extend(proto, corpus, extra, max_words=4, sample_tokens=20_000_000, seed=1234, threads=1,
+                    max_chars=64):
+    """Stage 2 of SuperBPE (Liu et al. 2025, "SuperBPE: Space Travel for
+    Language Models"): continue BPE on the stage-1 tokens of the tokenizer
+    corpus with word boundaries no longer blocking merges, so frequent phrases
+    ("▁of▁the", "▁linkage▁disequilibrium") become single tokens.
+
+    Up to ``extra`` merges are learnt, each of at most ``max_words`` words.
+    Digits, newlines, tabs, byte-fallback and control tokens are never merged
+    (numbers stay one digit per token). The new tokens are appended to the
+    SentencePiece model in the order learnt, scored below every existing piece,
+    so SentencePiece's own encoder applies them after all stage-1 merges:
+    encoding speed, decoding, exact byte counts and checkpoints are unchanged.
+    Deterministic. Returns (model bytes, info)."""
+    import heapq
+    import sentencepiece as spm
+    from sentencepiece import sentencepiece_model_pb2 as spm_pb
+
+    model = spm_pb.ModelProto()
+    model.ParseFromString(proto)
+    sp = spm.SentencePieceProcessor()
+    if not sp.LoadFromSerializedProto(proto):
+        raise ValueError("could not parse the SentencePiece model")
+    base = sp.get_piece_size()
+    strs = [sp.id_to_piece(i) for i in range(base)]
+    normal = spm_pb.ModelProto.SentencePiece.NORMAL
+    size = base + extra + 1  # the last id stands for "end of line": no pair crosses it
+    sep = size - 1
+    allowed = np.zeros(size, dtype=bool)
+    for i, item in enumerate(model.pieces):
+        allowed[i] = (item.type == normal and strs[i] not in ("\n", "\t")
+                      and not any(ch.isdigit() for ch in strs[i]))
+    allowed[base:sep] = True
+
+    # a deterministic sample of corpus lines, spread over the whole file (~4 bytes per token)
+    keep = min(1.0, sample_tokens * 4.0 / max(os.path.getsize(corpus), 1))
+    chunks, batch, checks = [], [], []
+
+    def flush():
+        flat = []
+        for ids in sp.encode(batch, out_type=int, num_threads=threads):
+            flat.extend(ids)
+            flat.append(sep)
+        chunks.append(np.asarray(flat, dtype=np.int32))
+        batch.clear()
+
+    with open(corpus, encoding="utf-8") as handle:
+        for i, line in enumerate(handle):
+            line = line.rstrip("\n")
+            if not line:
+                continue
+            if stable_unit(seed, "superbpe-check", i) < 0.01:  # held out: measures the saving
+                if len(checks) < 20_000:
+                    checks.append(line)
+                continue
+            if keep >= 1.0 or stable_unit(seed, "superbpe", i) < keep:
+                batch.append(line)
+                if len(batch) >= 20_000:
+                    flush()
+    if batch:
+        flush()
+    seq = np.concatenate(chunks) if chunks else np.zeros(0, dtype=np.int32)
+    del chunks
+    stage1_tokens = int(np.count_nonzero(seq != sep))
+    held_out = bool(checks)
+    if not checks:  # a tiny corpus: measure on (part of) the learning text instead
+        with open(corpus, encoding="utf-8") as handle:
+            checks = [ln.rstrip("\n") for ln in handle if ln.strip()][:20_000]
+
+    def pair_codes(seq, starts):
+        x, y = seq[starts], seq[starts + 1]
+        ok = allowed[x] & allowed[y]
+        return x[ok].astype(np.int64) * size + y[ok]
+
+    codes, freq = np.unique(pair_codes(seq, np.arange(max(len(seq) - 1, 0))), return_counts=True)
+    counts = dict(zip(codes.tolist(), freq.tolist()))
+    del codes, freq
+    heap = [(-c, k) for k, c in counts.items() if c >= 2]
+    heapq.heapify(heap)
+    existing, banned, added = set(strs), set(), []
+    while len(added) < extra and heap:
+        neg, code = heapq.heappop(heap)
+        current = counts.get(code, 0)
+        if current != -neg:  # stale entry: counts only fall after a pair's tokens exist
+            if current >= 2:
+                heapq.heappush(heap, (-current, code))
+            continue
+        a, b = divmod(code, size)
+        text = strs[a] + strs[b]
+        if text in existing or len(text) > max_chars or _piece_words(text) > max_words:
+            banned.add(code)
+            counts.pop(code, None)
+            continue
+        new = base + len(added)
+        cand = np.flatnonzero(seq[:-1] == a)
+        pos = cand[seq[cand + 1] == b]
+        if not len(pos):  # cannot happen with exact counts; never add a token that does not occur
+            counts.pop(code, None)
+            continue
+        if a == b and len(pos) > 1:  # runs like x x x: merge left to right without overlap
+            chosen, last = [], -2
+            for q in pos.tolist():
+                if q > last + 1:
+                    chosen.append(q)
+                    last = q
+            pos = np.asarray(chosen, dtype=np.int64)
+        old = np.unique(np.concatenate([pos - 1, pos, pos + 1]))
+        removed = pair_codes(seq, old[(old >= 0) & (old < len(seq) - 1)])
+        seq[pos] = new
+        seq = np.delete(seq, pos + 1)
+        at = pos - np.arange(len(pos))
+        fresh = np.unique(np.concatenate([at - 1, at]))
+        created = pair_codes(seq, fresh[(fresh >= 0) & (fresh < len(seq) - 1)])
+        both = np.concatenate([removed, created])
+        keys, inverse = np.unique(both, return_inverse=True)
+        sign = np.concatenate([-np.ones(len(removed)), np.ones(len(created))])
+        delta = np.rint(np.bincount(inverse, weights=sign, minlength=len(keys))).astype(np.int64)
+        for k, d in zip(keys.tolist(), delta.tolist()):
+            if d == 0 or k in banned:
+                continue
+            c = counts.get(k, 0) + d
+            if c > 0:
+                counts[k] = c
+            else:
+                counts.pop(k, None)
+            if d > 0 and c >= 2:
+                heapq.heappush(heap, (-c, k))
+        added.append(text)
+        strs.append(text)
+        existing.add(text)
+
+    low = min(item.score for item in model.pieces)
+    for k, text in enumerate(added):
+        item = model.pieces.add()
+        item.piece, item.score, item.type = text, low - 1.0 - k, normal
+    out = model.SerializeToString()
+    before, after = Tokenizer(proto, "lines"), Tokenizer(out, "lines")
+    for line in checks[:5000]:
+        if after.decode(after.encode(line)) != line:
+            raise RuntimeError(f"SuperBPE tokenizer does not round-trip: {line[:80]!r}")
+    n_before = sum(len(x) for x in before.encode_batch(checks, threads))
+    n_after = sum(len(x) for x in after.encode_batch(checks, threads))
+    info = {"stage1_pieces": base, "added_pieces": len(added),
+            "multiword_pieces": sum(1 for t in added if _piece_words(t) > 1), "max_words": max_words,
+            "learnt_on_tokens": stage1_tokens, "checked_lines": len(checks), "held_out": held_out,
+            "token_saving": round(1 - n_after / max(n_before, 1), 4), "examples": added[:40]}
+    return out, info
 
 
 def _tokenizer_stats(tok, docs, split_of, doc_tokens):
@@ -2363,6 +2548,14 @@ def _write_report(out, args, sources, ledger, duplicates, removed_lines, line_ex
         L.append(f"SentencePiece BPE, {meta['vocab_size']:,} pieces, encode mode `{meta['encode_mode']}`, "
                  f"BOS {meta['bos_id']}, EOS {meta['eos_id']}, newline {meta['newline_id']}. "
                  f"{'Trained on training documents only.' if meta.get('trained') else 'Reused: ' + str(meta.get('from'))}\n")
+        sb = meta.get("superbpe")
+        if sb:
+            L.append(f"SuperBPE: {sb['stage1_pieces']:,} ordinary BPE pieces, then {sb['added_pieces']:,} learnt with "
+                     f"word boundaries open ({sb['multiword_pieces']:,} of them span 2 to {sb['max_words']} words). "
+                     f"{'Held-out lines' if sb.get('held_out', True) else 'Lines'} of the tokenizer text need "
+                     f"{sb['token_saving']:.1%} fewer tokens than with the "
+                     "ordinary pieces alone. First learnt: "
+                     + ", ".join(f"`{t}`" for t in sb["examples"][:20]) + "\n")
         L.append("Composition: " + ", ".join(f"{k} {v:,}" for k, v in sorted(meta["composition"].items(),
                                                                                 key=lambda x: -x[1])))
         L.append("\nCharacters per token: " + ", ".join(f"{k} {v}" for k, v in tok_stats["chars_per_token"].items()))

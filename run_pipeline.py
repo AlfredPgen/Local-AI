@@ -32,6 +32,7 @@ DATASET = os.path.join(HERE, "datasets", "bio_v4")      # the dataset folder tha
 RUN_NAME = "tinyGPT"                                    # checkpoints are <RUN_NAME>.pt and <RUN_NAME>_best.pt
 KEYWORDS = os.path.join(HERE, "keywords_biology.txt")   # topic filter for Wikipedia, FineWeb and peS2o
 WIKI_MAX_DOCS = 200_000   # Wikipedia articles kept, best keyword matches first; 0 = all that pass (~465,000)
+SUPERBPE = False          # True: SuperBPE tokenizer, with tokens that span words ("of the"); fewer tokens per text
 # -------------------------------------------------------
 
 
@@ -47,7 +48,7 @@ def build_command():
     if glob.glob(pes2o):
         cmd += ["--jsonl", pes2o, "--jsonl-name", "pes2o"]
     return cmd + ["--include-keywords", KEYWORDS, "--keyword-min-distinct", "3",
-                  "--tokenizer-weights", "books=3,articles=3", "--near-dup", "drop"]
+                  "--tokenizer-weights", "books=3,articles=3", "--near-dup", "drop"] + (["--superbpe"] if SUPERBPE else [])
 
 
 def train_command(hours, name, plan=False):
@@ -140,7 +141,8 @@ def main():
     if args.step == "continue":
         return step_continue(args.hours, args.name, args.new_dataset)
     if args.step == "estimate":
-        return run([sys.executable, "estimate_dataset.py", "--hours", "12,24,48,72"])
+        # the same data settings as 'build' (everything after data_prep.py --out <folder>)
+        return run([sys.executable, "estimate_dataset.py", "--hours", "12,24,48,72"] + build_command()[4:])
     if args.step == "build":
         return step_build()
     if args.step == "plan":

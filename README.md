@@ -83,7 +83,8 @@ damaged text; a keyword filter for the web sources (a fast C++ prefilter that ne
 would keep, then the exact check); exact deduplication and near-duplicate detection (one-permutation MinHash with
 locality-sensitive hashing); removal of boilerplate lines that repeat across documents (headings are kept); a
 train/validation split by document, so no text leaks across; a SentencePiece BPE tokenizer trained on the training
-split only; and a train-versus-validation leakage audit. Heavy steps run on all CPU cores, with byte-identical
+split only (optionally SuperBPE, whose tokens can span words: 12-15% fewer tokens); and a train-versus-validation
+leakage audit. Heavy steps run on all CPU cores, with byte-identical
 results for any number of worker processes. `report.md` records every decision.
 
 **2. Choosing the model size (`tiny_gpt.py`).** The planner follows two rules of thumb from published scaling

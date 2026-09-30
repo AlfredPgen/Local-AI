@@ -666,6 +666,39 @@ class TestPipeline(unittest.TestCase):
                 data_prep.prepare(["--out", os.path.join(self.tmp, "refused"), "--md-dir", a] + extra)
             self.assertIn(message, str(ctx.exception.code))
 
+    def test_superbpe_tokenizer(self):
+        """--superbpe adds tokens spanning up to 4 words (never digits), text stays
+        lossless and byte_tables still count exactly the bytes of the text."""
+        out = os.path.join(self.tmp, "superbpe_dataset")
+        with redirect_stdout(io.StringIO()):
+            data_prep.prepare(["--out", out, "--md-dir", self.corpus.md, "--md-dir", f"notes={self.corpus.notes}",
+                               "--vocab-size", "800", "--val-fraction", "0.2", "--superbpe",
+                               "--superbpe-fraction", "0.2"])
+        sb = data_prep.read_manifest(out)["tokenizer"]["superbpe"]
+        self.assertGreater(sb["multiword_pieces"], 0)
+        self.assertGreater(sb["token_saving"], 0)
+        tok = data_prep.load_tokenizer_from_any(out)
+        added = [tok.piece(i) for i in range(sb["stage1_pieces"], tok.vocab_size)]
+        self.assertEqual(len(added), sb["added_pieces"])
+        for piece in added:
+            self.assertLessEqual(data_prep._piece_words(piece), 4, piece)
+            self.assertFalse(any(ch.isdigit() for ch in piece), piece)
+        size, marked, line_break = tok.byte_tables()
+        _, arrays = data_prep.open_token_files(out)
+        ids = np.concatenate([np.asarray(x, dtype=np.int64) for split in arrays.values() for x in split.values()])
+        self.assertTrue((ids >= sb["stage1_pieces"]).any())  # the multi-word tokens are used
+        starts = np.nonzero(ids == tok.bos_id)[0].tolist() + [len(ids)]
+        for s, e in zip(starts[:-1], starts[1:]):
+            doc = ids[s:e]
+            self.assertEqual(int(size[doc[1:]].sum() - (marked[doc[1:]] & line_break[doc[:-1]]).sum()),
+                             len(tok.decode(doc).encode("utf-8")))
+        text = "Genetic drift is one of the forces of evolution.\n  Two  spaces, 12,345 alleles and\tone tab."
+        self.assertEqual(tok.decode(tok.encode(text)), text)
+        self.assertIn("SuperBPE:", open(os.path.join(out, "report.md"), encoding="utf-8").read())
+        with redirect_stdout(io.StringIO()), self.assertRaises(SystemExit):
+            data_prep.prepare(["--out", os.path.join(self.tmp, "refused_sb"), "--md-dir", self.corpus.md,
+                               "--superbpe", "--tokenizer-from", out])
+
     def test_parallel_workers_give_identical_datasets(self):
         """Documents checked in worker processes (from the first document on) give
         exactly the same dataset as the single-process build."""

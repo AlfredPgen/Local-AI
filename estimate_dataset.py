@@ -217,8 +217,11 @@ def jsonl_source(name, paths, args, use_kw, max_docs):
     return t
 
 
-def train_tokenizer(tallies, vocab, work):
+def train_tokenizer(tallies, vocab, work, args=None):
+    """A tokenizer like data_prep.py's, trained on the kept sample (with --superbpe:
+    the same two stages)."""
     import sentencepiece as spm
+    extra = max(1, round(vocab * args.superbpe_fraction)) if getattr(args, "superbpe", False) else 0
     corpus = os.path.join(work, "corpus.txt")
     with open(corpus, "w", encoding="utf-8", newline="\n") as out:
         for t in tallies:
@@ -231,12 +234,17 @@ def train_tokenizer(tallies, vocab, work):
                 if budget <= 0:
                     break
     spm.SentencePieceTrainer.train(
-        input=corpus, model_prefix=os.path.join(work, "spm"), model_type="bpe", vocab_size=vocab,
+        input=corpus, model_prefix=os.path.join(work, "spm"), model_type="bpe", vocab_size=vocab - extra,
         character_coverage=0.9995, byte_fallback=True, split_digits=True, unk_id=0, bos_id=1, eos_id=2, pad_id=-1,
         user_defined_symbols=["\n", "\t"], remove_extra_whitespaces=False, allow_whitespace_only_pieces=True,
         normalization_rule_name="identity", max_sentence_length=16384, hard_vocab_limit=False,
         input_sentence_size=3_000_000, shuffle_input_sentence=True, num_threads=os.cpu_count() or 4, minloglevel=2)
-    return dp.Tokenizer.from_file(os.path.join(work, "spm.model"), "lines")
+    tok = dp.Tokenizer.from_file(os.path.join(work, "spm.model"), "lines")
+    if extra:
+        proto, _ = dp.superbpe_extend(tok.proto, corpus, extra, args.superbpe_max_words,
+                                      threads=os.cpu_count() or 4)
+        tok = dp.Tokenizer(proto, "lines")
+    return tok
 
 
 def chars_per_token(tok, texts, limit=2_000_000):
@@ -344,9 +352,10 @@ def main(argv=None):
             tok = dp.load_tokenizer_from_any(opts.tokenizer)
             how = f"tokenizer {opts.tokenizer}"
         else:
-            print(f"training a {vocab:,}-piece SentencePiece tokenizer on the kept sample ...", flush=True)
-            tok = train_tokenizer(tallies, vocab, work)
-            how = f"a {vocab:,}-piece tokenizer trained on the kept sample"
+            kind = "SuperBPE" if args.superbpe else "SentencePiece"
+            print(f"training a {vocab:,}-piece {kind} tokenizer on the kept sample ...", flush=True)
+            tok = train_tokenizer(tallies, vocab, work, args)
+            how = f"a {vocab:,}-piece {kind} tokenizer trained on the kept sample"
         cpt = {t.name: chars_per_token(tok, t.texts) for t in tallies}
 
     print(f"\nEstimated dataset (sample {args.sample:.0%} of web records, >= 300 files per folder; "

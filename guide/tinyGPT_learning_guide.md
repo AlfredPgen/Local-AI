@@ -168,13 +168,52 @@ models use 100,000 to 250,000 tokens; in English, one word is about 1.3 tokens.
 
 **In tinyGPT:**
 
-- **Tokenizer:** a SentencePiece BPE tokenizer with **8,192 pieces**, trained by data_prep.py on your own data. Its
-  vocabulary therefore contains pieces such as *allele*, *heritab* and *GWAS*.
+- **Tokenizer:** a SentencePiece BPE tokenizer, trained by data_prep.py on your own data. Its size follows the
+  amount of text: **4,096, 8,192 or 16,384 pieces** (`--vocab-size` overrides it). Its vocabulary therefore contains
+  pieces such as *allele*, *heritab* and *GWAS*.
 - **Digits** are split one by one, so the model learns numbers digit by digit.
 - **Lines** are encoded one at a time, with a newline token between them, so Markdown structure is kept.
 - **Special tokens:** begin-of-document (1) and end-of-document (2).
-- **Starting point:** a model that guesses uniformly has loss $\ln 8192 = 9.01$. Your log's baseline line shows
-  exactly this.
+- **Starting point:** a model that guesses uniformly has loss $\ln 8192 = 9.01$ (for 8,192 pieces). Your log's
+  baseline line shows exactly this.
+
+### SuperBPE: tokens that span words (optional)
+
+Ordinary BPE never merges across a space, so "of the" is always two tokens. **SuperBPE** (Liu and others, 2025) adds
+a second stage. Ordinary BPE fills the first 90% of the vocabulary; then BPE continues with spaces no longer
+blocking merges, so the last 10% become tokens such as "▁of▁the", ",▁and" and "▁as▁well▁as▁the" (▁ marks a space).
+A token spans at most 4 words, and digits, newlines and tabs are never merged.
+
+- **Turn it on:** `data_prep.py --superbpe`, or `SUPERBPE = True` at the top of run_pipeline.py.
+  - `--superbpe-fraction 0.1` sets the share of the vocabulary for the second stage (the paper's best setting for
+    model quality).
+  - `--superbpe-max-words 4` sets the longest token.
+- **Measured on your data** (the same 86 million training characters; token counts on 27 million other characters):
+
+| Vocabulary | Ordinary BPE | SuperBPE | Fewer tokens |
+|---|---|---|---|
+| 16,384 | 4.08 bytes per token | 4.64 bytes per token | 12.1% |
+| 32,768 | 4.34 bytes per token | 5.13 bytes per token | 15.4% |
+
+- **What fewer tokens buy:**
+  - The same context window holds more text: at 16,384 pieces, 1,024 tokens are about 4,750 bytes instead of 4,180.
+  - Training reads the same text in fewer steps.
+  - The planner sizes the model by tokens (20 per parameter), so for the same data it picks a slightly smaller model.
+- **What it doesn't buy:** the text holds the same information, so each token carries more and is harder to predict.
+  The paper tested models of 680 million parameters and larger and mostly found gains; nobody has shown it for
+  models of 20 to 100 million. Compare two runs by **bits per byte**, never by loss per token.
+- **The trade-off inside a fixed vocabulary:** multi-word tokens take slots that rarer whole words would otherwise
+  get. At 32,768 pieces, ordinary BPE keeps "▁disequilibrium" whole; SuperBPE splits it into "▁dise" + "quilibrium".
+- **How it's built here:** the second stage is learnt in Python on the tokenizer's training text (about 4 minutes
+  at 16,384 pieces). The new tokens are added at the end of the SentencePiece model with the lowest priority, so
+  SentencePiece's own encoder applies them after all ordinary merges. Encoding speed, checkpoints, bits per byte and
+  text generation therefore work unchanged, and no extra software is needed. report.md lists the first tokens learnt
+  and the saving on lines held out from the learning.
+- **Fact benchmark:** questions and answers are encoded separately, so a token can never span the boundary between
+  them. All answers are treated alike, but a SuperBPE model may score slightly lower there than its text quality
+  justifies.
+- **Continued training:** a model belongs to its tokenizer. `--tokenizer-from` reuses the first dataset's tokenizer,
+  SuperBPE or not; `--superbpe` together with `--tokenizer-from` is refused.
 
 ## The transformer
 
@@ -621,6 +660,8 @@ million characters (PubMed Central papers and FineWeb-Edu), then each encoded 27
 - **Fixed symbols are worse still:** they ignore word boundaries ("general" became "gene" + "ral").
 - **The plain tokenizer already learns your field:** it is trained on your own training split, so frequent terms
   ("genetics", "proteins", "diets") are already single tokens, and rare ones ("Tajima") cost a few pieces.
+- **What does reduce the token count:** SuperBPE (in the Tokens section), which learns multi-word tokens such as
+  "▁as▁well▁as▁the" from the data itself: 12% fewer tokens at 16,384 pieces.
 
 **Why keywords, and not "text that looks like my Markdown":** your Markdown doesn't cover every topic you care about.
 Importance resampling towards it would make the corpus narrower. Keyword selection stays.
