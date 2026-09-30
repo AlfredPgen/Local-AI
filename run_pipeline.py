@@ -30,10 +30,10 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 
 # ---------------- settings: edit these ----------------
 DATA = os.path.join(os.path.expanduser("~"), "ai_training_data")  # the folder with all training text
-DATASET = os.path.join(HERE, "datasets", "bio_v4")      # the dataset folder that 'build' creates
+DATASET = os.path.join(HERE, "datasets", "bio_all")     # the dataset folder that 'build' creates
 RUN_NAME = "tinyGPT"                                    # checkpoints are <RUN_NAME>.pt and <RUN_NAME>_best.pt
 KEYWORDS = os.path.join(HERE, "keywords_biology.txt")   # topic filter for Wikipedia, FineWeb and peS2o
-WIKI_MAX_DOCS = 200_000   # Wikipedia articles kept, best keyword matches first; 0 = all that pass (~465,000)
+WIKI_MAX_DOCS = 0         # Wikipedia articles kept, best keyword matches first; 0 = all that pass (611,091)
 SUPERBPE = False          # True: SuperBPE tokenizer, with tokens that span words ("of the"); fewer tokens per text
 # -------------------------------------------------------
 
@@ -50,7 +50,8 @@ def build_command():
     if glob.glob(pes2o):
         cmd += ["--jsonl", pes2o, "--jsonl-name", "pes2o"]
     return cmd + ["--include-keywords", KEYWORDS, "--keyword-min-distinct", "3",
-                  "--tokenizer-weights", "books=3,articles=3", "--near-dup", "drop"] + (["--superbpe"] if SUPERBPE else [])
+                  "--tokenizer-weights", "books=3,articles=3", "--near-dup", "drop",
+                  "--near-dup-max-docs", "3000000"] + (["--superbpe"] if SUPERBPE else [])
 
 
 def train_command(hours, name, plan=False):
@@ -152,8 +153,8 @@ def main():
     p.add_argument("step", choices=("estimate", "build", "plan", "train", "resume", "continue", "posttrain", "all"))
     p.add_argument("--hours", type=float, default=24, help="training time you are willing to wait (default 24)")
     p.add_argument("--name", default=RUN_NAME, help=f"name of the model run (default {RUN_NAME})")
-    p.add_argument("--new-dataset", default=os.path.join(HERE, "datasets", "bio_v5"),
-                   help="continue: the new dataset to build (default datasets\\bio_v5)")
+    p.add_argument("--new-dataset", default=os.path.join(HERE, "datasets", "bio_all_v2"),
+                   help="continue: the new dataset to build (default datasets\\bio_all_v2)")
     args = p.parse_args()
     if args.step == "continue":
         return step_continue(args.hours, args.name, args.new_dataset)
