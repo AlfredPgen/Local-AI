@@ -2063,7 +2063,13 @@ def _prepare(args, state=None):
     # ------------------------------------------------------------------
     leakage = []
     if args.leakage_check == "on":
-        leakage = _leakage_audit(spool2, docs, split_of, dropped, workers=args.workers, warmup=args.worker_warmup)
+        try:  # an informational check: its failure must not throw away a finished dataset
+            leakage = _leakage_audit(spool2, docs, split_of, dropped, workers=args.workers,
+                                     warmup=args.worker_warmup)
+        except (MemoryError, OSError, RuntimeError) as exc:
+            print(f"Leakage audit failed ({type(exc).__name__}: {exc}); the dataset is written without it.",
+                  flush=True)
+            notes.append(f"The leakage audit failed ({type(exc).__name__}) and was skipped.")
 
     # ------------------------------------------------------------------
     # Manifest
@@ -2431,9 +2437,33 @@ def _audit_chunk(texts):
     return out
 
 
+def _init_audit_match(n, keep_mod, val_set):
+    _init_audit(n, keep_mod)
+    _AUDIT["val"] = val_set
+
+
+def _audit_match_chunk(texts):
+    """The sampled n-gram hashes of each training text that also occur in the
+    validation set (usually none), so only a few numbers travel back."""
+    a, val = _AUDIT, _AUDIT["val"]
+    out = []
+    for text in texts:
+        sh = a["hasher"].shingles(text, a["n"])
+        sh = sh[(sh % a["mod"]) == 0]
+        if len(sh) and len(val):
+            pos = np.minimum(np.searchsorted(val, sh), len(val) - 1)
+            sh = sh[val[pos] == sh]
+        out.append(np.unique(sh) if len(sh) else sh)
+    return out
+
+
 def _leakage_audit(spool2, docs, split_of, dropped, n=13, keep_mod=16, workers=1, warmup=2_000):
+    """Per validation document: the share of its sampled word 13-grams that also
+    occur in training documents. The validation side (about 5% of the text) is
+    hashed first; the training text is then checked against it in the workers,
+    so memory stays at a few hundred MB for any corpus size (sorting every
+    training hash needed several GB for 4 billion tokens)."""
     print("\nLeakage audit: sampled word 13-gram overlap of validation documents with training ...", flush=True)
-    pool = _Pool(workers, _init_audit, (n, keep_mod), warmup)
 
     def texts(split):
         with open(spool2, encoding="utf-8") as src:
@@ -2441,22 +2471,28 @@ def _leakage_audit(spool2, docs, split_of, dropped, n=13, keep_mod=16, workers=1
                 if i not in dropped and split_of.get(i) == split:
                     yield i, json.loads(line)["x"]
 
-    train_hashes = [sh for _, sh in _ordered(texts("train"), lambda it: it[1], _audit_chunk, pool, chunk=32,
-                                             size_of=lambda it: len(it[1]))]
-    train_set = np.unique(np.concatenate(train_hashes)) if train_hashes else np.zeros(0, dtype=np.uint64)
-    del train_hashes
+    pool = _Pool(workers, _init_audit, (n, keep_mod), warmup)
+    val = [(i, sh) for (i, _), sh in _ordered(texts("val"), lambda it: it[1], _audit_chunk, pool, chunk=32,
+                                              size_of=lambda it: len(it[1]))]
+    pool.close()
+    val_set = np.unique(np.concatenate([sh for _, sh in val])) if val else np.zeros(0, dtype=np.uint64)
+    found = []
+    if len(val_set):
+        pool = _Pool(workers, _init_audit_match, (n, keep_mod, val_set), warmup)
+        found = [sh for _, sh in _ordered(texts("train"), lambda it: it[1], _audit_match_chunk, pool, chunk=32,
+                                          size_of=lambda it: len(it[1])) if len(sh)]
+        pool.close()
+    in_train = np.unique(np.concatenate(found)) if found else np.zeros(0, dtype=np.uint64)
     rows = []
-    for (i, _), sh in _ordered(texts("val"), lambda it: it[1], _audit_chunk, pool, chunk=32,
-                               size_of=lambda it: len(it[1])):
+    for i, sh in val:
         if len(sh) < 5:
             continue
-        if len(train_set):
-            pos = np.minimum(np.searchsorted(train_set, sh), len(train_set) - 1)
-            overlap = float((train_set[pos] == sh).mean())  # binary search in the sorted train set
+        if len(in_train):
+            pos = np.minimum(np.searchsorted(in_train, sh), len(in_train) - 1)
+            overlap = float((in_train[pos] == sh).mean())  # binary search in the sorted matches
         else:
             overlap = 0.0
         rows.append((overlap, docs[i][0], docs[i][1], docs[i][2], len(sh)))
-    pool.close()
     rows.sort(reverse=True)
     return rows
 

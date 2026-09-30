@@ -1075,10 +1075,22 @@ def main():
         os.makedirs(args.out, exist_ok=True)
         suffix = ("_" + args.name_prefix.strip("_")) if args.name_prefix else ""
         report_path = os.path.join(args.out, f"conversion_report{suffix}.tsv")
-        with open(report_path, "w", encoding="utf-8", newline="\n") as handle:
+        # merge into an existing report (a rerun, say with --ocr, updates its rows and keeps all others)
+        merged = {}
+        if os.path.isfile(report_path):
+            with open(report_path, encoding="utf-8") as handle:
+                next(handle, None)
+                for line in handle:
+                    parts = line.rstrip("\n").split("\t")
+                    if len(parts) >= 3:
+                        merged[parts[0]] = parts[:3]
+        for row in report:
+            merged[str(row[0])] = [str(x).replace("\t", " ") for x in row]
+        with open(report_path + ".part", "w", encoding="utf-8", newline="\n") as handle:
             handle.write("input\tstatus\tdetail\n")
-            for row in report:
-                handle.write("\t".join(str(x).replace("\t", " ") for x in row) + "\n")
+            for row in merged.values():
+                handle.write("\t".join(row) + "\n")
+        os.replace(report_path + ".part", report_path)
     skipped = len(files) - done
     print(f"\n{done} of {len(files)} files converted; {skipped} skipped or already present"
           + (f" (details: {report_path})" if report_path else ""))
