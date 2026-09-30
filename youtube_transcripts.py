@@ -456,6 +456,8 @@ def parse_args(argv=None):
     p.add_argument("--delay", type=float, default=2.0, help="average seconds between videos (be gentle)")
     p.add_argument("--cookies-from-browser", help="e.g. firefox or edge, only if YouTube blocks the run")
     p.add_argument("--list-only", action="store_true", help="count videos and hours per channel, then stop")
+    p.add_argument("--recheck-off-topic", action="store_true",
+                   help="look again at videos rejected as off topic (after the keyword list has changed)")
     args = p.parse_args(argv)
     if args.channels_file:
         with open(args.channels_file, encoding="utf-8") as handle:
@@ -507,6 +509,8 @@ def main(argv=None):
                 os.replace(old_name, tsv)
             status = read_status(tsv)
             final = FINAL if args.whisper else FINAL | {"queued_whisper"}
+            if args.recheck_off_topic:
+                final = final - {"off_topic"}
             todo = [e for e in entries if status.get(e["id"]) not in final]
             if args.whisper and whisper is None and any(status.get(e["id"]) in (None, "queued_whisper", "error")
                                                         for e in todo):

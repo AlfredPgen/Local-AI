@@ -43,7 +43,7 @@ answerer. **e**, tools to inspect, compare, export and use checkpoints.](figures
 | convert_to_markdown.py | Turns PDF, DOCX, PPTX, XLSX, CSV, HTML, code and GWAS summary statistics into Markdown, sorted by type |
 | gpu_check.py | GPU readings, a load test and a training benchmark; refuses to run while the GPU is busy |
 | test_tiny_gpt.py | 18 automated tests that run on the CPU |
-| keywords_biology.txt | 608 topic terms for the keyword filter |
+| keywords_biology.txt | 1,006 topic terms for the keyword filter |
 | probes_biology.tsv | The fact benchmark: 336 questions in 16 categories, with near-miss wrong answers |
 | calibrate_probes.py | Sets the benchmark's difficulty labels from how open reference models score it |
 | finetune_examples/ | Format templates: 20 SFT examples and 12 DPO pairs |
@@ -579,7 +579,9 @@ are never keyword-filtered.
 
 **The keyword list:**
 
-- keywords_biology.txt has 608 terms. It covers molecular and cell biology, genetics, statistics, machine learning,
+- keywords_biology.txt has 1,006 terms (608 until 30 September, when mathematics, statistics, population and
+  statistical genetics, genomics technology, clinical genetics, immunology, neuroscience and ecology terms were
+  added). It covers molecular and cell biology, genetics, statistics, machine learning,
   medicine, drugs, animals, plants and genomics technology.
 - Terms starting with `=` are case-sensitive, for gene symbols such as `=BRCA1` that would otherwise match ordinary
   words.
@@ -601,7 +603,7 @@ Importance resampling towards it would make the corpus narrower. Keyword selecti
 - **Prefilter:** a C++ regular-expression engine (RE2, inside pyarrow) first discards documents with too few
   keyword matches. It scans all 6.4 million Wikipedia articles in about 2 minutes on 4 threads. Its count is never
   below the exact count: terms whose matches could overlap ("genetic drift" and "genetic\*") are counted by
-  separate patterns (three for the 608 biology terms). On 100,000 FineWeb-Edu and peS2o documents it rejected none
+  separate patterns (five for the 1,006 terms). On 100,000 FineWeb-Edu and peS2o documents it rejected none
   that the exact count keeps.
 - **Counting:** the survivors are counted with dictionary lookups instead of one large regular expression. Speed rose
   from 0.5 to 5.7 MB of text per second per thread.

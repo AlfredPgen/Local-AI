@@ -87,6 +87,7 @@ Add channels (one per line) to `youtube_channels.txt`, then:
 python youtube_transcripts.py --channels-file youtube_channels.txt
 python youtube_transcripts.py "Human Cell Atlas" --list-only        # check a channel name first
 python youtube_transcripts.py --channels-file youtube_channels.txt --whisper   # later, when not training
+python youtube_transcripts.py --channels-file youtube_channels.txt --recheck-off-topic   # after editing the keywords
 ```
 
 Only videos whose transcripts match `keywords_biology.txt` are kept. The `--whisper` run transcribes videos that

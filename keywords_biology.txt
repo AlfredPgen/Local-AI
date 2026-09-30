@@ -648,3 +648,452 @@ virus*
 viral
 bacterial
 immune response
+
+# ===========================================================================
+# Added 2026-09-30: more mathematics and statistics, and more genetics,
+# evolution and biology themes. Everyday words are still avoided or used only
+# in phrases (integral, derivative, bootstrap, manifold, posterior...).
+# ===========================================================================
+# --- mathematics: algebra, analysis, calculus, geometry ----------------------
+matrices
+matrix algebra
+determinant*
+orthogonal*
+orthonormal
+singular value*
+principal component*
+tensor*
+Jacobian
+Hessian matrix
+Lagrange multiplier*
+partial derivative*
+second derivative*
+differential calculus
+integral calculus
+integration by parts
+definite integral*
+Taylor series
+Taylor expansion
+Fourier*
+Laplace transform*
+polynomial*
+logarithm*
+exponential function*
+complex number*
+real analysis
+measure theory
+topolog*
+Riemannian
+group theory
+number theory
+set theory
+linear programming
+dynamical system*
+numerical analysis
+numerical method*
+finite element*
+interpolation
+asymptotic*
+infinite series
+geometric series
+game theory
+information theory
+mutual information
+Kullback-Leibler
+Shannon entropy
+fractal*
+chaos theory
+Newton-Raphson
+# --- probability and stochastic processes ------------------------------------
+Bayes
+stochastic process*
+Brownian motion
+random walk*
+branching process*
+martingale*
+Poisson process*
+diffusion approximation
+law of large numbers
+moment generating function*
+normal distribution*
+Gaussian
+binomial
+negative binomial
+Poisson
+multinomial
+Dirichlet
+beta distribution*
+gamma distribution*
+exponential distribution*
+chi-square*
+chi-squared
+quantile*
+percentile*
+# --- statistics: inference, models, tests ---------------------------------------
+statistical inference
+frequentist
+posterior probabilit*
+prior probabilit*
+credible interval*
+conjugate prior*
+empirical Bayes
+hierarchical model*
+Markov chain Monte Carlo
+MCMC
+Gibbs sampl*
+Metropolis-Hastings
+Hamiltonian Monte Carlo
+variational inference
+expectation-maximization
+expectation maximisation
+EM algorithm
+log-likelihood
+likelihood ratio*
+maximum a posteriori
+least squares
+ordinary least squares
+linear model*
+generalized linear model*
+generalised linear model*
+mixed model*
+mixed-effects
+linear mixed model*
+random effect*
+fixed effect*
+logistic regression
+Poisson regression
+ridge regression
+lasso
+elastic net
+regularization
+regularisation
+shrinkage estimat*
+multivariate
+univariate
+multicollinearity
+heteroscedastic*
+homoscedastic*
+correlation coefficient*
+Pearson correlation
+Spearman
+covariance matrix
+principal component analysis
+factor analysis
+cluster analysis
+hierarchical clustering
+k-means
+mixture model*
+latent variable*
+ANOVA
+analysis of variance
+t-test*
+Student's t
+F-test
+Wilcoxon
+Mann-Whitney
+Kruskal-Wallis
+Kolmogorov-Smirnov
+Fisher's exact test
+nonparametric
+non-parametric
+permutation test*
+resampling
+jackknife
+cross-validation
+effect size*
+statistical power
+power analysis
+sample size calculation*
+type I error*
+type II error*
+false discovery rate
+Bonferroni
+multiple testing
+multiple comparison*
+standard error*
+Fisher information
+Cramer-Rao
+sufficient statistic*
+information criterion
+Akaike
+=AIC
+=BIC
+time series
+autoregressive
+ARIMA
+state space model*
+Kalman filter*
+hidden Markov model*
+density estimation
+kernel density
+spline*
+survival analysis
+Kaplan-Meier
+Cox regression
+proportional hazards
+hazard ratio*
+odds ratio*
+relative risk
+confounding
+confounder*
+causal inference
+counterfactual*
+instrumental variable*
+propensity score*
+directed acyclic graph*
+structural equation model*
+path analysis
+meta-analys*
+systematic review*
+biostatistic*
+epidemiolog*
+econometric*
+psychometric*
+# --- population and evolutionary genetics ---------------------------------------
+allele frequenc*
+selection coefficient*
+relative fitness
+fitness landscape*
+mutation rate*
+recombination rate*
+genetic load
+mutation load
+background selection
+balancing selection
+positive selection
+purifying selection
+directional selection
+stabilizing selection
+stabilising selection
+disruptive selection
+sexual selection
+kin selection
+genetic hitchhiking
+genetic draft
+founder effect*
+population bottleneck*
+site frequency spectrum
+allele frequency spectrum
+Tajima
+=FST
+F-statistic*
+isolation by distance
+population structure
+population stratification
+introgression
+demographic inference
+demographic history
+ancestral recombination graph*
+genealog*
+most recent common ancestor
+identity by descent
+identical by descent
+runs of homozygosity
+kinship
+relatedness
+pedigree*
+assortative mating
+random mating
+panmixia
+metapopulation*
+cline*
+hybrid zone*
+reproductive isolation
+adaptive radiation
+convergent evolution
+coevolution
+molecular evolution
+dN/dS
+synonymous substitution*
+nonsynonymous
+substitution rate*
+maximum parsimony
+horizontal gene transfer
+gene duplication
+whole-genome duplication
+transposable element*
+transposon*
+retrotransposon*
+ancient DNA
+paleogenom*
+palaeogenom*
+Neanderthal*
+Denisovan*
+human evolution
+domestication
+# --- quantitative and statistical genetics ---------------------------------------
+genetic correlation*
+genetic architecture
+polygenic score*
+polygenic risk score*
+SNP heritability
+missing heritability
+LD score*
+linkage mapping
+linkage analysis
+association mapping
+genomic prediction
+genomic selection
+BLUP
+=REML
+restricted maximum likelihood
+additive effect*
+dominance variance
+dominance deviation*
+epistatic
+genotype-by-environment
+gene-environment interaction*
+reaction norm*
+norm of reaction
+phenotypic plasticity
+twin stud*
+family stud*
+adoption stud*
+liability threshold
+infinitesimal model
+Price equation
+breeder's equation
+selection differential
+response to selection
+genetic gain
+inbreeding depression
+heterosis
+credible set*
+posterior inclusion probabilit*
+causal variant*
+transcriptome-wide association
+=TWAS
+=PheWAS
+phenome-wide
+polygenicity
+genotype imputation
+imputation
+haplotype phasing
+reference panel*
+biobank*
+genotyping array*
+SNP array*
+# --- genomics technologies and clinical genetics ---------------------------------
+whole-genome sequencing
+exome sequencing
+long-read sequencing
+single-cell RNA
+single-cell sequencing
+scRNA-seq
+ATAC-seq
+ChIP-seq
+Hi-C
+spatial transcriptomic*
+variant calling
+structural variant*
+copy number variant*
+copy number variation
+=CNV
+=CNVs
+rare variant*
+common variant*
+de novo mutation*
+germline
+somatic mutation*
+mosaicism
+penetrance
+expressivity
+Mendelian disorder*
+monogenic
+oligogenic
+pharmacogenom*
+pharmacogenetic*
+precision medicine
+genetic counselling
+genetic counseling
+genetic testing
+newborn screening
+carrier screening
+# --- molecular and cell biology --------------------------------------------------
+chromatin
+histone*
+nucleosome*
+enhancer*
+promoter region*
+gene regulation
+gene regulatory network*
+alternative splicing
+splicing
+spliceosome
+non-coding RNA
+noncoding RNA
+siRNA
+piRNA
+RNA interference
+ribosom*
+protein synthesis
+post-translational
+phosphorylation
+ubiquitin*
+proteasom*
+autophagy
+apoptosis
+cell division
+cell differentiation
+organoid*
+cytoskeleton
+mitochondri*
+chloroplast*
+organelle*
+membrane protein*
+ion channel*
+signaling pathway*
+signalling pathway*
+kinase*
+phosphatase*
+metabolic pathway*
+glycolysis
+Krebs cycle
+citric acid cycle
+oxidative phosphorylation
+photosynthesis
+enzyme kinetics
+Michaelis-Menten
+# --- immunology, neuroscience, development, ecology, infectious disease ------------
+immune response*
+innate immun*
+adaptive immun*
+T cell*
+B cell*
+cytokine*
+=MHC
+=HLA
+autoimmun*
+inflammat*
+synap*
+neurotransmitter*
+action potential*
+neural circuit*
+embryo*
+embryonic development
+developmental biology
+morphogen*
+gastrulation
+=Hox
+ecology
+ecological
+ecosystem*
+biodiversity
+population dynamics
+predator-prey
+Lotka-Volterra
+carrying capacity
+life history
+species richness
+microbiom*
+microbiota
+metagenom*
+epidemic*
+pandemic*
+infectious disease*
+transmission dynamics
+basic reproduction number
+SIR model
+phylodynamic*
+antimicrobial resistance
+antibiotic resistance
