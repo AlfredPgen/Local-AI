@@ -530,7 +530,7 @@ def _prefilter_patterns(terms):
     counts is never below the Python matcher's count, so no document the full
     check would keep is rejected early. One pattern counts overlapping terms
     once ('genetic drift' also contains 'genetic*'), so terms whose matches
-    could overlap go to different patterns (608 biology terms -> 3 patterns).
+    could overlap go to different patterns (2,385 terms -> 5 patterns).
     Words are joined by any non-word run, as the Python matcher allows; word
     boundaries are only required next to ASCII word characters."""
     groups = []

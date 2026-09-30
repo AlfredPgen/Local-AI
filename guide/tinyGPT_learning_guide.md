@@ -43,7 +43,7 @@ answerer. **e**, tools to inspect, compare, export and use checkpoints.](figures
 | convert_to_markdown.py | Turns PDF, DOCX, PPTX, XLSX, CSV, HTML, code and GWAS summary statistics into Markdown, sorted by type |
 | gpu_check.py | GPU readings, a load test and a training benchmark; refuses to run while the GPU is busy |
 | test_tiny_gpt.py | 18 automated tests that run on the CPU |
-| keywords_biology.txt | 1,006 topic terms for the keyword filter |
+| keywords_biology.txt | 2,385 topic terms for the keyword filter |
 | probes_biology.tsv | The fact benchmark: 336 questions in 16 categories, with near-miss wrong answers |
 | calibrate_probes.py | Sets the benchmark's difficulty labels from how open reference models score it |
 | finetune_examples/ | Format templates: 20 SFT examples and 12 DPO pairs |
@@ -579,10 +579,19 @@ are never keyword-filtered.
 
 **The keyword list:**
 
-- keywords_biology.txt has 1,006 terms (608 until 30 September, when mathematics, statistics, population and
-  statistical genetics, genomics technology, clinical genetics, immunology, neuroscience and ecology terms were
-  added). It covers molecular and cell biology, genetics, statistics, machine learning,
-  medicine, drugs, animals, plants and genomics technology.
+- keywords_biology.txt has 2,385 terms. It covers molecular and cell biology, genetics and genomics, evolution and
+  phylogenetics, statistics and mathematics, machine learning, medicine and specific diseases, drugs and other
+  chemicals, nutrition and metabolism, enzymes and other proteins, gene symbols, species and microbes, molecular
+  structure and 3D modelling and rendering, and the names of well-known scientists.
+- **History:** 608 terms until 30 September 2026. Then mathematics, statistics and more genetics themes were added
+  (1,006), then diseases, chemistry, genes, proteins and 3D modelling (1,686), then nutrition, species, microbes,
+  phylogenetics, more diseases and scientists' names (2,385).
+- **Everyday words are left out or used only in phrases.** Examples: "stroke" appears only as "ischaemic stroke";
+  "Godot" only as "Godot engine" (not the play); "Falconer" only as "Douglas Falconer". Common surnames (Fisher,
+  Wright, Snow) appear only as full names ("Ronald Fisher", "Sewall Wright", "John Snow").
+- **No term is covered by another one.** "polymerase\*" was dropped because "polymer\*" already matches it: two
+  terms matching the same word would count as two different terms and let a document pass the distinct-term rule
+  too easily.
 - Terms starting with `=` are case-sensitive, for gene symbols such as `=BRCA1` that would otherwise match ordinary
   words.
 - `*` is a wildcard at either end of a word: `*mab` finds antibody drug names, `immuno*` finds all immuno- words.
@@ -595,6 +604,24 @@ are never keyword-filtered.
 - `--wiki-select top` ranks articles by score and keeps the best `--wiki-max-docs`. The best 1.5 times that many
   are read, and the cut to exactly `--wiki-max-docs` is made after cleaning, filtering and boilerplate removal.
 
+**Why the keywords are not built into the tokenizer.** Giving every keyword its own token sounds like it
+would save tokens, and so training time. It doesn't. The test: 16,384-token tokenizers were trained on the same 86
+million characters (PubMed Central papers and FineWeb-Edu), then each encoded 27 million other characters.
+
+| Tokenizer | Tokens | Keyword words that are one token |
+|---|---|---|
+| As data_prep.py builds it | 6,686,742 | 32% |
+| Keywords learned as whole words (each keyword word added 300 times to the tokenizer's training text) | 6,840,465 (+2.3%) | 99% |
+| Keywords forced in as fixed symbols | 7,345,794 (+9.9%) | (split from their space) |
+
+- **The most it could ever save is 0.4%.** Keywords are 7.6% of the words, and most already take only one or two
+  tokens. Even if every keyword cost exactly one token and nothing else changed, the text would shrink by 0.4%.
+- **In practice it costs more than it saves.** The whole-word keyword tokens take about 2,000 of the 16,384
+  vocabulary slots from pieces that common words need, so everything else gets longer.
+- **Fixed symbols are worse still:** they ignore word boundaries ("general" became "gene" + "ral").
+- **The plain tokenizer already learns your field:** it is trained on your own training split, so frequent terms
+  ("genetics", "proteins", "diets") are already single tokens, and rare ones ("Tajima") cost a few pieces.
+
 **Why keywords, and not "text that looks like my Markdown":** your Markdown doesn't cover every topic you care about.
 Importance resampling towards it would make the corpus narrower. Keyword selection stays.
 
@@ -603,8 +630,9 @@ Importance resampling towards it would make the corpus narrower. Keyword selecti
 - **Prefilter:** a C++ regular-expression engine (RE2, inside pyarrow) first discards documents with too few
   keyword matches. It scans all 6.4 million Wikipedia articles in about 2 minutes on 4 threads. Its count is never
   below the exact count: terms whose matches could overlap ("genetic drift" and "genetic\*") are counted by
-  separate patterns (five for the 1,006 terms). On 100,000 FineWeb-Edu and peS2o documents it rejected none
-  that the exact count keeps.
+  separate patterns (still five for the 2,385 terms). On 100,000 FineWeb-Edu and peS2o documents it rejected none
+  that the exact count keeps. For the 2,385-term list, every term was also written out in nine spellings (plural,
+  capitals, punctuation around it; 21,438 test texts): the prefilter never counted fewer matches than the exact check.
 - **Counting:** the survivors are counted with dictionary lookups instead of one large regular expression. Speed rose
   from 0.5 to 5.7 MB of text per second per thread.
 - **Accuracy:** it made the same decision as the old method on 2,979 of 3,000 test documents (99.3%). The differences
@@ -840,9 +868,13 @@ step 400/11870 | train 4.912 | val 4.470 @400 [md 4.51 wiki 4.43] | ppl 87.36
 | bpb | Validation bits per byte: comparable across tokenizers (Section 9.1) |
 | lr | Current learning rate |
 | tok/s | Training throughput |
+| elapsed | Time since this session started. After `--resume`, `(whole run 7:45:12)` adds the earlier sessions |
 | NEW BEST | Shown only when validation loss improves; the best checkpoint is then saved |
 
 - **Samples:** after each line, a short sample continues "Genetic drift is", so you can watch the text improve.
+- **End of a run:** the last line gives this session's time and the whole run's: total time, how much of it was
+  training, and the energy, CO2e and cost, for example `this session 2:10:03 | whole run: 26:41:10 in total,
+  25:58:47 of it training, 9.81 kWh, 1,226 g CO2e, £2.61`.
 - **Heartbeat:** a progress line starting with `...` appears every 2 minutes between evaluations, so a slow step never
   looks like a hang. It shows the training loss since the previous line, speed and time to the next validation; it
   includes no validation. The run header explains this once, so the line itself stays short.
@@ -911,7 +943,8 @@ benchmark, comparison and fine-tune.
 
 - **Columns include:** time, event, name, status, step, parameters, shape, context, vocabulary, tokens seen, learning
   rate, z-loss, dataset, best and last validation loss, bits per byte, perplexity, benchmark accuracy, throughput,
-  hours and checkpoint.
+  training hours (`train_hours`, without evaluations and saving), total hours of the run over all sessions
+  (`run_hours`) and checkpoint.
 - **Opening it:** it opens directly in Excel. The scripts only ever append, and nothing deletes it.
 - **Why keep it:** yes, storing the parameters in a table is useful. It is the only reliable way to know, months
   later, which settings gave which result. Add your own comments in the *notes* column.

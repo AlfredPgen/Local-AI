@@ -43,7 +43,7 @@ python tiny_gpt.py --generate "Genetic drift is"
 | `calibrate_probes.py` | Difficulty labels for the fact benchmark, from open reference models |
 | `gpu_check.py` | GPU clocks, power limits and a short training benchmark |
 | `test_tiny_gpt.py` | Test suite: `python -m unittest test_tiny_gpt.py` (CPU only, about 4 minutes) |
-| `keywords_biology.txt` | 1,006 terms (biology, genetics, mathematics, statistics, machine learning) that decide which web, Wikipedia and YouTube documents are on topic |
+| `keywords_biology.txt` | 2,385 terms (biology, genetics, diseases, chemistry and drugs, nutrition, species, molecular structure and 3D rendering, mathematics, statistics, machine learning, scientists' names) that decide which web, Wikipedia and YouTube documents are on topic |
 | `probes_biology.tsv` | The 336-question fact benchmark (16 categories, difficulty-labelled) |
 | `youtube_channels.txt` | Channels for `youtube_transcripts.py` |
 | `finetune_examples/` | Example SFT and DPO data |

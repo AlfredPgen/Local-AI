@@ -15,6 +15,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import unittest.mock
 from contextlib import redirect_stdout
 
 import numpy as np
@@ -296,9 +297,12 @@ class TestPipeline(unittest.TestCase):
         manifest = {"tokenizer": {"vocab_size": 8192},
                     "sources": {"md": {"train": {"tokens": 16_000_000}, "doc_tokens_percentiles": {"90": 3000}},
                                 "wiki": {"train": {"tokens": 51_000_000}, "doc_tokens_percentiles": {"90": 2000}}}}
+        # a fixed memory budget: the real one is 40% of free RAM, so a busy machine would fail the test
+        fixed_budget = (4 * 2 ** 30, "4.0 GiB (test)")
         for extra in ([], ["--steps", "15000"]):
             args = tiny_gpt.parse_args(["--name", "x"] + extra)
-            cfg, settings, lines = tiny_gpt.plan_run(args, manifest, torch.device("cpu"), None)
+            with unittest.mock.patch.object(tiny_gpt, "device_memory_budget", return_value=fixed_budget):
+                cfg, settings, lines = tiny_gpt.plan_run(args, manifest, torch.device("cpu"), None)
             n, _ = tiny_gpt.count_params(cfg)
             epochs = settings["steps"] * settings["tokens_per_step"] / 67e6
             self.assertLessEqual(epochs, 4.0 + 1e-6, f"planner exceeded the epoch cap with {extra}")

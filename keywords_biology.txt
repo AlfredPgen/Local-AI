@@ -329,7 +329,6 @@ Bayesian optimisation
 graph neural network*
 federated learning
 PyTorch
-TensorFlow
 scikit-learn
 =CUDA
 =GPU
@@ -376,7 +375,6 @@ amphibian*
 insect*
 primate*
 rodent*
-zoology
 ethology
 Drosophila
 Caenorhabditis elegans
@@ -425,7 +423,6 @@ yeast
 Saccharomyces
 Escherichia coli
 =E. coli
-microbiome*
 metagenom*
 archaea
 
@@ -639,14 +636,12 @@ synthetic biology
 gene regulatory network*
 protein-protein interaction*
 enzyme kinetics
-pharmacogenomic*
 precision medicine
 public health
 genetic counselling
 genetic counseling
 virus*
 viral
-bacterial
 immune response
 
 # ===========================================================================
@@ -1036,7 +1031,6 @@ apoptosis
 cell division
 cell differentiation
 organoid*
-cytoskeleton
 mitochondri*
 chloroplast*
 organelle*
@@ -1052,7 +1046,6 @@ Krebs cycle
 citric acid cycle
 oxidative phosphorylation
 photosynthesis
-enzyme kinetics
 Michaelis-Menten
 # --- immunology, neuroscience, development, ecology, infectious disease ------------
 immune response*
@@ -1075,8 +1068,6 @@ developmental biology
 morphogen*
 gastrulation
 =Hox
-ecology
-ecological
 ecosystem*
 biodiversity
 population dynamics
@@ -1097,3 +1088,1431 @@ SIR model
 phylodynamic*
 antimicrobial resistance
 antibiotic resistance
+
+# ===========================================================================
+# Added 2026-09-30 (second batch): disease names, more chemistry and drugs,
+# more genes and proteins, and 3D modelling / rendering of molecules.
+# Everyday words are avoided or used only in phrases (stroke, depression,
+# alcohol, mesh, animation, Unity, Maya).
+# ===========================================================================
+# --- diseases: cancer ------------------------------------------------------------
+cancer*
+carcinoma*
+adenocarcinoma*
+leukemia*
+leukaemia*
+lymphoma*
+melanoma*
+sarcoma*
+glioma*
+glioblastoma*
+myeloma*
+neuroblastoma*
+metasta*
+# --- diseases: neurological and psychiatric ---------------------------------------
+Alzheimer*
+Parkinson*
+dementia*
+Huntington's disease
+Huntington disease
+amyotrophic lateral sclerosis
+multiple sclerosis
+epilep*
+migraine*
+ischemic stroke
+ischaemic stroke
+haemorrhagic stroke
+hemorrhagic stroke
+schizophreni*
+bipolar disorder
+depressive disorder*
+autism
+autistic
+=ADHD
+attention deficit
+anxiety disorder*
+obsessive-compulsive
+anorexia nervosa
+post-traumatic stress
+neurodegenerat*
+neurodevelopmental
+prion*
+Creutzfeldt-Jakob
+# --- diseases: cardiovascular, metabolic, organ ------------------------------------
+coronary artery disease
+coronary heart disease
+myocardial infarction
+heart failure
+atrial fibrillation
+arrhythmia*
+hypertension
+atherosclerosis
+cardiomyopathy
+hypercholesterol*
+hyperlipid*
+dyslipid*
+thrombosis
+embolism
+type 1 diabetes
+type 2 diabetes
+obesity
+metabolic syndrome
+insulin resistance
+fatty liver
+NAFLD
+gout
+osteoporosis
+osteoarthritis
+rheumatoid arthritis
+arthritis
+lupus
+psoriasis
+eczema
+atopic dermatitis
+asthma
+=COPD
+chronic obstructive
+cirrhosis
+hepatitis
+chronic kidney disease
+kidney disease
+renal failure
+glaucoma
+macular degeneration
+cataract*
+retinitis pigmentosa
+anemia
+anaemia
+sepsis
+pneumonia
+infertility
+endometriosis
+preeclampsia
+pre-eclampsia
+Crohn*
+ulcerative colitis
+inflammatory bowel disease
+coeliac disease
+celiac disease
+irritable bowel
+# --- diseases: genetic and rare --------------------------------------------------
+Duchenne
+neurofibromatosis
+retinoblastoma
+Lynch syndrome
+Charcot-Marie-Tooth
+Angelman
+Prader-Willi
+Rett syndrome
+Williams syndrome
+DiGeorge
+Noonan syndrome
+hereditary disease*
+inherited disorder*
+cystic fibrosis
+sickle cell
+thalassemia*
+thalassaemia*
+hemophilia*
+haemophilia*
+muscular dystrophy
+spinal muscular atrophy
+fragile X
+Down syndrome
+Turner syndrome
+Klinefelter
+phenylketonuria
+Tay-Sachs
+Marfan
+Ehlers-Danlos
+osteogenesis imperfecta
+hemochromatosis
+haemochromatosis
+Wilson disease
+Gaucher
+Fabry disease
+Pompe disease
+mitochondrial disease*
+rare disease*
+orphan disease*
+inborn error of metabolism
+inborn errors of metabolism
+# --- diseases: infectious -------------------------------------------------------
+tuberculosis
+malaria
+=HIV
+=AIDS
+influenza
+COVID
+SARS-CoV-2
+coronavirus*
+Ebola
+Zika
+dengue
+cholera
+measles
+polio*
+smallpox
+=HPV
+herpes
+syphilis
+leprosy
+rabies
+=MRSA
+# --- chemistry: biomolecules, metabolites, hormones -------------------------------
+alanine
+arginine
+asparagine
+aspartate
+aspartic acid
+cysteine
+glutamate
+glutamic acid
+glutamine
+glycine
+histidine
+isoleucine
+leucine
+lysine
+methionine
+phenylalanine
+proline
+serine
+threonine
+tryptophan
+tyrosine
+valine
+adenine
+guanine
+cytosine
+thymine
+uracil
+adenosine
+guanosine
+nucleoside*
+=ATP
+=ADP
+=NADH
+=NADPH
+coenzyme*
+acetyl-CoA
+pyruvate
+lactate
+citrate
+glycogen
+starch
+cellulose
+chitin
+lipid*
+phospholipid*
+fatty acid*
+triglyceride*
+sterol*
+steroid*
+polypeptide*
+oligonucleotide*
+carbohydrate*
+monosaccharide*
+polysaccharide*
+nucleic acid*
+vitamin*
+folate
+folic acid
+insulin
+glucagon
+thyroxine
+melatonin
+oxytocin
+vasopressin
+ghrelin
+histamine
+nitric oxide
+=GABA
+norepinephrine
+noradrenaline
+endorphin*
+prostaglandin*
+reactive oxygen species
+heme
+haem
+carotenoid*
+flavonoid*
+alkaloid*
+terpene*
+antioxidant*
+# --- chemistry: drugs and drug classes -------------------------------------------
+doxorubicin
+cisplatin
+carboplatin
+paclitaxel
+tamoxifen
+methotrexate
+dexamethasone
+prednisone
+prednisolone
+hydrocortisone
+clopidogrel
+digoxin
+furosemide
+amiodarone
+levothyroxine
+lithium carbonate
+sertraline
+fluoxetine
+citalopram
+escitalopram
+diazepam
+lorazepam
+haloperidol
+clozapine
+risperidone
+olanzapine
+ketamine
+fentanyl
+codeine
+naloxone
+tramadol
+gabapentin
+levodopa
+donepezil
+memantine
+sildenafil
+semaglutide
+liraglutide
+tirzepatide
+doxycycline
+tetracycline*
+cephalosporin*
+rifampicin
+isoniazid
+chloroquine
+hydroxychloroquine
+artemisinin
+ivermectin
+thalidomide
+cyclosporine
+ciclosporin
+tacrolimus
+botulinum
+colchicine
+allopurinol
+sulfonamide*
+beta-lactam*
+benzodiazepine*
+=SSRI
+=SSRIs
+=NSAID
+=NSAIDs
+antidepressant*
+antipsychotic*
+anticoagulant*
+antihypertensive*
+anticonvulsant*
+antiviral*
+antifungal*
+antibacterial*
+chemotherap*
+immunotherap*
+gene therap*
+cell therap*
+=CAR-T
+antisense oligonucleotide*
+PROTAC*
+# --- chemistry: structure, analysis and computation ------------------------------
+molecular formula*
+chemical formula*
+molar mass
+bond length*
+bond angle*
+dihedral angle*
+torsion angle*
+Ramachandran
+atomic coordinate*
+atomic model*
+unit cell
+space group*
+B-factor*
+chirality
+racemic
+tautomer*
+aromaticity
+aromatic ring*
+protonation
+solvation
+Lennard-Jones
+coarse-grained
+Chemical Component Dictionary
+ZINC database
+=PDBe
+=RCSB
+chemical structure*
+molecular structure*
+crystal structure*
+cryo-electron microscopy
+nuclear magnetic resonance
+=NMR
+mass spectrometry
+spectroscop*
+chromatography
+=HPLC
+stoichiometr*
+covalent bond*
+hydrogen bond*
+ionic bond*
+van der Waals
+electronegativity
+oxidation state*
+redox
+=pKa
+functional group*
+benzene
+hydrocarbon*
+alkane*
+alkene*
+alkyne*
+carboxylic acid*
+amine*
+amide*
+ester*
+ketone*
+aldehyde*
+thiol*
+reaction mechanism*
+nucleophil*
+electrophil*
+activation energy
+reaction kinetics
+thermodynamic*
+Gibbs free energy
+enthalpy
+entropy
+equilibrium constant*
+binding affinity
+dissociation constant*
+molecular docking
+docking score*
+force field*
+quantum chemistry
+density functional theory
+ab initio
+molecular orbital*
+conformation*
+conformer*
+stereochemistry
+valence
+periodic table
+chemical element*
+isotope*
+radioactiv*
+PDB file*
+PDB entry
+PDB ID*
+mmCIF
+MOL2
+molecular graph*
+RDKit
+Open Babel
+OpenMM
+GROMACS
+CHARMM
+AutoDock
+RoseTTAFold
+ESMFold
+structure prediction
+# --- genes (case-sensitive symbols) ---------------------------------------------
+=ABL1
+=BCR-ABL
+=ACTB
+=APOB
+=APOA1
+androgen receptor*
+=ATP7B
+=BDNF
+=CDH1
+=CDK4
+=CDK6
+=CDKN1A
+=COL1A1
+C-reactive protein
+=CYP1A2
+=CYP2B6
+=DNMT1
+=DNMT3A
+=EZH2
+=FBN1
+=FGFR1
+=FGFR2
+=FGFR3
+=FLT3
+glucocerebrosidase
+=GCK
+=HFE
+=HNF4A
+=IDH1
+=IDH2
+=IL10
+=IL1B
+=IL2
+=JAK1
+=MAPK1
+=MYBPC3
+=MYH7
+=NF1
+=NF2
+=NFE2L2
+=NPM1
+=PDGFRA
+=PKD1
+=PKD2
+=PRKN
+=PTPN11
+=RUNX1
+=SCN1A
+=SCN5A
+=SERPINA1
+=SMAD4
+=STK11
+=TET2
+=TGFBR2
+=TSC1
+=TSC2
+=TTN
+=TTR
+=UGT1A1
+=WT1
+=XIST
+=CD4
+=CD8
+=CD19
+=PDCD1
+=CD274
+PD-1
+PD-L1
+ACE inhibitor*
+=NOS3
+=LMNA
+=DMPK
+=FXN
+=GJB2
+=CFH
+=ARMS2
+=SORL1
+=BIN1
+=CACNA1C
+=DRD2
+=COMT
+=SLC6A4
+=OXTR
+=FOXP2
+=MSTN
+=MYOD1
+=HOXA1
+=WNT1
+=CTNNB1
+=NFKB1
+=IRF5
+=STAT4
+=TYK2
+=IFIH1
+=ERAP1
+# --- proteins and enzymes ------------------------------------------------------
+actin
+myosin
+tubulin
+keratin*
+collagen*
+elastin
+fibrin*
+albumin
+ferritin
+transferrin
+myoglobin
+rhodopsin
+opsin*
+heat shock protein*
+molecular chaperone*
+chaperonin*
+integrin*
+cadherin*
+=G protein*
+=GPCR
+=GPCRs
+nuclear receptor*
+zinc finger*
+helicase*
+reverse transcriptase
+ligase*
+nuclease*
+endonuclease*
+protease*
+peptidase*
+lipase*
+amylase
+lysozyme
+catalase
+peroxidase*
+dehydrogenase*
+reductase*
+oxidase*
+synthase*
+synthetase*
+transferase*
+hydrolase*
+topoisomerase*
+gyrase
+Cas9
+Cas12*
+Cas13*
+caspase*
+cyclin
+cyclins
+cyclin-dependent
+hemagglutinin
+haemagglutinin
+neuraminidase
+spike protein*
+green fluorescent protein
+=GFP
+luciferase*
+protein domain*
+protein complex*
+active site*
+binding site*
+binding pocket*
+allosteric
+secondary structure
+tertiary structure
+quaternary structure
+alpha helix
+alpha helices
+beta sheet*
+beta strand*
+disulfide bond*
+disulphide bond*
+hydrophobic*
+hydrophilic*
+protein engineering
+directed evolution
+protein design
+de novo design
+# --- 3D modelling, rendering and molecular graphics ----------------------------
+polygonal mesh*
+wireframe*
+render engine*
+render farm*
+GPU rendering
+scene graph*
+ray casting
+3D scanning
+computer-aided design
+OpenSCAD
+FreeCAD
+SolidWorks
+Autodesk Maya
+MeshLab
+Open3D
+trimesh
+PyVista
+=bpy
+Substance Painter
+3D printing
+3D reconstruction
+3D visualization
+3D visualisation
+3D structure*
+three-dimensional
+triangle mesh*
+mesh generation
+surface mesh*
+normal map*
+UV mapping
+UV unwrap*
+subdivision surface*
+=NURBS
+Bezier
+Bézier
+procedural generation
+procedural modelling
+procedural modeling
+geometry nodes
+character rigging
+keyframe*
+computer animation
+3D animation
+physically based rendering
+ambient occlusion
+depth of field
+light transport
+=BRDF
+=BSDF
+ray marching
+raymarching
+signed distance field*
+voxel*
+point cloud*
+Gaussian splatting
+neural radiance field*
+=NeRF
+marching cubes
+isosurface*
+volumetric
+molecular surface*
+solvent-accessible
+van der Waals surface
+ball-and-stick
+space-filling
+ribbon diagram*
+cartoon representation
+electron density map*
+electrostatic potential
+molecular modelling
+molecular modeling
+Molecular Nodes
+Jmol
+UCSF Chimera
+NGL Viewer
+3Dmol
+py3Dmol
+Avogadro
+OVITO
+ParaView
+=VTK
+Cinema 4D
+3ds Max
+ZBrush
+Unreal Engine
+Unity engine
+Godot engine
+three.js
+WebGL
+OptiX
+Cycles renderer
+Mitsuba renderer
+POV-Ray
+glTF
+STL file*
+=FBX
+Universal Scene Description
+OpenUSD
+
+
+# ===========================================================================
+# Added 2026-09-30 (third batch): nutrition and metabolism, minerals, lipids,
+# enzymes, species, phylogenetics, viruses, bacteria and parasites, more
+# specific diseases, and scientists' names. Surnames that are everyday words
+# or common names (Fisher, Wright, Morgan, Snow...) appear only as full names.
+# ===========================================================================
+# --- nutrition and diet -----------------------------------------------------------
+nutri*
+malnutrition
+undernutrition
+overnutrition
+diet
+diets
+dietary
+dietitian*
+dietician*
+dietetic*
+food science
+food chemistry
+food composition
+macronutrient*
+micronutrient*
+calorie*
+caloric
+kilocalorie*
+energy intake
+energy expenditure
+energy balance
+basal metabolic rate
+resting metabolic rate
+glycemic
+glycaemic
+fasting
+ketogenic
+ketosis
+breastfeeding
+breast milk
+infant formula
+stunting
+kwashiorkor
+marasmus
+scurvy
+rickets
+beriberi
+pellagra
+iron deficiency
+iodine deficiency
+probiotic*
+prebiotic*
+# --- minerals and elements in the body ---------------------------------------------
+dietary mineral*
+trace element*
+trace mineral*
+calcium
+magnesium
+potassium
+sodium
+phosphorus
+phosphate*
+zinc
+selenium
+iodine
+manganese
+fluoride
+electrolyte*
+bicarbonate
+chloride
+nitrate*
+sulfate*
+sulphate*
+iron absorption
+iron overload
+# --- lipids and lipoproteins ---------------------------------------------------------
+lipoprotein*
+apolipoprotein*
+=LDL
+=HDL
+=VLDL
+saturated fat*
+unsaturated fat*
+trans fat*
+omega-3
+omega-6
+polyunsaturated
+monounsaturated
+sphingolipid*
+ceramide*
+eicosanoid*
+lipolysis
+lipogenesis
+beta-oxidation
+adipose
+adipocyte*
+adipokine*
+leptin
+adiponectin
+bile acid*
+bile salt*
+phosphatidyl*
+# --- metabolism and bioenergetics -----------------------------------------------------
+metabolite*
+catabolism
+anabolism
+catabolic
+anabolic
+gluconeogenesis
+glycogenesis
+glycogenolysis
+urea cycle
+pentose phosphate
+fermentation
+=NAD
+=FAD
+thermogenesis
+=HbA1c
+blood sugar
+hyperglycemia
+hyperglycaemia
+hypoglycemia
+hypoglycaemia
+cellular respiration
+aerobic respiration
+anaerobic
+electron transport chain
+chemiosmosis
+Calvin cycle
+nitrogen fixation
+nitrogen cycle
+carbon cycle
+# --- more molecules: metabolites, vitamins, plant compounds, small molecules -----------
+urea
+ammonia
+creatine
+creatinine
+carnitine
+taurine
+choline
+inositol
+bilirubin
+uric acid
+lactic acid
+citric acid
+acetic acid
+ascorbic acid
+retinol
+retinoic acid
+tocopherol*
+cholecalciferol
+calcitriol
+cobalamin
+riboflavin
+thiamine
+niacin
+biotin
+pantothenic acid
+pyridoxine
+phylloquinone
+ubiquinone
+polyphenol*
+resveratrol
+curcumin
+capsaicin
+lycopene
+carotene
+anthocyanin*
+tannin*
+lignin
+pectin
+inulin
+lactose
+maltose
+galactose
+trehalose
+ribose
+deoxyribose
+glycerol
+methanol
+acetone
+formaldehyde
+hydrogen peroxide
+carbon dioxide
+=CO2
+methane
+nitrous oxide
+ammonium
+# --- enzymes --------------------------------------------------------------------------
+oxygenase*
+monooxygenase*
+cyclooxygenase*
+lipoxygenase*
+hydroxylase*
+carboxylase*
+decarboxylase*
+hexokinase
+glucokinase
+phosphofructokinase
+aldolase
+enolase
+mutase*
+phospholipase*
+transaminase*
+aminotransferase*
+cytochrome*
+=P450
+superoxide dismutase
+trypsin*
+chymotrypsin*
+pepsin*
+lactase
+sucrase
+maltase
+cellulase*
+chitinase*
+urease
+nitrogenase
+rubisco
+tyrosinase
+=COX-1
+=COX-2
+acetylcholinesterase
+cholinesterase*
+anhydrase*
+ATPase*
+GTPase*
+phosphorylase*
+glucosidase*
+galactosidase*
+# --- species: model organisms and well-studied species -------------------------------
+scientific name*
+binomial nomenclature
+Rattus norvegicus
+Danio rerio
+Xenopus
+Gallus gallus
+Bos taurus
+Sus scrofa
+Canis familiaris
+Canis lupus
+Felis catus
+Ovis aries
+Capra hircus
+Equus caballus
+Macaca mulatta
+macaque*
+rhesus
+Pan troglodytes
+Pan paniscus
+bonobo*
+gorilla*
+orangutan*
+lemur*
+Oryza sativa
+Zea mays
+Triticum aestivum
+Hordeum vulgare
+Solanum lycopersicum
+Solanum tuberosum
+Nicotiana
+Brassica*
+Populus trichocarpa
+Physcomitrella
+Marchantia
+Chlamydomonas
+Volvox
+Neurospora
+Schizosaccharomyces
+=S. pombe
+=S. cerevisiae
+Dictyostelium
+Tetrahymena
+Paramecium
+Apis mellifera
+honeybee*
+honey bee*
+bumblebee*
+Bombyx mori
+silkworm*
+Tribolium
+Heliconius
+Nasonia
+Daphnia
+Nematostella
+sea urchin*
+Ciona
+amphioxus
+lamprey*
+coelacanth*
+Anolis
+stickleback*
+cichlid*
+guppies
+medaka
+killifish
+axolotl*
+planarian*
+tardigrade*
+Bacillus subtilis
+Caulobacter
+Thermus aquaticus
+Homo erectus
+Homo habilis
+Homo floresiensis
+Australopithec*
+hominin*
+hominid*
+Darwin's finches
+# --- phylogenetics and systematics ---------------------------------------------------
+cladistic*
+cladogram*
+clade*
+monophyletic
+paraphyletic
+polyphyletic
+outgroup*
+sister group*
+sister taxa
+taxon
+taxa
+tree of life
+homolog*
+ortholog*
+paralog*
+neighbor-joining
+neighbour-joining
+=UPGMA
+RAxML
+IQ-TREE
+MrBayes
+PhyML
+bootstrap support
+long-branch attraction
+substitution model*
+Jukes-Cantor
+incomplete lineage sorting
+gene tree*
+species tree*
+phylogeograph*
+systematics
+cryptic species
+species complex
+species delimitation
+DNA barcoding
+# --- viruses ---------------------------------------------------------------------------
+virion*
+capsid*
+herpesvirus*
+cytomegalovirus
+Epstein-Barr
+norovirus*
+rotavirus*
+adenovirus*
+papillomavirus*
+retrovirus*
+lentivirus*
+flavivirus*
+arbovirus*
+phage*
+West Nile
+chikungunya
+hantavirus*
+Marburg virus
+Lassa
+mpox
+monkeypox
+varicella
+chickenpox
+mumps
+rubella
+respiratory syncytial virus
+tobacco mosaic virus
+adeno-associated
+=H1N1
+=H5N1
+# --- bacteria --------------------------------------------------------------------------
+Staphylococcus
+Streptococcus
+Salmonella
+Listeria
+Clostridium
+Clostridioides
+=C. difficile
+Helicobacter
+=H. pylori
+Mycobacterium
+Pseudomonas
+Klebsiella
+Enterococcus
+Neisseria
+Vibrio
+Lactobacillus
+Bifidobacterium
+Bacteroides
+Treponema
+Borrelia
+Chlamydia
+Legionella
+Yersinia
+Shigella
+Campylobacter
+Haemophilus
+Acinetobacter
+Streptomyces
+cyanobacteri*
+Wolbachia
+Mycoplasma
+Rickettsia
+anthrax
+bubonic plague
+# --- parasites and fungi -----------------------------------------------------------------
+Plasmodium
+Trypanosoma
+Leishmania
+Toxoplasma
+Giardia
+Cryptosporidium
+Schistosoma
+schistosomiasis
+helminth*
+nematode*
+tapeworm*
+hookworm*
+Candida
+Aspergillus
+Cryptococcus
+Anopheles
+Aedes
+mosquito*
+tick-borne
+# --- more diseases -----------------------------------------------------------------------
+Hashimoto's thyroiditis
+Hashimoto thyroiditis
+Hashimoto's disease
+hypothyroidism
+hyperthyroidism
+goiter
+goitre
+acromegaly
+ataxia*
+dystonia
+myasthenia gravis
+Guillain-Barré
+Guillain-Barre
+narcolepsy
+Tourette*
+cerebral palsy
+hydrocephalus
+meningitis
+encephalitis
+polycystic kidney
+polycystic ovary
+=PCOS
+nephrotic
+nephropathy
+glomerulonephritis
+kidney stone*
+pancreatitis
+gallstone*
+appendicitis
+diverticul*
+gastritis
+peptic ulcer*
+=GERD
+cholestasis
+jaundice
+mesothelioma
+osteosarcoma
+rhabdomyosarcoma
+medulloblastoma
+astrocytoma
+meningioma
+hepatoblastoma
+cholangiocarcinoma
+lymphoblastic
+myelodysplastic
+myeloproliferative
+Hodgkin*
+Burkitt*
+Kaposi*
+teratoma*
+adenoma*
+oncogen*
+neoplasm*
+neoplastic
+malignan*
+vitiligo
+alopecia
+rosacea
+thrombocytopenia
+neutropenia
+leukopenia
+polycythemia
+von Willebrand
+hearing loss
+deafness
+myopia
+strabismus
+keratoconus
+uveitis
+retinopathy
+neuropathy
+scoliosis
+achondroplasia
+fibromyalgia
+myopathy
+sarcopenia
+rhabdomyolysis
+ankylosing spondylitis
+Sjögren*
+Sjogren*
+scleroderma
+systemic sclerosis
+vasculitis
+sarcoidosis
+pulmonary fibrosis
+emphysema
+bronchitis
+bronchiectasis
+pulmonary hypertension
+aortic stenosis
+cardiac arrest
+congenital heart
+endocarditis
+myocarditis
+pericarditis
+aneurysm*
+dyslexia
+bulimia
+addiction
+substance use disorder*
+alcohol use disorder
+alcoholism
+insomnia
+sleep apnea
+sleep apnoea
+porphyria
+galactosemia
+homocystinuria
+lysosomal storage
+allerg*
+anaphylaxis
+hay fever
+gonorrhea
+gonorrhoea
+Lyme disease
+tetanus
+diphtheria
+pertussis
+whooping cough
+typhoid
+urinary tract infection*
+otitis
+cellulitis
+impetigo
+scabies
+candidiasis
+histoplasmosis
+toxoplasmosis
+leishmaniasis
+trypanosomiasis
+sleeping sickness
+Chagas
+filariasis
+onchocerciasis
+river blindness
+neglected tropical disease*
+# --- scientists: genetics, evolution, biology -----------------------------------------------
+Charles Darwin
+Alfred Russel Wallace
+Gregor Mendel
+Francis Galton
+Karl Pearson
+R. A. Fisher
+Ronald Fisher
+Sewall Wright
+J. B. S. Haldane
+Haldane
+Dobzhansky
+Ernst Mayr
+Julian Huxley
+Thomas Huxley
+Lamarck*
+Linnaeus
+Haeckel
+Weismann
+Hugo de Vries
+William Bateson
+Thomas Hunt Morgan
+Sturtevant
+Hermann Muller
+Barbara McClintock
+Beadle and Tatum
+Lederberg
+Luria
+Delbrück
+Delbruck
+Oswald Avery
+Hershey-Chase
+Chargaff
+Rosalind Franklin
+Maurice Wilkins
+Francis Crick
+James Watson
+Watson and Crick
+Linus Pauling
+Meselson
+Nirenberg
+Khorana
+Jacques Monod
+Sydney Brenner
+Sulston
+Nüsslein-Volhard
+Nusslein-Volhard
+Wieschaus
+Kornberg
+Frederick Sanger
+Kary Mullis
+Carl Woese
+Lynn Margulis
+Willi Hennig
+Motoo Kimura
+Tomoko Ohta
+Masatoshi Nei
+Zuckerkandl
+Lewontin
+Felsenstein
+Cavalli-Sforza
+W. D. Hamilton
+Hamilton's rule
+Maynard Smith
+Robert Trivers
+Stephen Jay Gould
+Richard Dawkins
+Dawkins
+George Price
+Warren Ewens
+Ewens
+John Kingman
+Kingman coalescent
+Montgomery Slatkin
+Charlesworth
+Russell Lande
+Douglas Falconer
+Falconer and Mackay
+Jay Lush
+Peter Visscher
+Svante Pääbo
+Svante Paabo
+Eric Lander
+Craig Venter
+Francis Collins
+Jennifer Doudna
+Emmanuelle Charpentier
+Shinya Yamanaka
+Yamanaka factor*
+Dorothy Hodgkin
+Perutz
+Kendrew
+Anfinsen
+Levinthal
+Demis Hassabis
+John Jumper
+David Baker
+Hans Krebs
+Menten
+Mendeleev
+Lavoisier
+Marie Curie
+Louis Pasteur
+Pasteur
+Robert Koch
+Alexander Fleming
+Edward Jenner
+Semmelweis
+John Snow
+Hippocrates
+Vesalius
+William Harvey
+Rudolf Virchow
+Virchow
+Ramón y Cajal
+Ramon y Cajal
+Hodgkin and Huxley
+# --- scientists: mathematics, statistics, computing, physics ---------------------------------
+Carl Friedrich Gauss
+Gauss
+Pierre-Simon Laplace
+Thomas Bayes
+Andrey Markov
+Kolmogorov
+Jerzy Neyman
+Neyman-Pearson
+Egon Pearson
+William Gosset
+John Tukey
+Tukey
+Bradley Efron
+David Cox
+Donald Rubin
+Judea Pearl
+Abraham Wald
+Edwin Jaynes
+Andrew Gelman
+Tibshirani
+Leo Breiman
+Vapnik
+Alan Turing
+Turing
+Claude Shannon
+John von Neumann
+von Neumann
+Geoffrey Hinton
+Yann LeCun
+Yoshua Bengio
+Ludwig Boltzmann
+Boltzmann
+Schrödinger
+Schrodinger
+Heisenberg
+Niels Bohr
+

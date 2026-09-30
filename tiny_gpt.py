@@ -2284,6 +2284,7 @@ def cmd_train(args):
     probes = read_probes(args.probes) if args.probes else []
 
     start_step, tokens_seen, train_seconds = 0, 0, 0.0
+    run_seconds_before = 0.0  # wall-clock time of earlier sessions of this run (before --resume)
     rewarm_steps = 0
     interval_state = None
     history, best_val, best_step, last_eval = [], float("inf"), None, None
@@ -2292,6 +2293,8 @@ def cmd_train(args):
         start_step = int(resume_obj["step"])
         tokens_seen = int(resume_obj.get("tokens_seen", 0))
         train_seconds = float(resume_obj.get("train_seconds", 0.0))
+        # checkpoints from before this field existed: training time is the closest record
+        run_seconds_before = float(resume_obj.get("run_seconds", train_seconds))
         m = resume_obj.get("metrics", {})
         history = list(m.get("history", []))
         best_val = float(m.get("best_val", float("inf")))
@@ -2411,7 +2414,7 @@ def cmd_train(args):
                         "train_tokens": {n: len(a) for n, a in arrays["train"].items()},
                         "val_tokens": {n: len(a) for n, a in arrays["val"].items()}},
             "train_config": dict(settings), "step": step, "tokens_seen": tokens_seen,
-            "train_seconds": train_seconds, "energy": meter.state(),
+            "train_seconds": train_seconds, "run_seconds": run_seconds(), "energy": meter.state(),
             "metrics": {"best_val": best_val, "best_step": best_step, "last_eval": last_eval,
                         "history": history},
         }
@@ -2452,6 +2455,16 @@ def cmd_train(args):
         print(f"step {start_step:>6}/{total_steps} | baseline before training | val {ev['loss']:.3f} @{start_step}"
               + _per_source(ev) + f" | ppl {math.exp(min(ev['loss'], 50)):,.1f} | bpb {ev['bpb']:.3f} "
               f"| uniform-guess loss would be {math.log(cfg.vocab_size):.3f} (not counted as best)")
+
+    def run_seconds():
+        """Wall-clock time of the whole run so far: earlier sessions plus this one."""
+        return run_seconds_before + (time.perf_counter() - t_run)
+
+    def elapsed_text(now=None):
+        session = (now or time.perf_counter()) - t_run
+        if not run_seconds_before:
+            return f"elapsed {fmt_hms(session)}"
+        return f"elapsed {fmt_hms(session)} (whole run {fmt_hms(run_seconds_before + session)})"
 
     # ---------------- training loop ----------------
     model.train()
@@ -2555,7 +2568,7 @@ def cmd_train(args):
                 per_step = interval_train_time / max(step - interval_start_step, 1)
                 print(f"{'  ... ' if heartbeat else ''}step {step:>6}/{total_steps} | train {ptrain:.3f} | "
                       f"lr {lr:.2e} | {interval_tokens / max(interval_train_time, 1e-9):,.0f} tok/s | "
-                      f"{per_step:.2f} s/step | elapsed {fmt_hms(now - t_run)} | "
+                      f"{per_step:.2f} s/step | {elapsed_text(now)} | "
                       f"next val @{next_eval} in {fmt_dur(per_step * (next_eval - step))}")
                 progress_loss.zero_()
                 progress_micro = 0
@@ -2587,6 +2600,7 @@ def cmd_train(args):
                          "val_per_source": ev["per_source"], "ppl": math.exp(min(ev["loss"], 50)), "lr": lr,
                          "bpb": ev["bpb"], "bpb_per_source": ev["bpb_per_source"],
                          "tok_s": tok_s, "elapsed_s": elapsed, "train_seconds": train_seconds,
+                         "run_seconds": run_seconds(),
                          "entropy": ev["entropy"], "confidence": ev["confidence"], "top1": ev["top1"],
                          "ece": ev["ece"], "probe_acc": probe_acc, "probe_floor": probe_floor_acc,
                          "probe_by_category": probe_by_category,
@@ -2604,7 +2618,7 @@ def cmd_train(args):
                     status_text = f"best {best_val:.3f} @{best_step}"
                 print(f"step {step:>6}/{total_steps} | train {train_loss:.3f} | val {ev['loss']:.3f} @{step}"
                       + _per_source(ev) + f" | ppl {entry['ppl']:,.2f} | bpb {ev['bpb']:.3f} | lr {lr:.2e} | {tok_s:,.0f} tok/s | "
-                      f"{meter.short()} | elapsed {fmt_hms(elapsed)} | ETA {fmt_dur(eta)} | {status_text}")
+                      f"{meter.short()} | {elapsed_text()} | ETA {fmt_dur(eta)} | {status_text}")
                 last_print = time.perf_counter()
                 if args.sample_every and (step % args.sample_every == 0 or step == total_steps):
                     gen = torch.Generator().manual_seed(sample_gen_seed)
@@ -2681,13 +2695,15 @@ def cmd_train(args):
             "benchmark_accuracy": f"{last_hist['probe_acc']:.3f}" if last_hist.get("probe_acc") is not None else None,
             "benchmark_floor": f"{last_hist['probe_floor']:.3f}" if last_hist.get("probe_floor") is not None else None,
             "tok_s": f"{last_hist['tok_s']:.0f}" if last_hist.get("tok_s") else None, "device": device.type,
-            "train_hours": f"{train_seconds / 3600:.2f}", "energy_kwh": f"{meter.kwh():.3f}",
+            "train_hours": f"{train_seconds / 3600:.2f}", "run_hours": f"{run_seconds() / 3600:.2f}",
+            "energy_kwh": f"{meter.kwh():.3f}",
             "co2e_kg": f"{meter.co2e_g() / 1000:.4f}", "cost_gbp": f"{meter.cost_gbp() or 0.0:.2f}",
             "checkpoint": ckpt_path})
         print(f"RUN {run_id} {status} at {now_iso()} | step {step:,}/{total_steps:,} | best val "
               f"{best_val:.4f} @{best_step} | last val "
               + (f"{last_eval['loss']:.4f} @{last_eval['step']}" if last_eval else "none")
-              + f" | this session {fmt_hms(time.perf_counter() - t_run)} | whole run {meter.short()} "
+              + f" | this session {fmt_hms(time.perf_counter() - t_run)} | whole run: "
+              f"{fmt_hms(run_seconds())} in total, {fmt_hms(train_seconds)} of it training, {meter.short()} "
               f"(GPU {meter.wh['gpu'] / 1000:.2f}, CPU {meter.wh['cpu'] / 1000:.2f}, memory "
               f"{meter.wh['ram'] / 1000:.3f} kWh)")
 
@@ -2696,7 +2712,7 @@ EXPERIMENT_COLUMNS = ["time", "event", "name", "status", "step", "total_steps", 
                       "d_model", "layers", "heads", "kv_heads", "ctx", "vocab", "tokens_seen", "tokens_per_step",
                       "lr", "z_loss", "dataset", "best_val", "best_step", "last_val", "last_bpb", "last_ppl",
                       "benchmark_accuracy", "benchmark_floor", "benchmark_items", "tok_s", "device", "train_hours",
-                      "energy_kwh", "co2e_kg", "cost_gbp", "checkpoint", "notes"]
+                      "run_hours", "energy_kwh", "co2e_kg", "cost_gbp", "checkpoint", "notes"]
 
 
 def record_experiment(out_dir, row):
