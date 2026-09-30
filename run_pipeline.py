@@ -31,6 +31,7 @@ DATA = os.path.join(os.path.expanduser("~"), "ai_training_data")  # the folder w
 DATASET = os.path.join(HERE, "datasets", "bio_v4")      # the dataset folder that 'build' creates
 RUN_NAME = "tinyGPT"                                    # checkpoints are <RUN_NAME>.pt and <RUN_NAME>_best.pt
 KEYWORDS = os.path.join(HERE, "keywords_biology.txt")   # topic filter for Wikipedia, FineWeb and peS2o
+WIKI_MAX_DOCS = 200_000   # Wikipedia articles kept, best keyword matches first; 0 = all that pass (~465,000)
 # -------------------------------------------------------
 
 
@@ -38,7 +39,7 @@ def build_command():
     cmd = [sys.executable, "data_prep.py", "--out", DATASET, "--text-root", DATA]
     wiki = os.path.join(DATA, "wikipedia")
     if os.path.isdir(wiki):
-        cmd += ["--wiki-dir", wiki, "--wiki-max-docs", "200000"]
+        cmd += ["--wiki-dir", wiki, "--wiki-max-docs", str(WIKI_MAX_DOCS)]
     fineweb = os.path.join(DATA, "web", "fineweb-edu", "sample", "10BT", "*.parquet")
     if glob.glob(fineweb):
         cmd += ["--parquet", fineweb, "--parquet-name", "fineweb", "--min-score", "3"]
