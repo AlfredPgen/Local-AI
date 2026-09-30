@@ -200,8 +200,19 @@ A token spans at most 4 words, and digits, newlines and tabs are never merged.
   - Training reads the same text in fewer steps.
   - The planner sizes the model by tokens (20 per parameter), so for the same data it picks a slightly smaller model.
 - **What it doesn't buy:** the text holds the same information, so each token carries more and is harder to predict.
-  The paper tested models of 680 million parameters and larger and mostly found gains; nobody has shown it for
-  models of 20 to 100 million. Compare two runs by **bits per byte**, never by loss per token.
+  The paper tested models of 680 million parameters and larger and mostly found gains. Compare two runs by
+  **bits per byte**, never by loss per token.
+- **Tested here at small scale (30 September 2026): ordinary BPE won.**
+  - The setup: the same 28,000 documents (3,000 PubMed Central papers and 25,000 FineWeb pages) and the same
+    validation documents, 16,384 pieces each, and the same model (20.5 million parameters, 8 layers, context
+    1,024) trained on 50 million tokens each, so the same compute.
+  - SuperBPE read 14% more text (227 MB against 199 MB), but ended at **1.396 bits per byte against 1.355**
+    (3.1% worse), on both PubMed Central and FineWeb.
+  - The gap shrank steadily, from 0.150 bits per byte at step 200 to 0.041 at the end, so a longer run or a
+    bigger model might close it.
+  - Limits: one run each, and only 2.4 training tokens per parameter (the planner uses 20).
+  - For now, keep ordinary BPE; test SuperBPE again with a bigger model or a longer run. The numbers are in
+    benchmarks\superbpe_2026-09-30\results.md.
 - **The trade-off inside a fixed vocabulary:** multi-word tokens take slots that rarer whole words would otherwise
   get. At 32,768 pieces, ordinary BPE keeps "▁disequilibrium" whole; SuperBPE splits it into "▁dise" + "quilibrium".
 - **How it's built here:** the second stage is learnt in Python on the tokenizer's training text (about 4 minutes

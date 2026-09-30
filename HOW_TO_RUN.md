@@ -131,7 +131,7 @@ What the options mean:
 | `--include-keywords keywords_biology.txt` | Wikipedia, FineWeb and peS2o documents must match these terms (your own folders are not filtered). |
 | `--keyword-min-distinct 3` | ...with at least 3 different terms. |
 | `--tokenizer-weights books=3,articles=3` | Let books and articles shape the vocabulary more. |
-| `--superbpe` | Optional: a SuperBPE tokenizer, whose tokens can span words ("of the"): about 12% fewer tokens at 16,384 pieces. Compare runs by bits per byte. In run_pipeline.py: `SUPERBPE = True`. |
+| `--superbpe` | Optional: a SuperBPE tokenizer, whose tokens can span words ("of the"): about 12% fewer tokens at 16,384 pieces. In a small test (20.5M parameters) it did 3% worse in bits per byte, so it is off by default; see the guide. In run_pipeline.py: `SUPERBPE = True`. |
 | `--near-dup drop` | Keep only one copy of near-identical documents (for example the 5 copies of *The Germ-Plasm*). |
 | `--threads 8` | Use all 8 CPU threads for tokenising. |
 | `--scan-only` | Add this to count and filter without tokenising (fast check of the settings). |
