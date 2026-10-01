@@ -1249,6 +1249,15 @@ def score_probes(model, tok, probes, device, amp_dtype, batch_size=64, floor=Tru
     return acc, results
 
 
+def probe_report(results, probes_sha256):
+    """Probe results small enough to keep in a checkpoint: what the dashboard's
+    fact-benchmark panel draws, so it need not run the model again."""
+    n = len(results)
+    return {"file_sha256": probes_sha256, "n": n, "correct": sum(r["correct"] for r in results),
+            "chance": sum(r["chance"] for r in results) / max(n, 1), "floor": probe_floor(results),
+            "category": probe_summary(results), "difficulty": probe_summary(results, "difficulty")}
+
+
 def probe_floor(results):
     """Mean accuracy with shuffled questions (None if not scored)."""
     vals = [r["floor_correct"] for r in results if "floor_correct" in r]
@@ -2318,6 +2327,7 @@ def cmd_train(args):
     evalset = EvalSet(arrays["val"], cfg.ctx, eval_tokens)
     eval_batch = max(1, min(micro, int(3e8 // (cfg.ctx * cfg.vocab_size * 4))))
     probes = read_probes(args.probes) if args.probes else []
+    probes_sha = file_sha256(args.probes) if probes else None
 
     start_step, tokens_seen, train_seconds = 0, 0, 0.0
     run_seconds_before = 0.0  # wall-clock time of earlier sessions of this run (before --resume)
@@ -2628,6 +2638,7 @@ def cmd_train(args):
                     probe_acc, probe_results = score_probes(model, tok, probes, device, amp_dtype)
                     probe_floor_acc = probe_floor(probe_results)
                     probe_by_category = {k: round(v["accuracy"], 4) for k, v in probe_summary(probe_results).items()}
+                    ev["probes"] = probe_report(probe_results, probes_sha)  # kept in the checkpoint for view_pt
                 prev_best, prev_step = best_val, best_step
                 is_best = ev["loss"] < best_val
                 if is_best:

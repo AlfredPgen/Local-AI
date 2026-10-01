@@ -74,7 +74,7 @@ def parse_args():
     p.add_argument("--no-push", action="store_true",
                    help="do not commit and push the dashboard to GitHub (done automatically for checkpoints in "
                         "this repository's folder)")
-    p.add_argument("--dpi", type=int, default=300)
+    p.add_argument("--dpi", type=int, default=150)
     p.add_argument("--dataset", help="dataset folder for forward-pass panels (default: the one in the checkpoint)")
     p.add_argument("--eval-text", help="plain-text file for forward-pass panels when no dataset is available")
     p.add_argument("--probes", default=os.path.join(HERE, "probes_biology.tsv"), help="cloze fact probes TSV")
@@ -307,7 +307,7 @@ def token_class(tok, i):
 # ---------------------------------------------------------------------------
 # Forward-pass data
 # ---------------------------------------------------------------------------
-def eval_windows(ck, args, max_windows=48):
+def eval_windows(ck, args, max_windows=16):
     """Validation token windows for the checkpoint's tokenizer, plus where they came from."""
     if ck.tok is None or ck.cfg is None:
         return None, "no tokenizer/architecture in this checkpoint"
@@ -1080,22 +1080,37 @@ def panel_calibration(ax, ck, fstats, fnote):
     titled(ax, title, f"expected calibration error {ece:.3f}; bars below the diagonal = overconfident")
 
 
+def probe_report(ck, model, device, args):
+    """The checkpoint's own probe results when training scored this probe file
+    at this step (no model run); otherwise score the probes now."""
+    sha = tiny_gpt.file_sha256(args.probes)
+    last = ck.metrics.get("last_eval") or {}
+    stored = last.get("probes")
+    step = ck.obj.get("step") if isinstance(ck.obj, dict) else None
+    if stored and stored.get("file_sha256") == sha and last.get("step") == step:
+        return stored
+    if model is None:
+        return None
+    _, results = tiny_gpt.score_probes(model, ck.tok, tiny_gpt.read_probes(args.probes), device, None)
+    return tiny_gpt.probe_report(results, sha)
+
+
 def panel_probes(ax, ck, model, device, args):
     title = "Fact benchmark"
-    if model is None:
-        return message(ax, "needs a tinyGPT model with a tokenizer", title)
     if not args.probes or not os.path.isfile(args.probes):
         return message(ax, f"probe file not found: {args.probes}", title)
-    probes = tiny_gpt.read_probes(args.probes)
-    acc, results = tiny_gpt.score_probes(model, ck.tok, probes, device, None)
-    summary = sorted(tiny_gpt.probe_summary(results).items(), key=lambda kv: kv[1]["accuracy"])
+    report = probe_report(ck, model, device, args)
+    if report is None:
+        return message(ax, "needs a tinyGPT model with a tokenizer", title)
+    acc = report["correct"] / max(report["n"], 1)
+    summary = sorted(report["category"].items(), key=lambda kv: kv[1]["accuracy"])
     names = [f"{name} (n={s['n']})" for name, s in summary]
     accs = np.array([s["accuracy"] for _, s in summary])
     lows = accs - np.array([s["low"] for _, s in summary])
     highs = np.array([s["high"] for _, s in summary]) - accs
-    chance = sum(r["chance"] for r in results) / len(results)
+    chance = report["chance"]
     floors = np.array([s["floor"] for _, s in summary])
-    floor = tiny_gpt.probe_floor(results)
+    floor = report["floor"]
     y = np.arange(len(summary))
     ax.barh(y, accs, color=[GOOD if a > f else CRITICAL for a, f in zip(accs, floors)], height=0.62, alpha=0.9)
     ax.errorbar(accs, y, xerr=[lows, highs], fmt="none", ecolor=INK2, elinewidth=0.8, capsize=2)
@@ -1111,9 +1126,8 @@ def panel_probes(ax, ck, model, device, args):
     ax.set_xlim(0, 1)
     ax.grid(axis="y", visible=False)
     ax.set_xlabel("accuracy (correct continuation preferred over all distractors); lines: 95% interval")
-    k, n = sum(r["correct"] for r in results), len(results)
-    low, high = tiny_gpt.wilson_interval(k, n)
-    by_diff = tiny_gpt.probe_summary(results, "difficulty")
+    low, high = tiny_gpt.wilson_interval(report["correct"], report["n"])
+    by_diff = report["difficulty"]
     diff_text = ", ".join(f"{d} {by_diff[d]['accuracy']:.0%}" for d in ("easy", "medium", "hard") if d in by_diff)
     place_legend(ax, fontsize=6.5)
     titled(ax, f"{title}: {acc:.0%} correct ({low:.0%}-{high:.0%}), floor {floor:.0%}",
