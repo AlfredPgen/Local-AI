@@ -35,6 +35,7 @@ RUN_NAME = "tinyGPT"                                    # checkpoints are <RUN_N
 KEYWORDS = os.path.join(HERE, "keywords.txt")   # topic filter for Wikipedia, FineWeb and peS2o
 WIKI_MAX_DOCS = 0         # Wikipedia articles kept, best keyword matches first; 0 = all that pass (611,091)
 SUPERBPE = False          # True: SuperBPE tokenizer, with tokens that span words ("of the"); fewer tokens per text
+OPTIMIZER = "adamw"       # "muon": Muon for the block matrices, AdamW for the rest (new runs only)
 # -------------------------------------------------------
 
 
@@ -55,8 +56,8 @@ def build_command():
 
 
 def train_command(hours, name, plan=False):
-    return ([sys.executable, "tiny_gpt.py", "--dataset", DATASET, "--name", name, "--time-budget-hours", str(hours)]
-            + (["--plan"] if plan else []))
+    return ([sys.executable, "tiny_gpt.py", "--dataset", DATASET, "--name", name, "--time-budget-hours", str(hours),
+             "--optimizer", OPTIMIZER] + (["--plan"] if plan else []))
 
 
 def run(cmd):
@@ -130,7 +131,7 @@ def step_continue(hours, name, new_dataset):
         print("The GPU is busy (another training run?); wait for it or stop it first.")
         return 1
     return run([sys.executable, "tiny_gpt.py", "--dataset", new_dataset, "--init-from", base, "--name",
-                f"{name}_continued", "--time-budget-hours", str(hours)])
+                f"{name}_continued", "--time-budget-hours", str(hours), "--optimizer", OPTIMIZER])
 
 
 def step_posttrain(name):

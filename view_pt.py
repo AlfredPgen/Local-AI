@@ -268,7 +268,8 @@ def print_summary(ck):
     if isinstance(opt, dict) and opt.get("state"):
         steps = [float(s["step"]) for s in opt["state"].values() if isinstance(s, dict) and "step" in s]
         lrs = [g.get("lr") for g in opt.get("param_groups", [])]
-        print(f"optimizer: AdamW state for {len(opt['state'])} tensors | updates {int(max(steps)) if steps else 0:,} "
+        kind = tiny_gpt.OPTIMIZER_LABELS.get((tc or {}).get("optimizer", "adamw"), "AdamW")
+        print(f"optimizer: {kind} state for {len(opt['state'])} tensors | updates {int(max(steps)) if steps else 0:,} "
               f"| group learning rates {', '.join(f'{x:.2e}' for x in lrs if x is not None)}")
     elif ck.family != "unknown":
         print("optimizer: none stored (inference-only checkpoint)")
@@ -1151,19 +1152,28 @@ def panel_adam(ax, fig, ck, cmap):
     if not isinstance(opt, dict) or not opt.get("state"):
         return message(ax, "optimizer state is saved only in the training checkpoint", title)
     names = ck.adam_names()
-    size = {}
+    size, momentum = {}, {}
     for idx, st in opt["state"].items():
         idx = int(idx)
         if idx < len(names) and isinstance(st, dict) and "exp_avg" in st and "exp_avg_sq" in st:
             m, v = st["exp_avg"].float(), st["exp_avg_sq"].float()
             size[names[idx]] = (m.abs() / (v.sqrt() + 1e-8)).mean().item()
+        elif idx < len(names) and isinstance(st, dict) and "momentum_buffer" in st:  # Muon
+            momentum[names[idx]] = st["momentum_buffer"].float().pow(2).mean().sqrt().item()
     layers = _layers(ck)
-    if not size or not layers:
+    muon = not any(k.startswith("blocks.") for k in size) and bool(momentum)
+    values = momentum if muon else size
+    if not values or not layers:
         return message(ax, "optimizer state could not be matched to parameter names", title)
     grid = np.full((len(COMPONENTS), len(layers)), np.nan)
     for j, b in enumerate(layers):
         for i, (_, rel) in enumerate(COMPONENTS):
-            grid[i, j] = size.get(f"blocks.{b}.{rel}", np.nan)
+            grid[i, j] = values.get(f"blocks.{b}.{rel}", np.nan)
+    if muon:
+        heatmap(ax, fig, grid, [c for c, _ in COMPONENTS], [f"block {b}" for b in layers], cmap,
+                "RMS of the momentum", fmt_spec=".2g")
+        titled(ax, "Muon momentum size", "RMS of each matrix's averaged gradient")
+        return
     heatmap(ax, fig, grid, [c for c, _ in COMPONENTS], [f"block {b}" for b in layers], cmap,
             "mean |m| / (sqrt(v) + eps)")
     titled(ax, title, "near 1 = gradient sign consistent across steps")

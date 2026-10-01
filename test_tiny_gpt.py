@@ -956,6 +956,52 @@ class TestPipeline(unittest.TestCase):
                     finally:
                         sys.stderr = old
 
+    def test_muon_optimizer(self):
+        """--optimizer muon: Muon for the 14 block matrices, AdamW for the embedding and 5 norm gains; an
+        interrupted run resumes exactly, keeps its optimizer, and the recipe reaches experiments.csv."""
+        import csv
+        log = os.path.join(self.runs, "log.txt")
+        muon = self.common + ["--optimizer", "muon", "--no-probes"]
+        code, out = run(muon + ["--name", "M", "--steps", "16"])
+        self.assertEqual(code, 0, out)
+        self.assertIn("optimizer: Muon + AdamW (Muon for 14 block matrices", out)
+        code, out_s = run(muon + ["--name", "N", "--steps", "16", "--stop-after-steps", "8"])
+        self.assertEqual(code, 0, out_s)
+        code, out_r = run(["tiny_gpt.py", "--name", "N", "--out-dir", self.runs, "--log-file", log, "--device", "cpu",
+                           "--resume", "--eval-every", "8", "--eval-tokens", "2048", "--sample-tokens", "8",
+                           "--no-probes", "--optimizer", "adamw"])
+        self.assertEqual(code, 0, out_r)
+        self.assertIn("--optimizer adamw ignored on --resume", out_r)
+        self.assertIn("optimizer state 20/20 tensors", out_r)
+
+        def val16(text):
+            return re.findall(r"step +16/16 \| train [\d.]+ \| val ([\d.]+)", text)
+
+        self.assertTrue(val16(out))
+        self.assertEqual(val16(out), val16(out_r), "a resumed Muon run must reproduce the uninterrupted run")
+        ck = torch.load(os.path.join(self.runs, "N.pt"), map_location="cpu", weights_only=True)
+        self.assertEqual(ck["train_config"]["optimizer"], "muon")
+        self.assertEqual(len(ck["optimizer_param_names"]), 20)
+        kinds = [sorted(k for k in s if k != "step") for s in ck["optimizer"]["state"].values()]
+        self.assertEqual(sum(k == ["momentum_buffer"] for k in kinds), 14)
+        self.assertEqual(sum(k == ["exp_avg", "exp_avg_sq"] for k in kinds), 6)
+        with open(os.path.join(self.runs, "experiments.csv"), encoding="utf-8-sig", newline="") as handle:
+            row = [r for r in csv.DictReader(handle) if r["name"] == "N" and r["event"] == "training run"][-1]
+        self.assertEqual((row["optimizer"], row["schedule"], row["decay_shape"], row["betas"], row["micro_batch"]),
+                         ("Muon + AdamW", "WSD", "1-sqrt", "0.9/0.95", "8"))
+        # AdamW -> Muon with --init-from: AdamW state only for the parameters AdamW still trains
+        code, out_p = run(self.common + ["--name", "P", "--steps", "8", "--no-probes"])
+        self.assertEqual(code, 0, out_p)
+        code, out_q = run(muon + ["--name", "Q", "--steps", "16", "--init-from", os.path.join(self.runs, "P.pt")])
+        self.assertEqual(code, 0, out_q)
+        self.assertIn("optimizer state restored for 6/20 tensors", out_q)
+        png = os.path.join(self.runs, "N.png")
+        code, out_v = run(["view_pt.py", os.path.join(self.runs, "N.pt"), "--plot", "--out", png, "--dpi", "50",
+                           "--no-forward"])
+        self.assertEqual(code, 0, out_v)
+        self.assertIn("optimizer: Muon + AdamW state for 20 tensors", out_v)
+        self.assertNotIn("panel failed", out_v)
+
     @unittest.skipUnless(os.path.isfile(os.path.join(HERE, "tiny_gpt_bpe_best.pt")), "no v3 checkpoint here")
     def test_legacy_v3_checkpoint_read_only(self):
         path = os.path.join(HERE, "tiny_gpt_bpe_best.pt")

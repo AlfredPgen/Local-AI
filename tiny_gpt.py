@@ -724,20 +724,116 @@ def launch_dashboard(path, args, state):
         print(f"note: dashboard not started ({type(exc).__name__}: {exc})")
 
 
+class CombinedOptimizer:
+    """Several optimizers used as one (Muon for the block matrices, AdamW for the
+    rest): one list of parameter groups, one step, and one state dict whose
+    indices run through the optimizers in order, so a checkpoint holds a single
+    flat list of parameter states, as with AdamW alone. GradScaler works with it
+    through param_groups and step()."""
+
+    def __init__(self, optimizers):
+        self.optimizers = list(optimizers)
+
+    @property
+    def param_groups(self):
+        return [g for o in self.optimizers for g in o.param_groups]
+
+    def step(self):
+        for o in self.optimizers:
+            o.step()
+
+    def zero_grad(self, set_to_none=True):
+        for o in self.optimizers:
+            o.zero_grad(set_to_none=set_to_none)
+
+    def state_dict(self):
+        state, groups, offset = {}, [], 0
+        for o in self.optimizers:
+            sd = o.state_dict()
+            state.update({offset + int(k): v for k, v in sd["state"].items()})
+            groups += [{**g, "params": [offset + i for i in g["params"]]} for g in sd["param_groups"]]
+            offset += sum(len(g["params"]) for g in o.param_groups)
+        return {"state": state, "param_groups": groups}
+
+    def load_state_dict(self, sd):
+        offset, first = 0, 0
+        for o in self.optimizers:
+            n = sum(len(g["params"]) for g in o.param_groups)
+            groups = sd["param_groups"][first:first + len(o.param_groups)]
+            o.load_state_dict({"state": {int(k) - offset: v for k, v in sd["state"].items()
+                                         if offset <= int(k) < offset + n},
+                               "param_groups": [{**g, "params": [i - offset for i in g["params"]]} for g in groups]})
+            offset += n
+            first += len(o.param_groups)
+
+
+OPTIMIZER_LABELS = {"adamw": "AdamW", "muon": "Muon + AdamW"}
+MUON_EXCLUDED = ("token_embedding.weight", "lm_head.weight")  # embedding and output layer stay on AdamW
+STATE_KEYS = {"AdamW": "exp_avg", "Muon": "momentum_buffer"}  # the state each optimizer keeps per parameter
+
+
+def build_optimizer(model, settings, device):
+    """AdamW for every parameter, or (optimizer 'muon') Muon for the matrices
+    inside the blocks and AdamW for the embedding/output matrix and the norm
+    gains, the split Muon is designed for (Jordan et al. 2024). Muon's step is
+    scaled to AdamW's typical update size (Liu et al. 2025; PyTorch's
+    adjust_lr_fn='match_rms_adamw'), so one learning rate, schedule and weight
+    decay drive both. Returns (optimizer, name, parameter names per group,
+    description)."""
+    named = list(model.named_parameters())
+    use_muon = settings.get("optimizer", "adamw") == "muon"
+    muon = [(n, p) for n, p in named if use_muon and p.dim() == 2 and n not in MUON_EXCLUDED]
+    taken = {n for n, _ in muon}
+    decay = [(n, p) for n, p in named if p.dim() >= 2 and n not in taken]
+    no_decay = [(n, p) for n, p in named if p.dim() < 2]
+    groups = [{"params": [p for _, p in decay], "weight_decay": settings["weight_decay"]},
+              {"params": [p for _, p in no_decay], "weight_decay": 0.0}]
+    opt_kwargs = dict(lr=settings["lr"], betas=tuple(settings["betas"]))
+    adamw, name = None, "AdamW"
+    if device.type == "cuda":
+        try:
+            adamw, name = torch.optim.AdamW(groups, fused=True, **opt_kwargs), "fused AdamW"
+        except (TypeError, RuntimeError, ValueError):
+            adamw = None
+    if adamw is None:
+        adamw = torch.optim.AdamW(groups, **opt_kwargs)
+    names = [[n for n, _ in decay], [n for n, _ in no_decay]]
+    if not use_muon:
+        return adamw, name, names, f"weight decay on {len(decay)} matrices, not on {len(no_decay)} norm gains"
+    if not hasattr(torch.optim, "Muon"):
+        raise SystemExit(f"--optimizer muon needs PyTorch 2.9 or newer (this is {torch.__version__}).")
+    muon_opt = torch.optim.Muon([{"params": [p for _, p in muon], "weight_decay": settings["weight_decay"]}],
+                                lr=settings["lr"], momentum=0.95, nesterov=True, adjust_lr_fn="match_rms_adamw")
+    return (CombinedOptimizer([adamw, muon_opt]), f"Muon + {name}", names + [[n for n, _ in muon]],
+            f"Muon for {len(muon)} block matrices, its step scaled to AdamW's update size; {name} for the embedding "
+            f"({len(decay)} matri{'x' if len(decay) == 1 else 'ces'}) and {len(no_decay)} norm gains; weight decay "
+            "on all matrices")
+
+
+def _state_keys(opt):
+    """Per parameter (flat order), the state entry its optimizer keeps (None: unknown optimizer)."""
+    subs = opt.optimizers if isinstance(opt, CombinedOptimizer) else [opt]
+    return [STATE_KEYS.get(type(o).__name__) for o in subs for g in o.param_groups for _ in g["params"]]
+
+
 def load_optimizer_by_name(opt, saved, saved_names, current_names):
-    """Restore AdamW moments by parameter name, independent of group layout
-    (legacy checkpoints used one group; tinyGPT uses decay / no-decay groups). The remapped state
-    goes through opt.load_state_dict, which puts every tensor on the right
-    device and dtype (fused AdamW keeps its step counters on the GPU)."""
+    """Restore optimizer state (AdamW moments, Muon momentum) by parameter name,
+    independent of group layout (legacy checkpoints used one group; tinyGPT uses
+    decay / no-decay groups, plus a Muon group). A saved state is used only if
+    the same kind of optimizer made it and it has the parameter's shape, so
+    --init-from an AdamW run into a Muon run restarts Muon's momentum. The
+    remapped state goes through opt.load_state_dict, which puts every tensor on
+    the right device and dtype (fused AdamW keeps its step counters on the GPU)."""
     flat_current = [n for group in current_names for n in group]
     params = [p for g in opt.param_groups for p in g["params"]]
+    keys = _state_keys(opt)
     saved_state = {int(k): v for k, v in saved.get("state", {}).items()}
     by_name = {name: saved_state.get(i) for i, name in enumerate(saved_names)}
     current = opt.state_dict()
     new_state = {}
-    for index, (name, param) in enumerate(zip(flat_current, params)):
+    for index, (name, param, key) in enumerate(zip(flat_current, params, keys)):
         state = by_name.get(name)
-        if isinstance(state, dict) and ("exp_avg" not in state or state["exp_avg"].shape == param.shape):
+        if isinstance(state, dict) and (key is None or (key in state and state[key].shape == param.shape)):
             new_state[index] = state
     opt.load_state_dict({"state": new_state, "param_groups": current["param_groups"]})
     return len(new_state), len(params)
@@ -1551,6 +1647,7 @@ def plan_run(args, manifest, device, amp_dtype, token_cap=None):
         "lr": lr, "min_lr": lr * args.min_lr_ratio, "warmup_steps": warmup, "schedule": args.schedule,
         "decay_frac": args.decay_frac, "decay_shape": args.decay_shape, "weight_decay": args.weight_decay,
         "betas": [args.beta1, args.beta2], "grad_clip": args.grad_clip, "planned_train_tokens": train_tokens,
+        "optimizer": args.optimizer or "adamw",
     }
     lines += [
         f"unique training tokens U = {unique:,} ({', '.join(f'{k} {v:,}' for k, v in train_by_source.items())}); "
@@ -1566,7 +1663,7 @@ def plan_run(args, manifest, device, amp_dtype, token_cap=None):
         f"unique data {unique / n_total:,.1f} tokens per parameter; {epochs:,.2f} epochs",
         f"learning rate {lr:.2e} peak (heuristic for {n_total / 1e6:,.1f}M parameters), min {lr * args.min_lr_ratio:.2e}; "
         f"dropout {dropout} ({'set' if args.dropout is not None else 'auto: 0 for <= 4 epochs, else 0.1'}); "
-        f"weight decay {args.weight_decay} on matrices only",
+        f"weight decay {args.weight_decay} on matrices only; optimizer {OPTIMIZER_LABELS[args.optimizer or 'adamw']}",
     ]
     if args.steps and train_tokens > max_epochs * unique:
         lines.append(f"note: --steps {args.steps:,} trains {epochs:.2f} epochs, more than --max-epochs {max_epochs:g}.")
@@ -1813,6 +1910,10 @@ def parse_args(argv=None):
     g.add_argument("--beta1", type=float, default=0.9)
     g.add_argument("--beta2", type=float, default=0.95)
     g.add_argument("--grad-clip", type=float, default=1.0, help="clip the gradient norm to this (0 = off)")
+    g.add_argument("--optimizer", choices=("adamw", "muon"),
+                   help="adamw (default), or muon: Muon for the matrices inside the blocks and AdamW for the embedding "
+                        "and norm gains, both driven by --lr and the schedule (Muon's step is scaled to AdamW's "
+                        "update size); resumed runs keep their optimizer")
     g.add_argument("--z-loss", type=float, default=1e-4,
                    help="weight of the z-loss stability term (0 disables; resumed runs keep their setting)")
     g = p.add_argument_group("evaluation and logging")
@@ -2246,6 +2347,10 @@ def cmd_train(args):
     if resume_obj is not None:
         cfg = ModelConfig(**resume_obj["model_config"])
         settings = dict(resume_obj["train_config"])
+        settings.setdefault("optimizer", "adamw")  # runs from before --optimizer used AdamW
+        if args.optimizer and args.optimizer != settings["optimizer"]:
+            print(f"Note: --optimizer {args.optimizer} ignored on --resume: this run uses {settings['optimizer']} "
+                  "(start a new run, or --init-from this one, to change it).")
         ignored = [f"--{k.replace('_', '-')}" for k in ("d_model", "layers", "heads", "kv_heads", "ctx", "lr",
                                                         "batch_size", "grad_accum", "dropout", "warmup_steps",
                                                         "epochs", "train_tokens", "time_budget_hours",
@@ -2304,21 +2409,7 @@ def cmd_train(args):
         if missing or unexpected:
             raise SystemExit(f"Checkpoint weights do not fit the model (missing {missing[:3]}, "
                              f"unexpected {unexpected[:3]}).")
-    decay = [(n, p) for n, p in model.named_parameters() if p.dim() >= 2]
-    no_decay = [(n, p) for n, p in model.named_parameters() if p.dim() < 2]
-    param_names = [[n for n, _ in decay], [n for n, _ in no_decay]]
-    groups = [{"params": [p for _, p in decay], "weight_decay": settings["weight_decay"]},
-              {"params": [p for _, p in no_decay], "weight_decay": 0.0}]
-    opt_kwargs = dict(lr=settings["lr"], betas=tuple(settings["betas"]))
-    opt, opt_name = None, "AdamW"
-    if device.type == "cuda":
-        try:
-            opt = torch.optim.AdamW(groups, fused=True, **opt_kwargs)
-            opt_name = "fused AdamW"
-        except (TypeError, RuntimeError, ValueError):
-            opt = None
-    if opt is None:
-        opt = torch.optim.AdamW(groups, **opt_kwargs)
+    opt, opt_name, param_names, opt_note = build_optimizer(model, settings, device)
     scaler = torch.amp.GradScaler(device.type) if need_scaler else None
     schedule = LRSchedule(settings["schedule"], total_steps, settings["lr"], settings["min_lr"],
                           settings["warmup_steps"], settings["decay_frac"], settings["decay_shape"])
@@ -2347,13 +2438,13 @@ def cmd_train(args):
         best_step = m.get("best_step")
         last_eval = m.get("last_eval")
         if from_best:
-            # The best checkpoint has the weights, step, schedule and history, but not AdamW's running averages
+            # The best checkpoint has the weights, step, schedule and history, but not the optimizer's running averages
             # or the sampler state: the averages restart (they rebuild within ~50 steps, so the learning rate is
             # re-warmed over those steps) and the sampler is re-seeded so the first windows are not replayed.
             rewarm_steps = min(50, max(total_steps - start_step, 1))
             batcher.gen.manual_seed(int(args.seed) + start_step)
             resume_note = (f"RESUMED FROM {best_path} at step {start_step:,}: no training state had been saved "
-                           f"({ckpt_path} missing), so AdamW's averages restart and the learning rate is re-warmed "
+                           f"({ckpt_path} missing), so the optimizer's averages restart and the learning rate is re-warmed "
                            f"over {rewarm_steps} steps; weights, schedule position and history are kept")
         else:
             restored, total_p = load_optimizer_by_name(opt, resume_obj["optimizer"],
@@ -2394,7 +2485,8 @@ def cmd_train(args):
             flat = init_obj.get("optimizer_param_names") or legacy_optimizer_names(model)
             restored, total_p = load_optimizer_by_name(opt, init_obj["optimizer"], flat, param_names)
             start_step = int(init_obj.get("step", 0))
-            note += f"; AdamW moments restored for {restored}/{total_p} tensors; schedule continues at step {start_step:,}"
+            note += (f"; optimizer state restored for {restored}/{total_p} tensors; schedule continues at step "
+                     f"{start_step:,}")
         resume_note = note + "; best/last validation reset because the validation set is new"
         if start_step >= total_steps:
             raise SystemExit(f"--init-from checkpoint is at step {start_step:,}; set --steps above that.")
@@ -2409,7 +2501,7 @@ def cmd_train(args):
     print(f"python {platform.python_version()} | torch {torch.__version__} | CUDA {torch.version.cuda} | "
           f"{platform.platform()} | tiny_gpt.py sha256 {file_sha256(__file__)[:12]}")
     print(f"device: {device_label(device)} | precision: {amp_name} | attention: SDPA {attn_impl} ({attn_why}) | "
-          f"optimizer: {opt_name} (weight decay on {len(decay)} matrices, not on {len(no_decay)} norm gains) | "
+          f"optimizer: {opt_name} ({opt_note}) | "
           f"compile: {'on' if train_model is not model else 'off (eager)'}")
     print(f"dataset: {dataset_dir} | fingerprint {manifest['fingerprint'][:12]} | tokenizer "
           f"{tok.vocab_size:,} pieces ({tok.encode_mode}) | train "
@@ -2740,7 +2832,16 @@ def cmd_train(args):
             "params": n_total, "non_embedding_params": n_nonembed, "d_model": cfg.d_model, "layers": cfg.n_layers,
             "heads": cfg.n_heads, "kv_heads": cfg.n_kv_heads, "ctx": cfg.ctx, "vocab": cfg.vocab_size,
             "tokens_seen": tokens_seen, "tokens_per_step": settings["tokens_per_step"],
-            "lr": f"{settings['lr']:.3g}", "z_loss": z_loss, "dataset": os.path.basename(os.path.normpath(dataset_dir)),
+            "micro_batch": settings["micro_batch"], "grad_accum": settings["grad_accum"],
+            "optimizer": OPTIMIZER_LABELS.get(settings.get("optimizer", "adamw")), "lr": f"{settings['lr']:.3g}",
+            "min_lr": f"{settings['min_lr']:.3g}", "schedule": {"wsd": "WSD"}.get(settings["schedule"],
+                                                                                 settings["schedule"]),
+            "warmup_steps": settings["warmup_steps"],
+            "decay_frac": settings["decay_frac"] if settings["schedule"] == "wsd" else None,
+            "decay_shape": settings["decay_shape"] if settings["schedule"] == "wsd" else None,
+            "weight_decay": settings["weight_decay"], "betas": "/".join(f"{b:g}" for b in settings["betas"]),
+            "grad_clip": settings["grad_clip"], "z_loss": z_loss, "dropout": cfg.dropout, "precision": amp_name,
+            "dataset": os.path.basename(os.path.normpath(dataset_dir)),
             "best_val": f"{best_val:.4f}" if math.isfinite(best_val) else None, "best_step": best_step,
             "last_val": f"{last_eval['loss']:.4f}" if last_eval else None,
             "last_bpb": f"{last_eval['bpb']:.4f}" if last_eval and last_eval.get("bpb") else None,
@@ -2763,7 +2864,9 @@ def cmd_train(args):
 
 EXPERIMENT_COLUMNS = ["time", "event", "name", "status", "step", "total_steps", "params", "non_embedding_params",
                       "d_model", "layers", "heads", "kv_heads", "ctx", "vocab", "tokens_seen", "tokens_per_step",
-                      "lr", "z_loss", "dataset", "best_val", "best_step", "last_val", "last_bpb", "last_ppl",
+                      "micro_batch", "grad_accum", "optimizer", "lr", "min_lr", "schedule", "warmup_steps",
+                      "decay_frac", "decay_shape", "weight_decay", "betas", "grad_clip", "z_loss", "dropout",
+                      "precision", "dataset", "best_val", "best_step", "last_val", "last_bpb", "last_ppl",
                       "benchmark_accuracy", "benchmark_floor", "benchmark_items", "tok_s", "device", "train_hours",
                       "run_hours", "energy_kwh", "co2e_kg", "cost_gbp", "checkpoint", "notes"]
 
