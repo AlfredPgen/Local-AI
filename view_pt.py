@@ -31,7 +31,6 @@ plotting invented values.
 """
 
 import argparse
-import datetime
 import html
 import math
 import os
@@ -75,7 +74,7 @@ def parse_args():
     p.add_argument("--no-push", action="store_true",
                    help="do not commit and push the dashboard to GitHub (done automatically for checkpoints in "
                         "this repository's folder)")
-    p.add_argument("--dpi", type=int, default=140)
+    p.add_argument("--dpi", type=int, default=300)
     p.add_argument("--dataset", help="dataset folder for forward-pass panels (default: the one in the checkpoint)")
     p.add_argument("--eval-text", help="plain-text file for forward-pass panels when no dataset is available")
     p.add_argument("--probes", default=os.path.join(HERE, "probes_biology.tsv"), help="cloze fact probes TSV")
@@ -613,23 +612,7 @@ def create_dashboard(ck, args):
             message(ax, f"panel failed: {type(exc).__name__}: {text[:120]}", title)
             print(f"WARNING: dashboard panel '{title}' failed: {type(exc).__name__}: {exc}")
 
-    o = ck.obj if isinstance(ck.obj, dict) else {}
-    last = ck.metrics.get("last_eval") or {}
-    best = ck.metrics.get("best_val")
-    sub = [f"{os.path.basename(ck.path)} | {family_label(ck.family)} {ck.kind} checkpoint | step {o.get('step', '?')} "
-           f"| drawn {datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}"]
-    if last.get("loss") is not None:
-        sub.append(f"latest val {last['loss']:.4f} @{last.get('step')}")
-    if best is not None and math.isfinite(float(best)):
-        sub.append(f"best val {float(best):.4f} @{ck.metrics.get('best_step')}")
-    if ck.history_source:
-        sub.append(f"history from {ck.history_source}")
-    if fnote and fstats is None and not args.no_forward:
-        sub.append(f"forward panels: {fnote}")
-    elif fstats is not None:
-        sub.append(f"forward panels: {fstats['tokens']:,} tokens from {fnote} (loss {fstats['loss']:.3f})")
-    fig.suptitle(ck.model_name + chr(10) + " | ".join(sub), fontsize=12, color=INK, x=0.01, ha="left",
-                 linespacing=1.5)
+    fig.suptitle(ck.model_name, fontsize=12, color=INK, x=0.01, ha="left")
     out = args.out or output_name(ck, "dashboard", ".png")
     finalize_legends(fig)
     fig.savefig(out, dpi=args.dpi, facecolor=SURFACE)
@@ -677,10 +660,8 @@ def panel_loss(ax, history, ck):
     ax.set_xlabel("optimizer step")
     ax.set_ylabel("cross-entropy (nats per token)")
     place_legend(ax)
-    titled(ax, title, "training = one batch at the plotted step; validation = random validation batches, fresh "
-                      "only at evaluation steps (v3 log)" if legacy else
-                      "training = mean loss since the previous metrics line; validation = fixed windows, "
-                      "measured at the plotted step")
+    titled(ax, title, "training: one batch per step; validation: random batches" if legacy else
+                      "training: mean since the previous line; validation: fixed windows")
 
 
 def panel_ppl(ax, history, ck):
@@ -696,7 +677,7 @@ def panel_ppl(ax, history, ck):
                 color=INK2)
     ax.set_xlabel("optimizer step")
     ax.set_ylabel("exp(validation loss)")
-    titled(ax, title, "exp(mean validation loss), log scale; lower is better")
+    titled(ax, title, "log scale; lower is better")
 
 
 def panel_lr(ax, history, ck):
@@ -723,7 +704,7 @@ def panel_lr(ax, history, ck):
     from matplotlib.ticker import FuncFormatter
     ax.yaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{v:.1e}"))
     place_legend(ax)
-    titled(ax, title, sched.describe() if tc.get("steps") else "values recorded at evaluations")
+    titled(ax, title)
 
 
 def panel_confidence(ax, history, ck):
@@ -744,10 +725,8 @@ def panel_confidence(ax, history, ck):
     ax.set_ylim(0, 1)
     ax.set_xlabel("optimizer step")
     ax.set_ylabel("proportion")
-    last = rows[-1]
     place_legend(ax)
-    titled(ax, title, f"confidence above accuracy = overconfident; mean prediction entropy "
-                      f"{last['entropy']:.2f} nats at step {last['step']}")
+    titled(ax, title, "confidence above accuracy = overconfident")
 
 
 # ---- row 2: tokens ------------------------------------------------------------
@@ -889,13 +868,11 @@ def panel_pca(ax, ck, pieces, classes, fstats):
                    color=color, alpha=0.65, linewidths=0, label=f"{cls} ({len(idx):,})")
         counts[cls] = len(idx)
     top = _token_order(ck, classes, fstats, {"word start", "word piece", "number", "punctuation"})[:40]
-    shown = place_labels(ax, [coords[i] for i in top], [label_text(pieces[i]) for i in top], max_labels=22)
+    place_labels(ax, [coords[i] for i in top], [label_text(pieces[i]) for i in top], max_labels=22)
     ax.set_xlabel(f"PC 1 ({var[0]:.1%} of variance)")
     ax.set_ylabel(f"PC 2 ({var[1]:.1%} of variance)")
     place_legend(ax, markerscale=1.6, fontsize=6.5)
-    which = "most frequent (evaluation text)" if fstats is not None else "earliest-merged"
-    titled(ax, title, f"each dot is one vocabulary token's embedding row; \u2581 marks a word start; "
-                      f"labels: {shown} of the {which} tokens that fit without overlapping")
+    titled(ax, title, "one dot per token; \u2581 marks a word start")
 
 
 def panel_similarity(ax, fig, ck, pieces, classes, fstats, cmap):
@@ -903,7 +880,7 @@ def panel_similarity(ax, fig, ck, pieces, classes, fstats, cmap):
     if ck.embedding is None or classes is None:
         return message(ax, "no token embedding or tokenizer in this file", title)
     ids = [i for i in _token_order(ck, classes, fstats, {"word start", "word piece"})
-           if len(pieces[i].replace("\u2581", "")) >= 3][:36]
+           if len(pieces[i].replace("\u2581", "")) >= 3][:50]
     if len(ids) < 4:
         return message(ax, "fewer than 4 word tokens", title)
     e = F.normalize(ck.embedding.float()[ids], dim=1)
@@ -914,18 +891,16 @@ def panel_similarity(ax, fig, ck, pieces, classes, fstats, cmap):
         dist = np.clip(1 - sims, 0, 2)
         np.fill_diagonal(dist, 0)
         order = leaves_list(linkage(squareform(dist, checks=False), method="average"))
-        how = "average-linkage clustering on 1 - cosine"
     except ImportError:
         order = np.argsort(np.linalg.eigh(sims)[1][:, -2])
-        how = "ordered by the leading eigenvector"
     sims = sims[np.ix_(order, order)]
     labels = [label_text(pieces[ids[k]], 10) for k in order]
     heatmap(ax, fig, sims, labels, labels, cmap, "cosine similarity", -1, 1, annotate=False)
-    ax.set_xticklabels(labels, fontsize=6, rotation=90)
-    ax.set_yticklabels(labels, fontsize=6)
+    ax.set_xticklabels(labels, fontsize=4.5, rotation=90)
+    ax.set_yticklabels(labels, fontsize=4.5)
     ax.set_xlabel("token (same clustered order as rows)")
     ax.set_ylabel("token")
-    titled(ax, title, f"36 frequent word tokens; rows and columns share one order ({how})")
+    titled(ax, title, f"{len(ids)} most frequent word tokens, clustered by cosine similarity")
 
 
 def panel_norms(ax, ck, classes):
@@ -945,7 +920,7 @@ def panel_norms(ax, ck, classes):
     ax.set_xlabel("token ID (BPE merge order: low = merged early)")
     ax.set_ylabel("L2 norm of embedding row")
     tied = ck.cfg is not None and ck.cfg.tie_embeddings
-    titled(ax, title, "tied embeddings: each row is also that token's output weight vector" if tied else None)
+    titled(ax, title, "tied: each row is also the token's output weights" if tied else None)
 
 
 def panel_preference(ax, ck, pieces, classes, fstats, fnote):
@@ -970,8 +945,7 @@ def panel_preference(ax, ck, pieces, classes, fstats, fnote):
     ax.set_xlabel("observed frequency of the token as next token")
     ax.set_ylabel("mean predicted probability")
     place_legend(ax, fontsize=6.5, markerscale=1.8)
-    titled(ax, title, "above the diagonal = predicted more often than it occurs; the model has no output-bias "
-                      "tensor, so preference is measured from its predictions (labels: most over-predicted)")
+    titled(ax, title, "above the diagonal = predicted more often than it occurs")
 
 
 # ---- row 3: weights -----------------------------------------------------------
@@ -997,8 +971,7 @@ def panel_components(ax, fig, ck, cmap):
             if t is not None:
                 m[i, j] = t.float().square().mean().sqrt().item()
     heatmap(ax, fig, m, [c for c, _ in COMPONENTS], [f"block {b}" for b in layers], cmap, "RMS of weights")
-    titled(ax, title, "RMS of each weight matrix; initialised at 0.02 (attn.o_proj and ffn.down at "
-                      "0.02 / sqrt(2 x layers))")
+    titled(ax, title, "RMS of each weight matrix")
 
 
 def panel_norm_gains(ax, ck):
@@ -1024,7 +997,7 @@ def panel_norm_gains(ax, ck):
     ax.set_xticklabels([n for n, _ in items], fontsize=6.5, rotation=0 if len(items) <= 9 else 90)
     ax.set_ylabel("gain per channel (1.0 at initialisation)")
     ax.grid(axis="x", visible=False)
-    titled(ax, title, "per-channel gains: attn_norm blue, ffn_norm orange, final grey; 1.0 at initialisation")
+    titled(ax, title, "attn_norm blue, ffn_norm orange, final grey; 1.0 at initialisation")
 
 
 def panel_spectra(ax, ck):
@@ -1050,7 +1023,7 @@ def panel_spectra(ax, ck):
     ax.set_xlabel("singular value rank / matrix rank")
     ax.set_ylabel("\u03c3\u1d62 / \u03c3\u2098\u2090\u2093")
     place_legend(ax, fontsize=6.5)
-    titled(ax, title, "token embedding and the middle block's matrices; a fast drop means low effective rank")
+    titled(ax, title, "a fast drop means low effective rank")
 
 
 def panel_heads(ax, fig, ck, cmap):
@@ -1084,11 +1057,11 @@ def panel_heads(ax, fig, ck, cmap):
 def panel_calibration(ax, ck, fstats, fnote):
     title = "Calibration of the top prediction"
     last = ck.metrics.get("last_eval") or {}
-    cal, ece, src = None, None, ""
+    cal, ece = None, None
     if fstats is not None:
-        cal, ece, src = fstats["calibration"], fstats["ece"], "forward pass now"
+        cal, ece = fstats["calibration"], fstats["ece"]
     elif last.get("calibration"):
-        cal, ece, src = last["calibration"], last.get("ece"), f"stored at step {last.get('step')}"
+        cal, ece = last["calibration"], last.get("ece")
     if cal is None:
         return message(ax, "No calibration data: " + fnote, title)
     conf, acc, cnt = (np.array(cal[k]) for k in ("confidence", "accuracy", "count"))
@@ -1104,7 +1077,7 @@ def panel_calibration(ax, ck, fstats, fnote):
     ax.set_xlabel("confidence (probability of the top prediction)")
     ax.set_ylabel("fraction of top predictions that were right")
     place_legend(ax)
-    titled(ax, title, f"expected calibration error {ece:.3f} ({src}); bars below the diagonal = overconfident")
+    titled(ax, title, f"expected calibration error {ece:.3f}; bars below the diagonal = overconfident")
 
 
 def panel_probes(ax, ck, model, device, args):
@@ -1143,10 +1116,8 @@ def panel_probes(ax, ck, model, device, args):
     by_diff = tiny_gpt.probe_summary(results, "difficulty")
     diff_text = ", ".join(f"{d} {by_diff[d]['accuracy']:.0%}" for d in ("easy", "medium", "hard") if d in by_diff)
     place_legend(ax, fontsize=6.5)
-    titled(ax, f"{title}: {k}/{n} correct ({acc:.0%}, 95% interval {low:.0%}-{high:.0%}), floor {floor:.0%}",
-           f"per category, {os.path.basename(args.probes)}; {diff_text}. Floor = accuracy with each question's "
-           "words shuffled (topic words only); green = above its floor, i.e. the sentence itself helped. "
-           "Per-item results: tiny_gpt.py --benchmark")
+    titled(ax, f"{title}: {acc:.0%} correct ({low:.0%}-{high:.0%}), floor {floor:.0%}",
+           f"{diff_text}; green = above its floor (question words shuffled)")
 
 
 def panel_attention(ax, fig, model, windows, device, cmap, fnote):
@@ -1157,16 +1128,14 @@ def panel_attention(ax, fig, model, windows, device, cmap, fnote):
     heatmap(ax, fig, ent, [f"block {b}" for b in range(ent.shape[0])], [f"head {h}" for h in range(ent.shape[1])],
             cmap, "normalised entropy", 0, 1, fmt_spec=".2f")
     ax.set_xlabel("query head")
-    titled(ax, title, "one validation window, entropy normalised by the prefix length: 0 = attends to one "
-                      "token, 1 = spread evenly")
+    titled(ax, title, "0 = attends to one token, 1 = spread evenly")
 
 
 def panel_adam(ax, fig, ck, cmap):
     title = "Adam update size"
     opt = ck.obj.get("optimizer") if isinstance(ck.obj, dict) else None
     if not isinstance(opt, dict) or not opt.get("state"):
-        kind = "inference-only checkpoint" if ck.kind in ("inference", "inference_only") else "no optimizer state"
-        return message(ax, f"{kind}: optimizer moments are only saved in training checkpoints (<name>.pt)", title)
+        return message(ax, "optimizer state is saved only in the training checkpoint", title)
     names = ck.adam_names()
     size = {}
     for idx, st in opt["state"].items():
@@ -1183,9 +1152,7 @@ def panel_adam(ax, fig, ck, cmap):
             grid[i, j] = size.get(f"blocks.{b}.{rel}", np.nan)
     heatmap(ax, fig, grid, [c for c, _ in COMPONENTS], [f"block {b}" for b in layers], cmap,
             "mean |m| / (sqrt(v) + eps)")
-    extra = ", ".join(f"{pretty_name(n)} {size[n]:.3f}" for n in ("token_embedding.weight", "norm.weight") if n in size)
-    titled(ax, title, "mean |m| / (sqrt(v) + eps) per matrix; near 1 = gradient sign consistent across steps"
-                      + (f"; {extra}" if extra else ""))
+    titled(ax, title, "near 1 = gradient sign consistent across steps")
 
 
 # ---------------------------------------------------------------------------
