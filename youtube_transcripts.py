@@ -82,8 +82,13 @@ def ydl(cookies=None, **extra):
     return yt_dlp.YoutubeDL(opts)
 
 
+AGE_LIMITED = ("confirm your age", "age-restricted", "inappropriate for some users")
+
+
 def classify_error(exc):
     text = str(exc).lower()
+    if any(a in text for a in AGE_LIMITED):  # "Sign in to confirm your age": one video, not a bot block
+        return "unavailable"
     if any(b in text for b in BOT_CHECK):
         raise BotCheck(str(exc)[:200])
     return "unavailable" if any(u in text for u in UNAVAILABLE) else "error"
