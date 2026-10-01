@@ -694,6 +694,36 @@ def atomic_save(obj, path):
                 pass
 
 
+def launch_dashboard(path, args, state):
+    """Draw view_pt.py's dashboard for a new best checkpoint in the background
+    (CPU, idle priority; training does not wait). Skipped while the previous
+    one is still drawing. view_pt.py pushes it to GitHub (for checkpoints in this
+    repository's folder) at most every --dashboard-push-hours."""
+    if state["proc"] is not None and state["proc"].poll() is None:
+        return
+    now = time.time()
+    push = args.dashboard_push_hours <= 0 or now - state["pushed"] >= args.dashboard_push_hours * 3600
+    cmd = [sys.executable, os.path.join(HERE, "view_pt.py"), path, "--plot"] + ([] if push else ["--no-push"])
+    log_dir = os.path.join(args.out_dir, "logs")
+    try:
+        os.makedirs(log_dir, exist_ok=True)
+        with open(os.path.join(log_dir, "dashboard.log"), "a", encoding="utf-8") as log:
+            log.write(f"\n--- {now_iso()} | {' '.join(cmd[1:])}\n")
+            log.flush()
+            if sys.platform == "win32":
+                flags = subprocess.IDLE_PRIORITY_CLASS | subprocess.CREATE_NO_WINDOW
+                state["proc"] = subprocess.Popen(cmd, cwd=HERE, stdout=log, stderr=subprocess.STDOUT,
+                                                 env={**os.environ, "CUDA_VISIBLE_DEVICES": ""}, creationflags=flags)
+            else:
+                state["proc"] = subprocess.Popen(cmd, cwd=HERE, stdout=log, stderr=subprocess.STDOUT,
+                                                 env={**os.environ, "CUDA_VISIBLE_DEVICES": ""},
+                                                 preexec_fn=lambda: os.nice(19))
+        if push:
+            state["pushed"] = now
+    except OSError as exc:
+        print(f"note: dashboard not started ({type(exc).__name__}: {exc})")
+
+
 def load_optimizer_by_name(opt, saved, saved_names, current_names):
     """Restore AdamW moments by parameter name, independent of group layout
     (legacy checkpoints used one group; tinyGPT uses decay / no-decay groups). The remapped state
@@ -1783,6 +1813,12 @@ def parse_args(argv=None):
                    help="print a short training-only progress line when nothing was printed for this long (0 = off)")
     g.add_argument("--log-every", "--report-every", type=int, default=0,
                    help="extra training-only progress lines between evaluations (0 = none)")
+    g.add_argument("--dashboard", choices=("auto", "on", "off"), default="auto",
+                   help="redraw view_pt.py's dashboard in the background after each new best checkpoint (auto: "
+                        "for runs saved in this script's folder; test runs elsewhere are skipped)")
+    g.add_argument("--dashboard-push-hours", type=float, default=3.0,
+                   help="push the dashboard to GitHub at most this often (0 = every time; default 3, since every "
+                        "1.6 MB version stays in the repository's history)")
     g.add_argument("--sample-every", type=int,
                    help="write a sample at evaluations whose step is a multiple of N (default: every evaluation; 0 = off)")
     g.add_argument("--sample-tokens", type=int, default=48)
@@ -2466,6 +2502,10 @@ def cmd_train(args):
             return f"elapsed {fmt_hms(session)}"
         return f"elapsed {fmt_hms(session)} (whole run {fmt_hms(run_seconds_before + session)})"
 
+    dashboard = {"proc": None, "pushed": 0.0}
+    dashboard_on = args.dashboard == "on" or (
+        args.dashboard == "auto" and os.path.normcase(os.path.abspath(args.out_dir)) == os.path.normcase(HERE))
+
     # ---------------- training loop ----------------
     model.train()
     status, step = "completed", start_step
@@ -2611,6 +2651,8 @@ def cmd_train(args):
                 write_metrics(entry)
                 if is_best:  # before printing or sampling, so Ctrl+C can never leave an announced best unsaved
                     atomic_save(payload(step, inference_only=True), best_path)
+                    if dashboard_on:
+                        launch_dashboard(best_path, args, dashboard)
                 if is_best:
                     status_text = (f"NEW BEST (prev {prev_best:.3f} @{prev_step})" if prev_step is not None
                                    else "NEW BEST (first evaluation)")
