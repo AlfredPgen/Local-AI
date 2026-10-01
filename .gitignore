@@ -25,3 +25,4 @@ __pycache__/
 *_embeddings.html
 log.txt
 posttrain_data/
+logs/

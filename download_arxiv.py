@@ -43,6 +43,7 @@ Example (everything the default subject areas offer, best matches first):
 """
 
 import argparse
+import datetime
 import concurrent.futures as cf
 import gzip
 import http.client
@@ -95,7 +96,7 @@ _NET_LOCK = threading.Lock()
 _LAST_START = [0.0]
 
 
-def http_get(url, limit=MAX_DOWNLOAD, tries=6):
+def http_get(url, limit=MAX_DOWNLOAD, tries=6, timeout=300):
     """Bytes of url; None on 404 (or when the body exceeds `limit`, as
     'too_large'). Server busy (503 with Retry-After), rate limits and network
     failures are retried with backoff."""
@@ -109,7 +110,7 @@ def http_get(url, limit=MAX_DOWNLOAD, tries=6):
             retry_after = None
             try:
                 request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-                with urllib.request.urlopen(request, timeout=300) as response:
+                with urllib.request.urlopen(request, timeout=timeout) as response:
                     chunks, size = [], 0
                     while True:
                         chunk = response.read(1 << 20)
@@ -171,6 +172,12 @@ def parse_oai_page(xml_bytes):
     return records, token or None, None
 
 
+def _window_end(start, days=30):
+    """Last day (inclusive) of the date window that begins at `start`, never after today."""
+    end = datetime.date.fromisoformat(start) + datetime.timedelta(days=days - 1)
+    return min(end, datetime.date.today()).isoformat()
+
+
 def harvest(set_spec, cache_dir):
     """Append the set's records to <cache>/<set>.jsonl.gz, page by page; a
     progress file lets a rerun continue (or restart the set if arXiv no longer
@@ -184,22 +191,35 @@ def harvest(set_spec, cache_dir):
     if state["complete"]:
         print(f"  [{set_spec}] cached: {state['records']:,} records")
         return state["records"]
-    if not state["token"] and os.path.exists(base + ".jsonl.gz"):
+    if not state["token"] and not state["pages"] and os.path.exists(base + ".jsonl.gz"):
         os.remove(base + ".jsonl.gz")  # an interrupted first page: start clean
     t0 = time.time()
     while True:
         if state["token"]:
             url = OAI_URL + "?" + urllib.parse.urlencode({"verb": "ListRecords", "resumptionToken": state["token"]})
         else:
-            url = OAI_URL + "?" + urllib.parse.urlencode({"verb": "ListRecords", "set": set_spec,
-                                                          "metadataPrefix": "arXiv"})
-        body = http_get(url, limit=200 << 20)
+            query = {"verb": "ListRecords", "set": set_spec, "metadataPrefix": "arXiv"}
+            if state.get("from"):  # date windows: the server answers these fast, open-ended ranges slowly
+                query["from"], query["until"] = state["from"], _window_end(state["from"])
+            url = OAI_URL + "?" + urllib.parse.urlencode(query)
+        try:
+            body = http_get(url, limit=200 << 20, tries=3, timeout=120)
+        except Exception as exc:  # noqa: BLE001
+            # the server sometimes stops answering one saved position; the position carries the date
+            # it has reached, so ask afresh from that date (the few papers seen twice are removed later)
+            m = re.search(r"from%3D(\d{4}-\d{2}-\d{2})", state["token"] or "")
+            if not m:
+                raise
+            print(f"  [{set_spec}] the saved position does not load ({type(exc).__name__}); asking again for "
+                  f"everything from {m.group(1)}", flush=True)
+            state.update(token=None, **{"from": m.group(1)})
+            continue
         if not isinstance(body, bytes):
             raise RuntimeError(f"{set_spec}: no answer from the OAI-PMH server")
         records, token, error = parse_oai_page(body)
         if error == "badResumptionToken":  # expired position: restart this set (duplicates are removed later)
             print(f"  [{set_spec}] saved position expired; restarting the set", flush=True)
-            state.update(token=None, pages=0, records=0)
+            state.update(token=None, pages=0, records=0, **{"from": None})
             if os.path.exists(base + ".jsonl.gz"):
                 os.remove(base + ".jsonl.gz")
             continue
@@ -212,6 +232,11 @@ def harvest(set_spec, cache_dir):
         state["records"] += len(records)
         state["token"] = token
         state["complete"] = token is None
+        if token is None and state.get("from"):  # one date window done: the next, until today
+            end = _window_end(state["from"])
+            if end < datetime.date.today().isoformat():
+                state["from"] = (datetime.date.fromisoformat(end) + datetime.timedelta(days=1)).isoformat()
+                state["complete"] = False
         with open(state_path + ".part", "w", encoding="utf-8") as handle:
             json.dump(state, handle)
         os.replace(state_path + ".part", state_path)
