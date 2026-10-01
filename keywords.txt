@@ -516,47 +516,151 @@ TwoSampleMR
 weighted median
 
 # biobanks, platforms and companies
+100,000 Genomes Project
 10x Genomics
 23andMe
+Affymetrix
+Agilent
 All of Us Research Program
+=ALSPAC
+=ARIC
+Avon Longitudinal
+Bayer
+=BGI
 Biobank Japan
 Biogen
+=BioMe
+BioVU
+Boehringer Ingelheim
+Calico Life Sciences
+China Kadoorie Biobank
+Danish National Biobank
 =deCODE
+DeepMind
+DiscovEHR
 DNAnexus
+Element Biosciences
+EPIC-Norfolk
 Estonian Biobank
+Framingham Heart Study
+Geisinger
 Genentech
+Generation Scotland
+Genes & Health
+Genomics England
+Genomics plc
+Gilead Sciences
 =GSK
+=H3Africa
+HUNT study
+Insitro
+iPSYCH
+Isomorphic Labs
+Johnson & Johnson
+Kaiser Permanente
+Lifelines cohort
 Merck
+Mexico City Prospective Study
+MGI Tech
+Michigan Genomics Initiative
 Million Veteran Program
+Nurses' Health Study
+Our Future Health
 Oxford Nanopore
+Qatar Biobank
+Qiagen
+Recursion Pharmaceuticals
+Seven Bridges
+Taiwan Biobank
+Terra platform
+Thermo Fisher
+TwinsUK
 UK Biobank Research Analysis Platform
 =UKB-RAP
+Ultima Genomics
+Whitehall II
+Women's Health Initiative
 
 # databases
+AlphaFold DB
 ArrayExpress
+BindingDB
+BioGRID
+BioMart
+cBioPortal
+=CCLE
+ChEBI
+ClinGen
+ClinicalTrials.gov
+Cochrane Library
+Connectivity Map
+=CORUM
+=COSMIC
 dbGaP
+=DDBJ
+=DECIPHER
+DepMap
+Disease Ontology
 =ENCODE
+eQTL Catalogue
+Europe PMC
 European Genome-phenome Archive
+FANTOM5
+GenBank
 =GENCODE
 Gene Expression Omnibus
 Gene Ontology
 =GO term*
+Google Scholar
+=GTDB
+GTEx Portal
+GWAS Atlas
+HaploReg
 HapMap
+=HGMD
 =HGNC
+=HMDB
 Human Phenotype Ontology
+Human Protein Atlas
 =ICD-10
+=ICGC
+IntAct
+InterPro
+JASPAR
+LD Hub
+LDlink
+=LOVD
+=MeSH
+MetaboLights
+Monarch Initiative
 MSigDB
+=NCBI
+Open Targets Genetics
 OpenGWAS
 Orphanet
+Pan-UKBB
+=PANTHER
+=Pfam
 PGS Catalog
 PharmGKB
+PhenoScanner
+PROSITE
 RefSeq
+RegulomeDB
 Roadmap Epigenomics
+Scopus
+Semantic Scholar
 Sequence Read Archive
+SILVA database
 =SNOMED
 STRING database
+Swiss-Prot
+=TCGA
+The Cancer Genome Atlas
 =TOPMed
 UCSC Genome Browser
+UniProtKB
+Web of Science
 
 # cell and molecular biology
 AlphaFold
@@ -702,75 +806,206 @@ spermatozoa
 white blood cell*
 
 # genes
+=ABCA1
+=ABCA4
+=ABCA7
+=ABCB1
+=ABCG2
+=ABCG5
+=ABCG8
+=ABI3
 =ABL1
+=ABO
 ACE inhibitor*
 =ACE2
 =ACTB
+=ACTC1
+=ACTN3
+=ACVR1
+=ADH1B
+=ADH1C
+=ADIPOQ
+=AHR
+=AIRE
 =AKT1
+=ALDH1A1
 =ALDH2
 =ALK
+=AMY1
 androgen receptor*
+=ANGPTL3
+=ANGPTL4
+=ANGPTL8
+=ANK1
+=APC
 =APOA1
+=APOA5
 =APOB
+=APOC3
 =APOE
 =APOL1
 =APP
+=ARID1B
 =ARMS2
+=ARNT
+=ASCL1
+=ASIP
+=ASXL1
+=ATG16L1
 =ATM
+=ATP7A
 =ATP7B
+=ATR
+=ATXN1
+=ATXN2
+=ATXN3
+=AURKA
+=AURKB
+=AXIN2
+=B2M
+=BACH2
+=BARD1
+=BCL11A
 =BCL2
 =BCR-ABL
 =BDNF
 =BIN1
+=BMI1
+=BMP2
+=BMP4
+=BMPR2
 =BRAF
 =BRCA1
 =BRCA2
+=BRIP1
+=BTK
+=BUB1
 C-reactive protein
+=C4A
+=C4B
+=C9orf72
+=CACNA1A
 =CACNA1C
+=CACNA1S
+=CALR
+=CAPN3
+=CARD9
+=CASQ2
+=CCND1
+=CCNE1
 =CCR5
 =CD19
 =CD274
+=CD28
+=CD33
+=CD3E
 =CD4
+=CD40
 =CD8
+=CD80
+=CD86
 =CDH1
+=CDK1
+=CDK12
+=CDK2
 =CDK4
 =CDK6
+=CDKAL1
+=CDKL5
 =CDKN1A
 =CDKN2A
+=CDKN2B
+=CDX2
+=CEP290
+=CETP
 =CFH
 =CFTR
+=CHD8
+=CHEK1
 =CHEK2
+=CLCN1
+=CNBP
 =COL1A1
+=COL1A2
+=COL2A1
+=COL3A1
+=COL4A3
+=COL4A4
+=COL4A5
+=COL5A1
+=COL6A1
 =COMT
 =COX-1
 =COX-2
+=CR1
+=CREBBP
+=CTCF
 =CTLA4
 =CTNNB1
+=CYP11B2
+=CYP17A1
+=CYP19A1
+=CYP1A1
 =CYP1A2
+=CYP1B1
+=CYP21A2
+=CYP24A1
+=CYP2A6
 =CYP2B6
 =CYP2C19
 =CYP2C9
 =CYP2D6
+=CYP2E1
 =CYP3A4
+=CYP7A1
+=DICER1
+=DISC1
 =DMD
 =DMPK
 =DNMT1
 =DNMT3A
+=DNMT3B
 =DPYD
 =DRD2
+=DRD4
+=DYRK1A
+=DYSF
 =EDAR
+=EEF1A1
 =EGFR
+=EGLN1
+=ELOVL2
+=EP300
 =EPAS1
+=EPOR
 =ERAP1
 =ERBB2
+=ERBB3
+=ERBB4
 =ESR1
+=ESR2
+=EZH1
 =EZH2
+=FADS1
+=FADS2
+=FANCA
+=FANCC
 =FBN1
+=FBXW7
+=FCGR2A
+=FCGR3A
+=FGF10
+=FGF8
 =FGFR1
 =FGFR2
 =FGFR3
+=FGFR4
+=FKRP
 =FLT3
 =FMR1
+=FOXA1
+=FOXA2
+=FOXG1
 =FOXP2
 =FOXP3
 =FTO
@@ -778,162 +1013,469 @@ C-reactive protein
 =G protein*
 =G6PD
 =GAPDH
+=GATA1
+=GATA2
+=GATA3
+=GATA4
+=GBA1
 =GCK
+=GCKR
+=GDF5
 =GFP
+=GIPR
 =GJB2
+=GJB6
+=GLP1R
 glucocerebrosidase
+=GNAQ
+=GNAS
 =GPCR
 =GPCRs
+=GRIN2A
+=GRIN2B
+=GRM3
+=GSTM1
+=GSTT1
+=HAMP
+=HAND2
+=HBA1
+=HBA2
 =HBB
+=HBG1
+=HBG2
+=HBS1L
+=HDAC1
+=HDAC2
 =HER2
 =HERC2
 =HFE
+=HHEX
+=HIF1A
 =HLA
+=HMGA2
 =HMGCR
 =HNF1A
+=HNF1B
 =HNF4A
 =HOXA1
+=HOXA13
+=HOXA9
+=HOXB13
+=HOXD13
+=HPRT1
 =HRAS
+=HSD11B1
+=HSD17B13
+=HTR2A
+=HTRA1
 =HTT
 =IDH1
 =IDH2
 =IFIH1
+=IFNG
 =IGF1
+=IGF1R
+=IGF2
+=IGF2BP2
+=IHH
+=IKZF1
+=IKZF3
 =IL10
+=IL12B
+=IL13
+=IL17A
+=IL18
 =IL1B
+=IL1RL1
 =IL2
 =IL23R
+=IL2RA
+=IL2RG
+=IL33
 =IL6
+=IL7R
+=INSR
+=IRF4
 =IRF5
+=IRGM
+=IRS1
 =JAK1
 =JAK2
+=JAK3
+=KCNE1
+=KCNH2
 =KCNJ11
+=KCNQ1
+=KCNQ2
+=KCNQ3
+=KDM6A
+=KDR
+=KEAP1
+=KITLG
+=KLF1
 =KLF4
+=KMT2A
+=KMT2D
 =KRAS
+=KSR2
+=LAMA2
 =LCT
 =LDLR
 =LEP
+=LEPR
+=LIN28A
+=LIN28B
+=LIPC
 =LMNA
+=LPL
+=LRP5
+=LRP6
 =LRRK2
+=MAOA
+=MAP2K1
+=MAP3K1
 =MAPK1
 =MAPT
+=MBL2
+=MBOAT7
 =MC1R
+=MC3R
 =MC4R
+=MCM6
 =MDM2
+=MDM4
 =MECP2
+=MEFV
 =MET
+=MFN2
+=MITF
+=MKI67
 =MLH1
+=MLH3
+=MS4A1
+=MS4A6A
 =MSH2
+=MSH6
 =MSTN
+=MSX1
 =MTHFR
+=MTNR1B
 =MTOR
+=MTTP
+=MUTYH
+=MYB
 =MYBPC3
 =MYC
+=MYCN
+=MYF5
+=MYH6
 =MYH7
+=MYL2
+=MYO7A
 =MYOD1
+=MYOG
 =NANOG
+=NAT2
+=NDUFS1
+=NEGR1
+=NEUROD1
+=NEUROG2
 =NF1
 =NF2
 =NFE2L2
 =NFKB1
+=NKX2-5
+=NLGN3
+=NLRP3
 =NOD2
+=NODAL
+=NOS1AP
 =NOS3
 =NOTCH1
+=NOTCH2
+=NOTCH3
+=NPC1L1
+=NPHS1
+=NPHS2
 =NPM1
+=NPPA
+=NPPB
+=NR1H3
+=NR1H4
+=NR3C1
 =NRAS
+=NRG1
+=NRXN1
+=NTRK1
+=NTRK2
+=NTRK3
 =OCA2
+=OLIG2
+=OPA1
+=OPTN
+=OTOF
+=OTX2
 =OXTR
 =P450
+=PABPN1
 =PAH
 =PALB2
+=PARK7
+=PAX2
+=PAX3
 =PAX6
+=PAX7
+=PCNA
+=PCSK1
 =PCSK9
 PD-1
 PD-L1
 =PDCD1
 =PDGFRA
+=PDX1
+=PGK1
+=PGR
+=PICALM
 =PIK3CA
+=PIK3R1
+=PINK1
+=PITX2
 =PKD1
 =PKD2
+=PKLR
+=PKP2
+=PLCG2
+=PLK1
+=PML
+=PMS2
+=PNPLA3
+=POLD1
+=POLG
+=POMC
 =POU5F1
+=PPARA
+=PPARD
 =PPARG
+=PPARGC1A
+=PRF1
 =PRKN
+=PRNP
+=PROS1
 =PSEN1
+=PSEN2
+=PTCH1
 =PTEN
+=PTF1A
 =PTPN11
+=PTPN2
 =PTPN22
+=RAD51
+=RAD51C
+=RAD51D
+=RAF1
+=RAG1
+=RAG2
+=RARA
 =RB1
+=RBFOX1
 =RET
+=RNF43
+=ROS1
+=RPE65
+=RPLP0
 =RUNX1
+=RUNX3
+=RXRA
+=RYR1
+=RYR2
+=SALL4
+=SCN10A
 =SCN1A
+=SCN2A
+=SCN4A
 =SCN5A
+=SCN8A
+=SDHB
+=SDHD
 =SERPINA1
+=SERPINC1
+=SF3B1
+=SGCA
+=SH2B1
+=SH2B3
+=SHANK3
+=SIRT1
+=SIRT3
+=SIRT6
+=SLC12A3
+=SLC22A1
 =SLC24A5
+=SLC2A1
+=SLC2A2
+=SLC2A4
+=SLC30A8
+=SLC34A1
+=SLC40A1
+=SLC45A2
+=SLC5A2
+=SLC6A3
 =SLC6A4
 =SLCO1B1
+=SLCO1B3
+=SMAD2
+=SMAD3
 =SMAD4
+=SMAD7
+=SMARCA4
+=SMARCB1
 =SMN1
+=SMN2
+=SNAI1
+=SNAI2
 =SNCA
 =SOD1
 =SORL1
+=SORT1
 =SOX2
+=SOX9
+=SPOP
+=SPTA1
+=SREBF1
+=SREBF2
+=SRSF2
+=STAG2
+=STAT1
 =STAT3
 =STAT4
+=STAT5B
 =STK11
+=SUFU
+=SURF1
+=SUZ12
+=SYNGAP1
+=TARDBP
+=TBP
+=TBX5
+=TBXT
+=TCF4
 =TCF7L2
+=TERC
 =TERT
+=TET1
 =TET2
+=TFAM
+=TFRC
 =TGFB1
+=TGFB2
+=TGFBR1
 =TGFBR2
+=THBD
+=THPO
+=THRB
+=TLR2
 =TLR4
+=TLR7
+=TLR9
+=TM6SF2
+=TMC1
+=TMEM18
+=TMPRSS2
+=TMPRSS6
 =TNF
+=TNFAIP3
+=TNFRSF1A
+=TNNI3
+=TNNT2
 =TP53
+=TP63
+=TP73
 =TPMT
+=TRAF1
 =TREM2
 =TSC1
 =TSC2
 =TTN
 =TTR
+=TUBB
+=TWIST1
 =TYK2
+=TYRP1
+=U2AF1
+=UBQLN2
 =UGT1A1
+=UMOD
+=USH2A
+=VCP
+=VDR
 =VEGFA
 =VHL
 =VKORC1
+=VPS35
+=VWF
 =WNT1
+=WNT3A
+=WNT5A
 =WT1
 =XIST
+=XRCC1
+=YWHAZ
+=YY1
+=ZEB1
+=ZEB2
+=ZFHX3
+=ZNF804A
 
 # proteins and enzymes
 acetylcholinesterase
 actin
+actinin
 active site*
 albumin
 aldolase
+aldosterone
 allosteric
 alpha helices
 alpha helix
+alpha-synuclein
 aminotransferase*
 amylase
 amyloid
+angiotensin*
 anhydrase*
+ankyrin
+aquaporin*
 ATPase*
 beta sheet*
 beta strand*
+beta-barrel
 binding pocket*
 binding site*
+bradykinin
 cadherin*
+calbindin
+calcitonin
+calmodulin
 carboxylase*
 Cas12*
 Cas13*
 Cas9
 caspase*
 catalase
+caveolin*
 cellulase*
+ceruloplasmin
 chaperonin*
+chemokine*
 chitinase*
 cholinesterase*
 chymotrypsin*
+clathrin
+claudin*
+cofilin
+coiled-coil
 collagen*
+connexin*
+corticotropin
 cyclin
 cyclin-dependent
 cyclins
@@ -943,65 +1485,114 @@ cytokine*
 de novo design
 decarboxylase*
 dehydrogenase*
+desmin
+deubiquitinase*
 directed evolution
 disulfide bond*
 disulphide bond*
+drug transporter*
+dynein
 dystrophin
+E3 ligase*
 elastin
+elongation factor*
 endonuclease*
+endothelin*
 enolase
+erythropoietin
+exportin*
 ferritin
+fibrillin*
 fibrin*
+fibronectin
+follicle-stimulating hormone
 galactosidase*
+gelsolin
 glucokinase
+glucose transporter*
 glucosidase*
+gonadotropin*
 green fluorescent protein
+growth factor*
+growth hormone
 GTPase*
 gyrase
 haemagglutinin
 haemoglobin
+haptoglobin
 heat shock protein*
 helicase*
 hemagglutinin
 hemoglobin
+hemopexin
+hepcidin
 hexokinase
+homeobox
+homeodomain*
 huntingtin
 hydrolase*
 hydrophilic*
 hydrophobic*
 hydroxylase*
 immunoglobulin*
+importin*
+initiation factor*
 insulin receptor
 integrin*
 interferon*
 interleukin*
 keratin*
+kinesin
 lactase
+lactoferrin
+lamin A
+laminin
+leucine zipper*
 ligase*
 lipase*
 lipoxygenase*
 luciferase*
+luteinising hormone
+luteinizing hormone
 lysozyme
 maltase
+melanopsin
+membrane transporter*
 molecular chaperone*
 monooxygenase*
+mucin*
 mutase*
 myoglobin
 myosin
+natriuretic peptide*
 neuraminidase
+neuropeptide Y
 nitrogenase
+nuclear lamina
 nuclear receptor*
 nuclease*
+nucleoporin*
+occludin
 opsin*
+orexin*
 oxidase*
 oxygenase*
 p53
+parathyroid hormone
+paxillin
+PDZ domain*
 pepsin*
 peptidase*
+perilipin*
 peroxidase*
 phosphofructokinase
 phospholipase*
 phosphorylase*
+plasminogen
+presenilin*
+profilin
+prolactin
+protamine
 protease*
 protein complex*
 protein design
@@ -1009,26 +1600,51 @@ protein domain*
 protein engineering
 quaternary structure
 reductase*
+renin
+resistin
 reverse transcriptase
 rhodopsin
+ribonuclease*
+ribosomal protein*
+Rossmann fold
 rubisco
 secondary structure
+selectin*
+septin*
+SH2 domain*
+SH3 domain*
+somatostatin
+spectrin
 spike protein*
 sucrase
 superoxide dismutase
+surfactant protein*
 synthase*
 synthetase*
+talin
 tau protein
 tertiary structure
+thrombin
+thrombopoietin
+thyrotropin
+TIM barrel
+titin
 topoisomerase*
 transaminase*
 transcription factor
 transferase*
 transferrin
+transthyretin
+tropomyosin
+troponin
 trypsin*
 tubulin
+tumor necrosis factor
+tumour necrosis factor
 tyrosinase
 urease
+vimentin
+vinculin
 zinc finger*
 
 # immunology, neuroscience, development and ecology
@@ -1206,20 +1822,30 @@ Zea mays
 # plants, fungi and microbes
 agronom*
 algae
+Amborella
 angiosperm*
 Arabidopsis
 archaea
+barley
+Brachypodium
 chlorophyll
 crop*
 cultivar*
+diatom*
+dinoflagellate*
 =E. coli
+Emiliania
 Escherichia coli
 fungal
 fungi
 fungus
 gymnosperm*
 horticultur*
+Lotus japonicus
 maize
+Medicago
+Ostreococcus
+Phaeodactylum
 phytochemical*
 plant biology
 plant breeding
@@ -1227,112 +1853,312 @@ plant genetics
 pollen
 pollination
 Saccharomyces
+Selaginella
+Setaria
+sorghum
+soybean*
+Symbiodinium
 wheat
 yeast
 
 # bacteria
+16S rRNA
 Acinetobacter
+Actinomyces
+Aeromonas
+Agrobacterium
+Akkermansia
 anthrax
+Asgard archaea
+Azotobacter
 Bacteroides
+Bartonella
 Bifidobacterium
+biofilm*
+Bordetella
 Borrelia
+Bradyrhizobium
+Brucella
 bubonic plague
+Buchnera
+Burkholderia
 =C. difficile
 Campylobacter
+carbapenem*
 Chlamydia
+Citrobacter
 Clostridioides
 Clostridium
+colistin
+Corynebacterium
+Coxiella
+Cutibacterium
 cyanobacteri*
+Deinococcus
+efflux pump*
+endospore*
+endotoxin*
+Enterobacter
 Enterococcus
+Erwinia
+exotoxin*
+Faecalibacterium
+flagell*
+Francisella
+Fusobacterium
+Gardnerella
+Geobacter
+Gram-negative
+Gram-positive
 =H. pylori
 Haemophilus
+Haloferax
 Helicobacter
 Klebsiella
 Lactobacillus
+Lactococcus
 Legionella
+Leptospira
+lipopolysaccharide*
 Listeria
+Methanobrevibacter
+Methanococcus
+Moraxella
 Mycobacterium
 Mycoplasma
+Myxococcus
 Neisseria
+Nitrosomonas
+Nocardia
+peptidoglycan
+plasmid*
+Porphyromonas
+Prevotella
+Prochlorococcus
+Propionibacterium
+Proteus mirabilis
 Pseudomonas
+Pyrococcus
+quorum sensing
+Rhizobium
 Rickettsia
+Roseburia
+Ruminococcus
 Salmonella
+Serratia
 Shigella
+Sinorhizobium
 Staphylococcus
 Streptococcus
 Streptomyces
+Sulfolobus
+Synechococcus
+Thermococcus
 Treponema
+Ureaplasma
+Veillonella
 Vibrio
 Wolbachia
+Xanthomonas
 Yersinia
+Zymomonas
 
 # viruses
 adeno-associated
 adenovirus*
+alphavirus*
 arbovirus*
+arenavirus*
+astrovirus*
+baculovirus*
+bunyavirus*
+calicivirus*
 capsid*
 chickenpox
 chikungunya
+=CMV
+coxsackievirus*
 cytomegalovirus
+=EBV
+enterovirus*
 Epstein-Barr
+filovirus*
 flavivirus*
+giant virus*
 =H1N1
+=H3N2
 =H5N1
 hantavirus*
+=HBV
+=HCV
+herpes simplex
 herpesvirus*
+=HHV-6
+=HSV
+=HTLV
+influenza A
+Japanese encephalitis
+=KSHV
 Lassa
 lentivirus*
 Marburg virus
+=MERS
+mimivirus
 monkeypox
 mpox
 mumps
 norovirus*
+orthomyxovirus*
 papillomavirus*
+paramyxovirus*
+parvovirus*
 phage*
+picornavirus*
+plant virus*
+polyomavirus*
+reovirus*
 respiratory syncytial virus
 retrovirus*
+rhinovirus*
 rotavirus*
 rubella
+=SARS
 tobacco mosaic virus
 varicella
+variola
+viral load
+viral replication
 virion*
+virome
+virus-like particle*
+=VZV
 West Nile
+yellow fever
 
 # parasites and fungi
+Acanthamoeba
 Aedes
+aflatoxin*
+Ancylostoma
 Anopheles
+Ascaris
+Ascomycota
 Aspergillus
+Babesia
+Basidiomycota
+Batrachochytrium
+Blastomyces
+Botrytis
+Brugia
 Candida
+chytrid*
+Clonorchis
+Coccidioides
+Cordyceps
 Cryptococcus
 Cryptosporidium
+Culex
+dermatophyte*
+Dirofilaria
+Echinococcus
+Eimeria
+Entamoeba
+Fasciola
+fungicide*
+Fusarium
 Giardia
+Glomeromycota
+Haemonchus
 helminth*
+Histoplasma
 hookworm*
+hyphae
+Ixodes
 Leishmania
+lichen*
+Loa loa
+Magnaporthe
+Malassezia
+Microsporidia
 mosquito*
+Mucor
+mycelium
+mycorrhiza*
+mycotoxin*
+Naegleria
+Necator
 nematode*
+Onchocerca
+Opisthorchis
+Penicillium
+Phytophthora
 Plasmodium
+Pneumocystis
+Psilocybe
+Puccinia
+Rhizopus
+sandflies
+sandfly
 Schistosoma
 schistosomiasis
+Strongyloides
+Taenia
 tapeworm*
+Theileria
 tick-borne
+Toxocara
 Toxoplasma
+triatomine*
+Trichinella
+Trichoderma
+Trichomonas
+Trichophyton
+Trichuris
 Trypanosoma
+tsetse
+Ustilago
+Wuchereria
 
 # diseases: cancer
 adenocarcinoma*
+angiosarcoma
 cancer*
 carcinoma*
+chemoresistance
+chordoma
+craniopharyngioma
+dysplasia
+ependymoma
 glioblastoma*
 glioma*
+hepatocellular
+hyperplasia
+insulinoma
+leiomyosarcoma
 leukaemia*
 leukemia*
+liposarcoma
 lymphoma*
 melanoma*
+metaplasia
 metasta*
 myeloma*
+neoplasia
+nephroblastoma
 neuroblastoma*
+neuroendocrine
+neurofibroma
+oligodendroglioma
+paraganglioma
+pheochromocytoma
+polyposis
 sarcoma*
+schwannoma
+seminoma
+squamous cell
+thymoma
+Wilms tumor
+Wilms tumour
 
 # diseases: neurological and psychiatric
 =ADHD
@@ -1843,61 +2669,144 @@ warfarin
 
 # treatment and prevention
 adverse event*
+angioplasty
+antiretroviral therapy
+bariatric surgery
+base editing
+bone marrow transplant*
+booster dose*
+bypass surgery
+chemoprevention
 clinical intervention*
+cognitive behavioral therapy
+cognitive behavioural therapy
+combination therapy
 contraindicat*
 dialysis
 dose-response
 double-blind
 drug repurposing
+drug resistance
+early detection
 efficacy
 first-line treatment
+gene editing
+herd immunity
+insulin therapy
 lifestyle intervention*
+maintenance therapy
+monotherapy
+mRNA vaccine*
 number needed to treat
 organ transplant*
+overall survival
+palliative care
 pharmacotherapy
+physiotherapy
 placebo
+pre-exposure prophylaxis
+precision oncology
 primary prevention
+prime editing
+progression-free survival
+prophylaxis
+psychotherapy
 radiotherapy
 randomised controlled trial*
 randomized controlled trial*
+rehabilitation
+remission
 screening program*
 screening programme*
 secondary prevention
 side effect*
+smoking cessation
 standard of care
+stem cell transplant*
+targeted therapy
+transplantation
 treatment effect*
 
 # epidemiology
 absolute risk
 age-standardised
 age-standardized
+alcohol consumption
+attack rate*
 attributable risk
+blood pressure
+=BMI
+body mass index
+case fatality
+case series
 case-control
 cohort studies
 cohort study
 collider bias
+competing risk*
+contact tracing
+Cox model
 cross-sectional study
+cumulative incidence
 =DALY
 =DALYs
+deprivation index
+difference-in-differences
+ecological study
 effect modification
+epidemic curve
+excess mortality
+forest plot*
+funnel plot*
+generalised estimating equation*
+generalized estimating equation*
+health inequalit*
 incidence rate*
+infection fatality
 information bias
 interaction term*
+interrupted time series
+inverse probability weighting
 life expectancy
+log-rank test
+matched controls
+meta-regression
+multilevel model*
+natural experiment*
+nested case-control
+observational studies
+observational study
+outcome measure*
 person-years
+pharmacovigilance
+physical activity
 population attributable fraction
 prevalence
+primary endpoint*
 prospective cohort
+publication bias
 =QALY
 =QALYs
 recall bias
+regression discontinuity
 residual confounding
 retrospective cohort
 reverse causation
+risk prediction
 risk ratio*
+risk score*
+sedentary behavior
+sedentary behaviour
 selection bias
 sensitivity analys*
+smoking status
+social determinants of health
+socioeconomic status
 standardised mortality ratio
+surrogate endpoint*
+target trial emulation
+time-to-event
+waist circumference
 years of life lost
 
 # chemistry and molecules
@@ -2481,35 +3390,69 @@ vector space*
 z-score*
 
 # probability
+almost surely
 Bayes
+Bernoulli
 beta distribution*
 binomial
+Borel
 branching process*
 Brownian motion
+Cauchy distribution
+characteristic function*
+Chebyshev
 chi-square*
 chi-squared
+conditional probabilit*
+convergence in distribution
+copula*
+cumulative distribution
 diffusion approximation
 Dirichlet
+ergodic*
 exponential distribution*
+exponential family
+extreme value theory
 gamma distribution*
 Gaussian
+geometric distribution
+hypergeometric
+Jensen's inequality
+joint distribution*
+large deviation*
 law of large numbers
+Lebesgue
+log-normal
+lognormal
+marginal distribution*
 Markov
+Markov property
 martingale*
 moment generating function*
 Monte Carlo
 multinomial
 negative binomial
 normal distribution*
+Ornstein-Uhlenbeck
 percentile*
 Poisson
 Poisson process*
 probabilit*
+probability density
+probability distribution*
 quantile*
+queueing theory
 random variable*
 random walk*
+renewal process*
+sigma-algebra
+stationary distribution
 stochastic
 stochastic process*
+transition matrix
+uniform distribution
+Weibull
+Wiener process
 
 # statistics
 =AIC
@@ -3206,24 +4149,47 @@ PLOS
 =PNAS
 
 # funders
+Academy of Medical Sciences
+Alzheimer's Association
+Alzheimer's Research UK
+American Cancer Society
+American Heart Association
 =BBSRC
 =BHF
+Breakthrough T1D
 British Heart Foundation
 Cancer Research UK
 Chan Zuckerberg
+=CIHR
 =CRUK
+=DFG
 Diabetes UK
 =EPSRC
 European Research Council
 Gates Foundation
+=HDRUK
+Health Data Research UK
 =HHMI
 Horizon Europe
 Howard Hughes Medical Institute
+=JDRF
+=JSPS
+Kidney Research UK
+Leverhulme Trust
 Medical Research Council
+Michael J. Fox Foundation
 =MRC
 National Institutes of Health
 National Science Foundation
+=NHMRC
 =NIH
 =NIHR
+Novo Nordisk Foundation
+Parkinson's UK
+Royal Society
+Simons Foundation
+Swiss National Science Foundation
 =UKRI
+Versus Arthritis
+Wellcome Leap
 Wellcome Trust
