@@ -90,7 +90,7 @@ python youtube_transcripts.py --channels-file youtube_channels.txt --whisper   #
 python youtube_transcripts.py --channels-file youtube_channels.txt --recheck-off-topic   # after editing the keywords
 ```
 
-Only videos whose transcripts match `keywords_biology.txt` are kept. The `--whisper` run transcribes videos that
+Only videos whose transcripts match `keywords.txt` are kept. The `--whisper` run transcribes videos that
 have no usable captions (it uses the GPU if nothing else does). What happened to each video is listed in
 `ai_training_data\_lectures_meta\<channel>_report.tsv` (kept, off topic, queued for Whisper...).
 
@@ -115,7 +115,7 @@ python data_prep.py --out datasets\bio_v4 --text-root $D `
     --wiki-dir $D\wikipedia --wiki-max-docs 200000 `
     --parquet "$D\web\fineweb-edu\sample\10BT\*.parquet" --parquet-name fineweb --min-score 3 `
     --jsonl "$D\web\pes2o\data\v2\*.json.gz" --jsonl-name pes2o `
-    --include-keywords keywords_biology.txt --keyword-min-distinct 3 `
+    --include-keywords keywords.txt --keyword-min-distinct 3 `
     --tokenizer-weights books=3,articles=3 --near-dup drop --threads 8
 ```
 
@@ -128,7 +128,7 @@ What the options mean:
 | `--wiki-dir ... --wiki-max-docs 200000` | Keep the 200,000 Wikipedia articles that match the keywords best. |
 | `--parquet ... --min-score 3` | FineWeb-Edu web pages with an education score of 3 or more. |
 | `--jsonl ... --jsonl-name pes2o` | Scientific papers from peS2o. |
-| `--include-keywords keywords_biology.txt` | Wikipedia, FineWeb and peS2o documents must match these terms (your own folders are not filtered). |
+| `--include-keywords keywords.txt` | Wikipedia, FineWeb and peS2o documents must match these terms (your own folders are not filtered). |
 | `--keyword-min-distinct 3` | ...with at least 3 different terms. |
 | `--tokenizer-weights books=3,articles=3` | Let books and articles shape the vocabulary more. |
 | `--superbpe` | Optional: a SuperBPE tokenizer, whose tokens can span words ("of the"): about 12% fewer tokens at 16,384 pieces. In a small test (20.5M parameters) it did 3% worse in bits per byte, so it is off by default; see the guide. In run_pipeline.py: `SUPERBPE = True`. |

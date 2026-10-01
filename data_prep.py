@@ -35,10 +35,10 @@ Examples
 --------
     python data_prep.py --out datasets\bio_v1 --md-dir %USERPROFILE%\ai_training_data ^
         --wiki-dir %USERPROFILE%\ai_training_data\wikipedia --wiki-max-docs 100000 ^
-        --include-keywords keywords_biology.txt --keyword-min-distinct 3
+        --include-keywords keywords.txt --keyword-min-distinct 3
 
     python data_prep.py --out datasets\fineweb_bio --parquet "D:\fineweb-edu\*.parquet" ^
-        --parquet-name fineweb --min-score 3 --include-keywords keywords_biology.txt
+        --parquet-name fineweb --min-score 3 --include-keywords keywords.txt
 
     python data_prep.py --out datasets\probe --md-dir %USERPROFILE%\ai_training_data --scan-only
 """
@@ -447,7 +447,7 @@ def stable_unit(*parts):
 # ---------------------------------------------------------------------------
 def read_terms(value):
     """Terms from keyword files (one term per line, # comments) and/or literal
-    terms, comma-separated: "keywords_biology.txt,keywords_extra.txt,CRISPR"."""
+    terms, comma-separated: "keywords.txt,keywords_extra.txt,CRISPR"."""
     if not value:
         return []
     items = [value] if os.path.isfile(value) else [v.strip() for v in value.split(",") if v.strip()]

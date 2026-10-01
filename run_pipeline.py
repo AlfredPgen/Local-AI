@@ -32,7 +32,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 DATA = os.path.join(os.path.expanduser("~"), "ai_training_data")  # the folder with all training text
 DATASET = os.path.join(HERE, "datasets", "bio_all")     # the dataset folder that 'build' creates
 RUN_NAME = "tinyGPT"                                    # checkpoints are <RUN_NAME>.pt and <RUN_NAME>_best.pt
-KEYWORDS = os.path.join(HERE, "keywords_biology.txt")   # topic filter for Wikipedia, FineWeb and peS2o
+KEYWORDS = os.path.join(HERE, "keywords.txt")   # topic filter for Wikipedia, FineWeb and peS2o
 WIKI_MAX_DOCS = 0         # Wikipedia articles kept, best keyword matches first; 0 = all that pass (611,091)
 SUPERBPE = False          # True: SuperBPE tokenizer, with tokens that span words ("of the"); fewer tokens per text
 # -------------------------------------------------------

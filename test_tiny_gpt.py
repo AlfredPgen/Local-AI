@@ -514,7 +514,7 @@ class TestPipeline(unittest.TestCase):
         python = [sum(kw._include.count(t, collections.Counter()).values()) for t in texts]
         self.assertEqual(python, [0, 2, 4, 1, 1, 1, 2])
         self.assertEqual(re2.tolist(), python, "the C++ prefilter must count what the Python filter counts")
-        self.assertGreater(len(data_prep.read_terms(os.path.join(HERE, "keywords_biology.txt") + ",extra term")), 500)
+        self.assertGreater(len(data_prep.read_terms(os.path.join(HERE, "keywords.txt") + ",extra term")), 500)
 
     def test_probe_formats_and_statistics(self):
         path = os.path.join(self.tmp, "probes.tsv")

@@ -379,7 +379,7 @@ def parse_args(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd", required=True)
     d = sub.add_parser("data", help="download and convert the post-training data")
-    d.add_argument("--keywords", default=os.path.join(HERE, "keywords_biology.txt"))
+    d.add_argument("--keywords", default=os.path.join(HERE, "keywords.txt"))
     d.add_argument("--pubmedqa", type=int, default=40_000, help="PubMedQA question-answer pairs")
     d.add_argument("--medmcqa", type=int, default=30_000, help="MedMCQA questions with explanations")
     d.add_argument("--mcq-pairs", type=int, default=10_000, help="preference pairs from MedMCQA and from SciQ each")

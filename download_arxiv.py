@@ -620,7 +620,7 @@ def parse_args(argv=None):
     p.add_argument("--meta", help="folder for the metadata cache, list.tsv and report.tsv (default: _<out name>_meta "
                                   "next to --out, which data_prep --text-root skips)")
     p.add_argument("--sets", default=",".join(DEFAULT_SETS), help="OAI-PMH sets (subject areas), comma-separated")
-    p.add_argument("--keywords", default=os.path.join(HERE, "keywords_biology.txt"))
+    p.add_argument("--keywords", default=os.path.join(HERE, "keywords.txt"))
     p.add_argument("--min-hits", type=int, default=3, help="keyword matches in title + abstract (title counts 3x)")
     p.add_argument("--min-distinct", type=int, default=3, help="different keyword terms needed")
     p.add_argument("--max-papers", type=int, default=0, help="download at most this many (0 = all in the list)")

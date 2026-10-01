@@ -10,7 +10,7 @@ Any data_prep.py option means the same here (they are passed to data_prep's own
 parser, so a data_prep command can be pasted with estimate_dataset.py in front).
 Without data_prep options it uses the usual layout: the folders of
 ai_training_data, Wikipedia (200,000 articles), FineWeb-Edu (score >= 3) and
-peS2o, with keywords_biology.txt (at least 3 different terms) on the web sources.
+peS2o, with keywords.txt (at least 3 different terms) on the web sources.
 
 How: a sample of every source (--sample of the web records, at least 300
 files of each folder) goes through data_prep's real per-document checks:
@@ -61,7 +61,7 @@ def default_prep_args():
     pes2o = os.path.join(ROOT, "web", "pes2o", "data", "v2", "*.json.gz")
     if glob.glob(pes2o):
         args += ["--jsonl", pes2o, "--jsonl-name", "pes2o"]
-    return args + ["--include-keywords", os.path.join(HERE, "keywords_biology.txt"), "--keyword-min-distinct", "3"]
+    return args + ["--include-keywords", os.path.join(HERE, "keywords.txt"), "--keyword-min-distinct", "3"]
 
 
 class Tally:

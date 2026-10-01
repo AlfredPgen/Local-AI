@@ -17,7 +17,7 @@ def _count_terms():
         import sys
         sys.path.insert(0, PROJECT)
         import data_prep
-        return len(data_prep.read_terms(os.path.join(PROJECT, "keywords_biology.txt")))
+        return len(data_prep.read_terms(os.path.join(PROJECT, "keywords.txt")))
     except Exception:  # noqa: BLE001
         return 0
 

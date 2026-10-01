@@ -12,7 +12,7 @@ Workflow
 1. Build a dataset once (text cleaning, keyword filters, dedup, split, tokenizer):
        python data_prep.py --out datasets\bio_v1 --md-dir %USERPROFILE%\ai_training_data ^
            --wiki-dir %USERPROFILE%\ai_training_data\wikipedia --wiki-max-docs 100000 ^
-           --include-keywords keywords_biology.txt --keyword-min-distinct 3
+           --include-keywords keywords.txt --keyword-min-distinct 3
 2. Look at the automatic plan, then train (the time budget measures the real
    speed on this device and picks the largest model the data AND the time allow):
        python tiny_gpt.py --dataset datasets\bio_v1 --plan --time-budget-hours 8

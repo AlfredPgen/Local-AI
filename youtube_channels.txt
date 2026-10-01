@@ -1,5 +1,5 @@
 # Channels for youtube_transcripts.py: one per line (@handle, channel name, or URL). # starts a comment.
-# Only videos that match keywords_biology.txt are kept, so broad channels are fine.
+# Only videos that match keywords.txt are kept, so broad channels are fine.
 # Run:    python youtube_transcripts.py --channels-file youtube_channels.txt
 # Later:  python youtube_transcripts.py --channels-file youtube_channels.txt --whisper
 

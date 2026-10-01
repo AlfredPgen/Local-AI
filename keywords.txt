@@ -1,4 +1,4 @@
-# Include-keyword list for data_prep.py (--include-keywords keywords_biology.txt)
+# Include-keyword list for data_prep.py (--include-keywords keywords.txt)
 #
 # Matching is case-insensitive and whole-word. A trailing * matches any word
 # ending (genom* -> genome, genomic, genomics). A hyphen or space inside a term
@@ -295,7 +295,6 @@ supervised learning
 unsupervised learning
 self-supervised
 representation learning
-convolutional
 recurrent neural
 =LSTM
 autoencoder*
@@ -612,7 +611,6 @@ small molecule*
 =FASTA
 =FASTQ
 =VCF
-=PLINK
 =GATK
 Bioconductor
 single-cell
@@ -2516,3 +2514,786 @@ Schrodinger
 Heisenberg
 Niels Bohr
 
+# ===========================================================================
+# Added 2026-10-01 (fourth batch): nutrients, chemical elements, cell types,
+# arithmetic and special mathematical/statistical operations, Bayesian
+# statistics, computer science and programming (R, Python, C/C++), speciation
+# and evolution, genomics tools and file formats, analysis platforms and
+# companies, scientists in statistical genetics and epidemiology, journals,
+# funders, databases, symptoms, treatment and prevention, epidemiology, GWAS /
+# fine-mapping / colocalisation / MR / PGS / TWAS software, single-cell
+# genomics, genotype calling, imputation and sequencing.
+# Everyday words only in phrases ("addition and subtraction", "Nature
+# Genetics"); terms the matcher would read as one letter (C++) are left out.
+# ===========================================================================
+# --- nutrients ------------------------------------------------------------------
+pantothenate
+ergocalciferol
+menaquinone*
+pyridoxal
+methylcobalamin
+cyanocobalamin
+beta-carotene
+dietary fibre
+dietary fiber
+soluble fibre
+soluble fiber
+whey protein
+casein
+gluten
+lectin*
+phytosterol*
+isoflavone*
+lignan*
+phytate
+oxalate
+glycemic load
+glycaemic load
+maltodextrin
+fructose corn syrup
+saturated fatty acid*
+trace nutrient*
+essential amino acid*
+essential fatty acid*
+recommended daily allowance
+dietary reference intake*
+nutrient density
+# --- chemical elements ---------------------------------------------------------------
+hydrogen
+helium
+lithium
+beryllium
+boron
+nitrogen
+oxygen
+fluorine
+argon
+aluminium
+aluminum
+sulfur
+sulphur
+chlorine
+titanium
+chromium
+cobalt
+arsenic
+bromine
+strontium
+cadmium
+xenon
+uranium
+radium
+plutonium
+gallium
+germanium
+molybdenum
+vanadium
+tungsten
+krypton
+radon
+# --- cell types --------------------------------------------------------------------
+astrocyte*
+oligodendrocyte*
+microglia*
+hepatocyte*
+cardiomyocyte*
+fibroblast*
+endothelial cell*
+epithelial cell*
+erythrocyte*
+red blood cell*
+white blood cell*
+leukocyte*
+lymphocyte*
+monocyte*
+macrophage*
+neutrophil*
+eosinophil*
+basophil*
+platelet*
+megakaryocyte*
+dendritic cell*
+natural killer cell*
+NK cell*
+plasma cell*
+pancreatic beta cell*
+beta-cell*
+osteoblast*
+osteoclast*
+chondrocyte*
+myocyte*
+myoblast*
+podocyte*
+enterocyte*
+goblet cell*
+Paneth
+melanocyte*
+Schwann cell*
+pericyte*
+hematopoietic stem
+haematopoietic stem
+mesenchymal stem
+induced pluripotent
+=iPSC
+=iPSCs
+embryonic stem cell*
+germ cell*
+oocyte*
+spermatocyte*
+spermatozoa
+regulatory T cell*
+=Treg
+=Tregs
+cytotoxic T
+helper T
+memory B cell*
+progenitor cell*
+cell type*
+cell lineage*
+# --- arithmetic and special mathematical / statistical operations --------------------
+arithmetic
+addition and subtraction
+matrix addition
+vector addition
+subtraction
+multiplication
+long division
+integer*
+decimal*
+exponent*
+square root*
+factorial*
+summation
+dot product*
+cross product*
+matrix multiplication
+matrix inverse
+inverse matrix
+transpose
+eigendecomposition
+trace of a matrix
+Kronecker
+Hadamard
+convolution*
+stochastic gradient
+softmax
+sigmoid
+logit
+probit
+log-odds
+z-score*
+standardisation
+standardization
+normalisation
+modulo
+absolute value*
+prime number*
+greatest common divisor
+least common multiple
+permutation*
+binomial coefficient*
+expected value*
+conditional expectation
+law of total probability
+central limit theorem
+Cholesky
+QR decomposition
+singular value decomposition
+=SVD
+numerical integration
+numerical optimisation
+numerical optimization
+# --- Bayesian statistics -----------------------------------------------------------------
+Bayes factor*
+marginal likelihood
+likelihood function*
+posterior distribution*
+prior distribution*
+posterior mean
+posterior predictive
+Bayesian inference
+Bayesian network*
+hierarchical Bayesian
+variational Bayes
+beta-binomial
+spike-and-slab
+horseshoe prior
+importance sampling
+particle filter*
+approximate Bayesian computation
+Bayesian model averaging
+Bayesian hierarchical
+non-informative prior*
+informative prior*
+PyMC
+=JAGS
+WinBUGS
+brms
+=INLA
+Stan model*
+# --- computer science and programming --------------------------------------------------
+data structure*
+hash table*
+linked list*
+binary tree*
+binary search
+recursion
+recursive function*
+time complexity
+computational complexity
+operating system*
+virtual machine*
+Docker
+Kubernetes
+Singularity container*
+Apptainer
+conda environment*
+virtual environment*
+pip install
+version control
+GitHub
+GitLab
+=Git
+command line
+bash script*
+shell script*
+Linux
+Unix
+=SLURM
+job scheduler
+high-performance computing
+=HPC
+parallel computing
+cluster computing
+=API
+=APIs
+=JSON
+=YAML
+=SQL
+SQLite
+PostgreSQL
+regular expression*
+unit testing
+debugging
+debugger
+stack trace
+segmentation fault
+memory leak*
+null pointer
+object-oriented
+function call*
+for loop*
+while loop*
+source code
+compiler*
+compiled language
+interpreted language
+programming language*
+software engineering
+machine code
+# --- R, Python and C/C++ ----------------------------------------------------------------------
+R package*
+=CRAN
+tidyverse
+ggplot2
+dplyr
+data.frame
+RStudio
+Rcpp
+R Markdown
+knitr
+lme4
+glmnet
+NumPy
+SciPy
+sklearn
+Jupyter
+matplotlib
+seaborn
+import pandas
+pandas DataFrame
+Python package*
+Python script*
+list comprehension*
+lambda function*
+Cython
+Numba
+CMake
+Makefile
+=gcc
+=Clang
+=LLVM
+header file*
+template metaprogramming
+std::vector
+Eigen library
+Boost library
+OpenMP
+=MPI
+pthreads
+MATLAB
+Fortran
+=Perl
+# --- speciation and evolution ----------------------------------------------------------------
+allopatric
+sympatric
+parapatric
+peripatric
+ring species
+hybrid speciation
+reproductive barrier*
+Dobzhansky-Muller
+postzygotic
+prezygotic
+hybrid incompatibilit*
+species concept*
+biological species concept
+ecological speciation
+polyploid speciation
+cladogenesis
+anagenesis
+macroevolution
+microevolution
+punctuated equilibrium
+nearly neutral
+Hill-Robertson
+Muller's ratchet
+Red Queen hypothesis
+evolutionary arms race
+inbreeding coefficient
+fixation probabilit*
+mutation-selection balance
+overdominance
+underdominance
+frequency-dependent selection
+meiotic crossover
+chromosomal crossover
+gene conversion
+meiotic drive
+segregation distortion
+transmission ratio distortion
+polygenic adaptation
+soft sweep*
+hard sweep*
+genetic variation
+natural variation
+evolutionary rate*
+# --- genomics tools and file formats --------------------------------------------------------
+PLINK
+PLINK2
+qctool
+=BGEN
+bgzip
+gzip
+tabix
+=VCFs
+=BCF
+bed file*
+bim file*
+fam file*
+bcftools
+samtools
+bedtools
+vcftools
+=BWA
+bowtie2
+HISAT2
+kallisto
+featureCounts
+DESeq2
+edgeR
+limma
+FastQC
+MultiQC
+Trimmomatic
+cutadapt
+Snakemake
+Nextflow
+=BAM
+=CRAM
+SAM file*
+# --- analysis platforms, cohorts and companies ---------------------------------------------
+=UKB-RAP
+UK Biobank Research Analysis Platform
+DNAnexus
+Biobank Japan
+Million Veteran Program
+Estonian Biobank
+All of Us Research Program
+=deCODE
+23andMe
+=GSK
+Genentech
+Merck
+Biogen
+Oxford Nanopore
+10x Genomics
+# --- scientists: statistical genetics and genetic epidemiology -----------------------------
+Jonathan Marchini
+Stephen Burgess
+Davey Smith
+Adam Butterworth
+Claudia Langenberg
+Karsten Suhre
+Alkes Price
+Benjamin Neale
+Mark Daly
+Shaun Purcell
+Peter Donnelly
+Gil McVean
+Simon Myers
+Matthew Stephens
+Chris Wallace
+Hilary Finucane
+Bogdan Pasaniuc
+Nick Patterson
+Po-Ru Loh
+Jian Yang
+Naomi Wray
+Loic Yengo
+Michael Goddard
+Joel Hirschhorn
+David Altshuler
+Goncalo Abecasis
+Michael Boehnke
+Cristen Willer
+Kari Stefansson
+Augustine Kong
+Pak Sham
+Danielle Posthuma
+Patrick Sullivan
+Kenneth Kendler
+Robert Plomin
+Frank Dudbridge
+Nilanjan Chatterjee
+Tim Frayling
+Mark McCarthy
+Ines Barroso
+Inês Barroso
+Eleftheria Zeggini
+Nicole Soranzo
+Richard Durbin
+Ewan Birney
+John Danesh
+Emanuele Di Angelantonio
+Rory Collins
+Cathie Sudlow
+Debbie Lawlor
+Nicholas Timpson
+Gibran Hemani
+Jack Bowden
+Neil Davies
+Cecilia Lindgren
+Michael Holmes
+Zhengming Chen
+Jonathan Pritchard
+Molly Przeworski
+Graham Coop
+Nancy Cox
+Eric Gamazon
+Hae Kyung Im
+# --- journals and preprint servers ------------------------------------------------------------
+Nature Genetics
+Nature Communications
+Nature Medicine
+Nature Methods
+Nature Biotechnology
+Nature Reviews Genetics
+Nature Human Behaviour
+Nature Ecology
+PLOS
+Cell Genomics
+American Journal of Human Genetics
+=AJHG
+Genome Research
+Genome Biology
+Genetic Epidemiology
+International Journal of Epidemiology
+eLife
+bioRxiv
+medRxiv
+arXiv
+Lancet
+=BMJ
+=JAMA
+New England Journal of Medicine
+=NEJM
+=PNAS
+Molecular Biology and Evolution
+Nucleic Acids Research
+Human Molecular Genetics
+European Journal of Human Genetics
+Briefings in Bioinformatics
+Annual Review of Genomics
+Diabetologia
+# --- funders --------------------------------------------------------------------------
+=MRC
+Medical Research Council
+=CRUK
+Cancer Research UK
+Wellcome Trust
+=NIHR
+=NIH
+National Institutes of Health
+=BBSRC
+=EPSRC
+=UKRI
+European Research Council
+Horizon Europe
+Gates Foundation
+Chan Zuckerberg
+British Heart Foundation
+=BHF
+Diabetes UK
+National Science Foundation
+Howard Hughes Medical Institute
+=HHMI
+# --- databases and catalogues -------------------------------------------------------------
+PGS Catalog
+UCSC Genome Browser
+=ENCODE
+Roadmap Epigenomics
+Gene Ontology
+=GO term*
+STRING database
+dbGaP
+European Genome-phenome Archive
+HapMap
+=TOPMed
+OpenGWAS
+Gene Expression Omnibus
+ArrayExpress
+Sequence Read Archive
+RefSeq
+=GENCODE
+=HGNC
+MSigDB
+PharmGKB
+Orphanet
+Human Phenotype Ontology
+=ICD-10
+=SNOMED
+# --- symptoms and clinical signs ----------------------------------------------------------
+symptom*
+asymptomatic
+fever
+cough*
+fatigue
+headache*
+nausea
+vomiting
+diarrhoea
+diarrhea
+dyspnoea
+dyspnea
+shortness of breath
+chest pain
+abdominal pain
+joint pain
+muscle weakness
+seizure*
+memory loss
+loss of appetite
+blurred vision
+tachycardia
+bradycardia
+hypotension
+oedema
+edema
+constipation
+night sweats
+malaise
+dizziness
+skin rash
+comorbidit*
+morbidity
+prognosis
+prognostic
+# --- treatment, prevention and intervention ----------------------------------------------
+treatment effect*
+clinical intervention*
+lifestyle intervention*
+randomised controlled trial*
+randomized controlled trial*
+placebo
+double-blind
+primary prevention
+secondary prevention
+screening programme*
+screening program*
+dose-response
+adverse event*
+side effect*
+number needed to treat
+efficacy
+standard of care
+first-line treatment
+contraindicat*
+pharmacotherapy
+radiotherapy
+dialysis
+organ transplant*
+drug repurposing
+# --- epidemiology -----------------------------------------------------------------------------
+risk ratio*
+absolute risk
+attributable risk
+population attributable fraction
+incidence rate*
+prevalence
+cohort study
+cohort studies
+case-control
+cross-sectional study
+prospective cohort
+retrospective cohort
+person-years
+selection bias
+information bias
+recall bias
+reverse causation
+collider bias
+residual confounding
+effect modification
+interaction term*
+sensitivity analys*
+age-standardised
+age-standardized
+standardised mortality ratio
+life expectancy
+years of life lost
+=DALY
+=DALYs
+=QALY
+=QALYs
+# --- GWAS, fine-mapping, colocalisation, MR, PGS and TWAS software ------------------------------
+=REGENIE
+BOLT-LMM
+=SAIGE
+fastGWA
+=GCTA
+=LDSC
+LD score regression
+LDpred
+LDpred2
+PRS-CS
+PRScs
+lassosum
+PRSice
+SBayesR
+=SuSiE
+susieR
+=FINEMAP
+=CAVIAR
+eCAVIAR
+PolyFun
+=PAINTOR
+=coloc
+HyPrColoc
+moloc
+=SMR
+=HEIDI
+TwoSampleMR
+MendelianRandomization
+MR-Egger
+MR-PRESSO
+weighted median
+inverse-variance weighted
+=MR-Base
+FUSION TWAS
+PrediXcan
+S-PrediXcan
+MetaXcan
+=GWAMA
+MR-MEGA
+=MAGMA
+=FUMA
+LocusZoom
+Haploview
+=SHAPEIT
+Eagle2
+IMPUTE2
+IMPUTE5
+Minimac
+Minimac4
+Michigan Imputation Server
+TOPMed imputation
+DeepVariant
+GLnexus
+# --- single-cell genomics -------------------------------------------------------------------
+snRNA-seq
+single-nucleus
+cell clustering
+cell type annotation
+pseudotime
+trajectory inference
+RNA velocity
+cell atlas
+droplet-based
+unique molecular identifier*
+=UMI
+=UMIs
+doublet*
+ambient RNA
+pseudobulk
+cell-type-specific
+cell state*
+marker gene*
+highly variable gene*
+batch correction
+batch effect*
+Seurat object*
+Seurat package
+Scanpy
+Cell Ranger
+CellRanger
+CITE-seq
+scATAC-seq
+Perturb-seq
+multiome
+# --- genotype calling, imputation and sequencing --------------------------------------------
+genotype calling
+genotype likelihood*
+base quality
+mapping quality
+read depth
+sequencing depth
+sequencing coverage
+coverage depth
+minor allele frequenc*
+=MAF
+INFO score*
+imputation quality
+imputation accuracy
+imputation server*
+genotype call rate*
+SNP call rate*
+genotyping rate
+heterozygosity rate
+sample QC
+variant QC
+liftOver
+GRCh37
+GRCh38
+=hg19
+=hg38
+reference genome*
+read alignment
+paired-end
+short-read
+low-pass sequencing
+low-coverage sequencing
+high-coverage sequencing
+de novo assembly
+genome assembly
+k-mer*
+base calling
+basecalling
+Phred
+PCR duplicate*
+insert size
+variant effect predictor
+=VEP
+ANNOVAR
+=CADD
+PolyPhen

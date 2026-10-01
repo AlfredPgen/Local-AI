@@ -43,7 +43,7 @@ answerer. **e**, tools to inspect, compare, export and use checkpoints.](figures
 | convert_to_markdown.py | Turns PDF, DOCX, PPTX, XLSX, CSV, HTML, code and GWAS summary statistics into Markdown, sorted by type |
 | gpu_check.py | GPU readings, a load test and a training benchmark; refuses to run while the GPU is busy |
 | test_tiny_gpt.py | 18 automated tests that run on the CPU |
-| keywords_biology.txt | 2,385 topic terms for the keyword filter |
+| keywords.txt | 2,385 topic terms for the keyword filter |
 | probes_biology.tsv | The fact benchmark: 336 questions in 16 categories, with near-miss wrong answers |
 | calibrate_probes.py | Sets the benchmark's difficulty labels from how open reference models score it |
 | finetune_examples/ | Format templates: 20 SFT examples and 12 DPO pairs |
@@ -629,7 +629,7 @@ are never keyword-filtered.
 
 **The keyword list:**
 
-- keywords_biology.txt has 2,385 terms. It covers molecular and cell biology, genetics and genomics, evolution and
+- keywords.txt has 2,385 terms. It covers molecular and cell biology, genetics and genomics, evolution and
   phylogenetics, statistics and mathematics, machine learning, medicine and specific diseases, drugs and other
   chemicals, nutrition and metabolism, enzymes and other proteins, gene symbols, species and microbes, molecular
   structure and 3D modelling and rendering, and the names of well-known scientists.
@@ -780,7 +780,7 @@ python data_prep.py --out datasets\bio_v3 --text-root $D `
     --parquet "$D\web\fineweb-edu\sample\10BT\*.parquet" `
     --parquet-name fineweb --min-score 3 `
     --jsonl "$D\web\pes2o\data\v2\*.json.gz" --jsonl-name pes2o `
-    --include-keywords keywords_biology.txt --keyword-min-distinct 3 `
+    --include-keywords keywords.txt --keyword-min-distinct 3 `
     --tokenizer-weights books=3,articles=3
 ```
 
@@ -832,7 +832,7 @@ first, the transcript comes from:
    no other job does, and moves to the CPU at once if a training run starts. On the CPU (small.en, 4 threads) it
    runs about 4 times faster than real time.
 
-- **On topic only:** a transcript is kept if it matches keywords_biology.txt at least 10 times, with 3 different
+- **On topic only:** a transcript is kept if it matches keywords.txt at least 10 times, with 3 different
   terms and at least 4 matches per 1,000 words. The density rule matters because channels repeat their theme in
   every intro: every StatQuest video mentions "statistics", "machine learning" and "neural networks", which alone
   passed the looser web-text test. Whisper is used only for videos whose title or description mentions a keyword.

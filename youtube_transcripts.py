@@ -18,7 +18,7 @@ transcript of each comes from, in this order:
      GPU is idle (never next to a training run), otherwise on 4 CPU threads.
 
 Only on-topic videos are kept: the title and transcript must match the terms in
-keywords_biology.txt (data_prep.py's keyword test) at least 10 times, with at
+keywords.txt (data_prep.py's keyword test) at least 10 times, with at
 least 3 different terms and at least 4 matches per 1,000 words, so a channel's
 recurring intro alone does not qualify (--keywords none keeps everything). A video
 that needs Whisper is transcribed only if its title or description mentions a
@@ -55,7 +55,7 @@ import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_OUT = os.path.join(os.path.expanduser("~"), "ai_training_data", "lectures")
-DEFAULT_KEYWORDS = os.path.join(HERE, "keywords_biology.txt")
+DEFAULT_KEYWORDS = os.path.join(HERE, "keywords.txt")
 FINAL = {"ok", "not_english", "too_short", "unavailable", "not_cc", "empty", "live", "off_topic"}
 TSV_COLUMNS = ["video_id", "status", "source", "title", "date", "duration_s", "words", "keyword_hits", "licence",
                "file"]
