@@ -36,7 +36,6 @@ import html
 import math
 import os
 import re
-import shutil
 import subprocess
 import sys
 import textwrap
@@ -1209,27 +1208,10 @@ def push_dashboard(png, ck):
         ck_dir = os.path.normcase(os.path.dirname(os.path.abspath(ck.path)))
         if os.path.commonpath([root, ck_dir]) != root:
             return
-        dest_dir = os.path.join(top.stdout.strip(), "dashboards")
-        os.makedirs(dest_dir, exist_ok=True)
-        dest = os.path.join(dest_dir, os.path.basename(png))
-        if os.path.abspath(dest) != os.path.abspath(png):
-            shutil.copy2(png, dest)
-        rel = os.path.relpath(dest, top.stdout.strip()).replace("\\", "/")
-        _git("add", "--", rel)
-        if _git("diff", "--cached", "--quiet", "--", rel).returncode == 0:
-            print(f"Dashboard unchanged since the last push: {rel}")
-            return
+        rel = "dashboards/" + os.path.basename(png)
         step = ck.obj.get("step", "?") if isinstance(ck.obj, dict) else "?"
-        commit = _git("commit", "-q", "-m", f"Dashboard: {os.path.basename(ck.path)} at step {step}", "--", rel)
-        if commit.returncode != 0:
-            print(f"WARNING: could not commit {rel}: {(commit.stderr or commit.stdout).strip()[:200]}")
-            return
-        push = _git("push", "-q", "origin", "HEAD")
-        if push.returncode != 0:
-            print(f"WARNING: committed {rel} but could not push (it goes up with the next push): "
-                  f"{push.stderr.strip()[:200]}")
-            return
-        print(f"Pushed dashboard to GitHub: {rel}")
+        status = tiny_gpt.publish_to_github(rel, f"Dashboard: {os.path.basename(ck.path)} at step {step}", src=png)
+        print(f"Dashboard on GitHub ({rel}): {status}")
     except (OSError, subprocess.SubprocessError, ValueError) as exc:  # no git, timeout, other drive...
         print(f"WARNING: dashboard not pushed ({type(exc).__name__}: {exc})")
 

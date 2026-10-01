@@ -2757,6 +2757,61 @@ EXPERIMENT_COLUMNS = ["time", "event", "name", "status", "step", "total_steps", 
                       "run_hours", "energy_kwh", "co2e_kg", "cost_gbp", "checkpoint", "notes"]
 
 
+def publish_to_github(rel, message, content=None, src=None, wait=True):
+    """Put one file into this repository at `rel` (text `content`, or a copy of
+    `src`), commit only that file and push. wait=False pushes in the background,
+    so a run can end at once. Returns a short status; never raises."""
+    try:
+        top = subprocess.run(["git", "-C", HERE, "rev-parse", "--show-toplevel"], capture_output=True, text=True,
+                             timeout=60)
+        if top.returncode != 0:
+            return "not in a git repository"
+        root = top.stdout.strip()
+        dest = os.path.join(root, rel)
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
+        if content is not None:
+            with open(dest + ".tmp", "w", encoding="utf-8", newline="") as handle:
+                handle.write(content)
+            os.replace(dest + ".tmp", dest)
+        elif os.path.abspath(src) != os.path.abspath(dest):
+            import shutil
+            shutil.copy2(src, dest)
+
+        def git(*args):
+            return subprocess.run(["git", "-C", root, *args], capture_output=True, text=True, timeout=300)
+
+        git("add", "--", rel)
+        if git("diff", "--cached", "--quiet", "--", rel).returncode == 0:
+            return "unchanged since the last push"
+        commit = git("commit", "-q", "-m", message, "--", rel)
+        if commit.returncode != 0:
+            return "not committed: " + (commit.stderr or commit.stdout).strip()[:200]
+        if not wait:
+            flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+            subprocess.Popen(["git", "-C", root, "push", "-q", "origin", "HEAD"], stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL, creationflags=flags)
+            return "committed; pushing in the background"
+        push = git("push", "-q", "origin", "HEAD")
+        if push.returncode != 0:
+            return "committed but not pushed (it goes up with the next push): " + push.stderr.strip()[:200]
+        return "pushed"
+    except (OSError, subprocess.SubprocessError, ValueError) as exc:
+        return f"not published ({type(exc).__name__}: {exc})"
+
+
+def publish_experiments(path, row):
+    """The experiments table of this folder's runs, on GitHub as results/experiments.csv,
+    with the home folder shown as ~ (the local file keeps full paths)."""
+    with open(path, encoding="utf-8-sig") as handle:
+        text = handle.read()
+    home = os.path.expanduser("~")
+    for variant in {home, home.replace("\\", "/")}:
+        text = re.sub(re.escape(variant), "~", text, flags=re.IGNORECASE)
+    what = " ".join(str(row.get(k)) for k in ("event", "name", "status") if row.get(k))
+    status = publish_to_github("results/experiments.csv", f"Experiments: {what}", content=text, wait=False)
+    print(f"experiments.csv on GitHub (results/experiments.csv): {status}")
+
+
 def record_experiment(out_dir, row):
     """Append one row to <out_dir>/experiments.csv (opens in Excel): a
     permanent record of every run, benchmark and comparison."""
@@ -2796,6 +2851,9 @@ def record_experiment(out_dir, row):
             writer.writerow({"time": now_iso(), **{k: v for k, v in row.items() if v is not None}})
     except PermissionError:
         print(f"Note: {path} is open in another program (Excel?); this row was not recorded: {row}")
+        return
+    if os.path.normcase(os.path.abspath(out_dir)) == os.path.normcase(HERE):  # this folder's runs, not test runs
+        publish_experiments(path, row)
 
 
 def _per_source(ev):
