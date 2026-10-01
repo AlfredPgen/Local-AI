@@ -26,3 +26,6 @@ __pycache__/
 log.txt
 posttrain_data/
 logs/
+
+# dashboards that view_pt.py publishes (the copies next to checkpoints stay ignored)
+!dashboards/*_dashboard.png

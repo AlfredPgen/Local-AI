@@ -36,6 +36,8 @@ import html
 import math
 import os
 import re
+import shutil
+import subprocess
 import sys
 import textwrap
 import warnings
@@ -71,6 +73,9 @@ def parse_args():
     p.add_argument("--plot", action="store_true", help="write the dashboard PNG")
     p.add_argument("--html", action="store_true", help="write a hoverable token-embedding explorer (HTML)")
     p.add_argument("--out", help="dashboard path (default <checkpoint>_dashboard.png, replaced each run)")
+    p.add_argument("--no-push", action="store_true",
+                   help="do not commit and push the dashboard to GitHub (done automatically for checkpoints in "
+                        "this repository's folder)")
     p.add_argument("--dpi", type=int, default=140)
     p.add_argument("--dataset", help="dataset folder for forward-pass panels (default: the one in the checkpoint)")
     p.add_argument("--eval-text", help="plain-text file for forward-pass panels when no dataset is available")
@@ -605,7 +610,8 @@ def create_dashboard(ck, args):
                 ax.set_title(title, loc="left")
         except Exception as exc:  # noqa: BLE001 - one broken panel must not kill the dashboard
             ax.cla()
-            message(ax, f"panel failed: {type(exc).__name__}: {str(exc)[:120]}", title)
+            text = str(exc).replace(os.path.expanduser("~"), "~")  # the dashboard may be published
+            message(ax, f"panel failed: {type(exc).__name__}: {text[:120]}", title)
             print(f"WARNING: dashboard panel '{title}' failed: {type(exc).__name__}: {exc}")
 
     o = ck.obj if isinstance(ck.obj, dict) else {}
@@ -1186,6 +1192,48 @@ def panel_adam(ax, fig, ck, cmap):
 # ---------------------------------------------------------------------------
 # HTML embedding explorer (hover labels)
 # ---------------------------------------------------------------------------
+def _git(*args):
+    return subprocess.run(["git", "-C", HERE, *args], capture_output=True, text=True, timeout=300)
+
+
+def push_dashboard(png, ck):
+    """Copy the dashboard to dashboards/ in this repository, commit only that file
+    and push it, for checkpoints in this repository's folder (test runs and other
+    folders are left alone). A git problem is reported, never fatal; a commit that
+    could not be pushed goes up with the next push."""
+    try:
+        top = _git("rev-parse", "--show-toplevel")
+        if top.returncode != 0:
+            return
+        root = os.path.normcase(os.path.abspath(top.stdout.strip()))
+        ck_dir = os.path.normcase(os.path.dirname(os.path.abspath(ck.path)))
+        if os.path.commonpath([root, ck_dir]) != root:
+            return
+        dest_dir = os.path.join(top.stdout.strip(), "dashboards")
+        os.makedirs(dest_dir, exist_ok=True)
+        dest = os.path.join(dest_dir, os.path.basename(png))
+        if os.path.abspath(dest) != os.path.abspath(png):
+            shutil.copy2(png, dest)
+        rel = os.path.relpath(dest, top.stdout.strip()).replace("\\", "/")
+        _git("add", "--", rel)
+        if _git("diff", "--cached", "--quiet", "--", rel).returncode == 0:
+            print(f"Dashboard unchanged since the last push: {rel}")
+            return
+        step = ck.obj.get("step", "?") if isinstance(ck.obj, dict) else "?"
+        commit = _git("commit", "-q", "-m", f"Dashboard: {os.path.basename(ck.path)} at step {step}", "--", rel)
+        if commit.returncode != 0:
+            print(f"WARNING: could not commit {rel}: {(commit.stderr or commit.stdout).strip()[:200]}")
+            return
+        push = _git("push", "-q", "origin", "HEAD")
+        if push.returncode != 0:
+            print(f"WARNING: committed {rel} but could not push (it goes up with the next push): "
+                  f"{push.stderr.strip()[:200]}")
+            return
+        print(f"Pushed dashboard to GitHub: {rel}")
+    except (OSError, subprocess.SubprocessError, ValueError) as exc:  # no git, timeout, other drive...
+        print(f"WARNING: dashboard not pushed ({type(exc).__name__}: {exc})")
+
+
 def write_embedding_html(ck, out_path):
     if ck.embedding is None or ck.tok is None:
         print("--html needs token embeddings and a tokenizer.")
@@ -1271,7 +1319,9 @@ def main():
         for i in order:
             print(f"  {i:6d} {pieces[i]!r:28.28s} {sims[i].item():.3f}")
     if args.plot:
-        create_dashboard(ck, args)
+        out = create_dashboard(ck, args)
+        if out and not args.no_push:
+            push_dashboard(out, ck)
     if args.html:
         write_embedding_html(ck, os.path.splitext(args.out)[0] + "_embeddings.html" if args.out
                              else output_name(ck, "embeddings", ".html"))
