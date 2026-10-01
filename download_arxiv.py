@@ -38,6 +38,9 @@ is recorded in report.tsv.
 Needs pandoc (pypandoc_binary, or pandoc on PATH) and, for the PDF fallback,
 pymupdf4llm.
 
+Pacing: a random pause of --wait seconds (default 5-60) before each paper, on
+top of the 3-second minimum; about 110 papers an hour with the default.
+
 Example (everything the default subject areas offer, best matches first):
     python download_arxiv.py --out %USERPROFILE%\ai_training_data\arxiv
 """
@@ -621,6 +624,8 @@ def parse_args(argv=None):
     p.add_argument("--min-hits", type=int, default=3, help="keyword matches in title + abstract (title counts 3x)")
     p.add_argument("--min-distinct", type=int, default=3, help="different keyword terms needed")
     p.add_argument("--max-papers", type=int, default=0, help="download at most this many (0 = all in the list)")
+    p.add_argument("--wait", default="5-60", help="random pause in seconds before each paper, MIN-MAX (default "
+                                                  "5-60; 0 = only arXiv's 3 s minimum between requests)")
     p.add_argument("--min-body-chars", type=int, default=3000, help="skip papers whose text is shorter")
     p.add_argument("--rebuild-list", action="store_true", help="select again from the cached metadata (after "
                                                                 "changing the keywords or thresholds)")
@@ -629,6 +634,13 @@ def parse_args(argv=None):
     args.sets = [s.strip() for s in args.sets.split(",") if s.strip()]
     if args.max_papers < 0:
         p.error("--max-papers must be >= 0")
+    try:
+        low, _, high = args.wait.partition("-")
+        args.wait = (float(low), float(high or low))
+    except ValueError:
+        p.error("--wait must be MIN-MAX seconds, e.g. 5-60")
+    if not 0 <= args.wait[0] <= args.wait[1] <= 3600:
+        p.error("--wait must be MIN-MAX with 0 <= MIN <= MAX <= 3600")
     args.out = os.path.abspath(args.out)
     args.meta = os.path.abspath(args.meta or os.path.join(os.path.dirname(args.out),
                                                           f"_{os.path.basename(args.out)}_meta"))
@@ -675,9 +687,11 @@ def main(argv=None):
     todo = [r for r in rows if r["id"].replace("/", "_") not in have and done.get(r["id"]) not in FINAL]
     if args.max_papers:
         todo = todo[:max(0, args.max_papers - len([1 for r in rows if done.get(r["id"]) == "ok"]))]
+    per_paper = max(MIN_REQUEST_GAP, sum(args.wait) / 2)
     print(f"{len(rows) - len(todo):,} papers done or not wanted; fetching {len(todo):,} into {args.out} "
-          f"(one request every {MIN_REQUEST_GAP:.0f} s: about {len(todo) * MIN_REQUEST_GAP / 86400:.1f} days)",
-          flush=True)
+          f"(a random {args.wait[0]:g}-{args.wait[1]:g} s pause before each paper: about {3600 / per_paper:,.0f} "
+          f"papers an hour, {len(todo) * per_paper / 86400:,.0f} days for all)", flush=True)
+    pause = random.Random()  # not seeded: the pauses should not repeat from run to run
     new_report = not os.path.isfile(report_path)
     counts, t0, n = {}, time.time(), 0
     with open(report_path, "a", encoding="utf-8", newline="\n") as report, \
@@ -706,6 +720,8 @@ def main(argv=None):
         pending = {}
         try:
             for row in todo:
+                if args.wait[1] > 0:
+                    time.sleep(pause.uniform(*args.wait))
                 blob = None
                 try:
                     blob = http_get(EPRINT_URL.format(row["id"]))
