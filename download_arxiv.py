@@ -181,17 +181,27 @@ def _window_end(start, days=30):
     return min(end, datetime.date.today()).isoformat()
 
 
-def harvest(set_spec, cache_dir):
+def harvest(set_spec, cache_dir, update=False):
     """Append the set's records to <cache>/<set>.jsonl.gz, page by page; a
     progress file lets a rerun continue (or restart the set if arXiv no longer
-    accepts the saved position). Returns the number of records written."""
+    accepts the saved position). With update=True a finished set is extended
+    with the papers added or changed since its last harvest (from 3 days before
+    it, so nothing at the boundary is missed; papers seen twice are removed
+    later). Returns the number of records written."""
     base = os.path.join(cache_dir, _set_file(set_spec))
     state_path = base + ".state.json"
     state = {"token": None, "pages": 0, "records": 0, "complete": False}
     if os.path.isfile(state_path):
         with open(state_path, encoding="utf-8") as handle:
             state.update(json.load(handle))
-    if state["complete"]:
+    if state["complete"] and update:
+        # sets finished before this field existed: the state file was last written when the harvest ended
+        since = state.get("harvested_until") or datetime.date.fromtimestamp(os.path.getmtime(state_path)).isoformat()
+        start = (datetime.date.fromisoformat(since) - datetime.timedelta(days=3)).isoformat()
+        print(f"  [{set_spec}] cached: {state['records']:,} records; adding papers new or changed since {start}",
+              flush=True)
+        state.update(token=None, complete=False, **{"from": start})
+    elif state["complete"]:
         print(f"  [{set_spec}] cached: {state['records']:,} records")
         return state["records"]
     if not state["token"] and not state["pages"] and os.path.exists(base + ".jsonl.gz"):
@@ -240,6 +250,8 @@ def harvest(set_spec, cache_dir):
             if end < datetime.date.today().isoformat():
                 state["from"] = (datetime.date.fromisoformat(end) + datetime.timedelta(days=1)).isoformat()
                 state["complete"] = False
+        if state["complete"]:
+            state["harvested_until"] = datetime.date.today().isoformat()
         with open(state_path + ".part", "w", encoding="utf-8") as handle:
             json.dump(state, handle)
         os.replace(state_path + ".part", state_path)
@@ -629,6 +641,8 @@ def parse_args(argv=None):
     p.add_argument("--min-body-chars", type=int, default=3000, help="skip papers whose text is shorter")
     p.add_argument("--rebuild-list", action="store_true", help="select again from the cached metadata (after "
                                                                 "changing the keywords or thresholds)")
+    p.add_argument("--update", action="store_true",
+                   help="also fetch the papers added to arXiv since the last harvest, then select again")
     p.add_argument("--list-only", action="store_true", help="harvest and select, then stop")
     args = p.parse_args(argv)
     args.sets = [s.strip() for s in args.sets.split(",") if s.strip()]
@@ -641,7 +655,10 @@ def parse_args(argv=None):
         p.error("--wait must be MIN-MAX seconds, e.g. 5-60")
     if not 0 <= args.wait[0] <= args.wait[1] <= 3600:
         p.error("--wait must be MIN-MAX with 0 <= MIN <= MAX <= 3600")
-    args.out = os.path.abspath(args.out)
+    # %USERPROFILE% / $HOME / ~ are expanded here too: PowerShell leaves %VAR% as it is
+    args.out = os.path.abspath(os.path.expanduser(os.path.expandvars(args.out)))
+    if args.meta:
+        args.meta = os.path.expanduser(os.path.expandvars(args.meta))
     args.meta = os.path.abspath(args.meta or os.path.join(os.path.dirname(args.out),
                                                           f"_{os.path.basename(args.out)}_meta"))
     return args
@@ -666,8 +683,8 @@ def main(argv=None):
     for set_spec in args.sets:
         state = os.path.join(cache, _set_file(set_spec) + ".state.json")
         was_complete = os.path.isfile(state) and json.load(open(state, encoding="utf-8")).get("complete")
-        harvest(set_spec, cache)
-        fresh |= not was_complete
+        harvest(set_spec, cache, update=args.update)
+        fresh |= not was_complete or args.update
     if fresh or args.rebuild_list or not os.path.isfile(list_path):
         rows = build_list(cache, args.sets, args.keywords, args.min_hits, args.min_distinct, list_path)
     else:
