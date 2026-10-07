@@ -63,7 +63,6 @@ import tarfile
 import tempfile
 import threading
 import time
-import types
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -79,6 +78,11 @@ MAX_DOWNLOAD = 60 << 20  # e-print or PDF bytes; a larger source falls back to t
 MAX_UNPACKED = 300 << 20
 MAX_TEX_FILE = 5 << 20
 PANDOC_SECONDS = 90
+PDF_SECONDS = 180  # a PDF conversion that takes longer (huge or awkward PDF) is stopped and the paper skipped
+_PDF_CHILD = (
+    "import sys, types; import convert_to_markdown as c; "
+    "t = c.convert_pdf(sys.argv[1], types.SimpleNamespace(extract_images=False, out=None)); "
+    "open(sys.argv[2], 'w', encoding='utf-8').write(t)")
 # subject areas (OAI-PMH sets) and their priority groups
 DEFAULT_SETS = ["q-bio", "physics:physics:bio-ph", "stat", "cs:cs:AI", "cs:cs:LG", "cs:cs:CL", "cs:cs:CV",
                 "cs:cs:NE", "cs:cs:MA", "cs:cs:IR", "math"]
@@ -99,7 +103,7 @@ _NET_LOCK = threading.Lock()
 _LAST_START = [0.0]
 
 
-def http_get(url, limit=MAX_DOWNLOAD, tries=6, timeout=300):
+def http_get(url, limit=MAX_DOWNLOAD, tries=4, timeout=60):
     """Bytes of url; None on 404 (or when the body exceeds `limit`, as
     'too_large'). Server busy (503 with Retry-After), rate limits and network
     failures are retried with backoff."""
@@ -491,7 +495,6 @@ def run_pandoc(tex, pandoc):
 
 
 sys.path.insert(0, HERE)
-import convert_to_markdown as ctm  # noqa: E402 - at start, so a running job survives files being moved
 import data_prep as dp  # noqa: E402
 from download_pmc import EMAIL_RE, SKIP_SECTION_RE, safe_name  # noqa: E402
 
@@ -547,11 +550,20 @@ def clean_markdown(body, title, abstract):
 
 
 def pdf_markdown(pdf_bytes):
+    """Markdown of a PDF, converted in a child process that is stopped after
+    PDF_SECONDS (raises subprocess.TimeoutExpired): one pathological PDF must not
+    hold up the whole download."""
     with tempfile.TemporaryDirectory(prefix="arxiv_pdf_") as tmp:
-        path = os.path.join(tmp, "paper.pdf")
+        path, out = os.path.join(tmp, "paper.pdf"), os.path.join(tmp, "paper.md")
         with open(path, "wb") as handle:
             handle.write(pdf_bytes)
-        text = ctm.convert_pdf(path, types.SimpleNamespace(extract_images=False, out=None))
+        done = subprocess.run([sys.executable, "-c", _PDF_CHILD, path, out], cwd=HERE, capture_output=True,
+                              timeout=PDF_SECONDS)
+        if done.returncode != 0 or not os.path.isfile(out):
+            err = done.stderr.decode("utf-8", "replace").strip().splitlines()
+            raise RuntimeError(err[-1][:120] if err else f"PDF converter exit code {done.returncode}")
+        with open(out, encoding="utf-8") as handle:
+            text = handle.read()
     text = EMAIL_RE.sub("[email]", text.replace("\r\n", "\n"))
     return re.sub(r"\n{3,}", "\n\n", text).strip() + "\n"
 
@@ -587,6 +599,8 @@ def convert_paper(row, blob, out_dir, min_body, pandoc):
         try:
             md = pdf_markdown(pdf)
             method = "pdf" if not method or method == "pdf_only" else f"pdf ({method})"
+        except subprocess.TimeoutExpired:
+            return {**base, "status": "no_text", "method": f"pdf took over {PDF_SECONDS} s"}
         except Exception as exc:  # noqa: BLE001 - a damaged PDF: recorded, not fatal
             return {**base, "status": "no_text", "method": f"pdf failed: {type(exc).__name__}"}
     if len(md) < min_body:
