@@ -105,16 +105,16 @@ _LAST_START = [0.0]
 
 def http_get(url, limit=MAX_DOWNLOAD, tries=4, timeout=60):
     """Bytes of url; None on 404 (or when the body exceeds `limit`, as
-    'too_large'). Server busy (503 with Retry-After), rate limits and network
-    failures are retried with backoff."""
-    delay = 5.0
-    for attempt in range(tries):
+    'too_large'). Network failures and server errors are retried with backoff.
+    "Too many requests" (429) and "busy" (503) pause ALL requests, not just
+    this one, for Retry-After or 1, 2, 4 ... 10 minutes, up to 8 times."""
+    delay, slow_down, attempt = 5.0, 0, 0
+    while True:
         with _NET_LOCK:
             pause = _LAST_START[0] + MIN_REQUEST_GAP - time.monotonic()
             if pause > 0:
                 time.sleep(pause)
             _LAST_START[0] = time.monotonic()
-            retry_after = None
             try:
                 request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
                 with urllib.request.urlopen(request, timeout=timeout) as response:
@@ -131,18 +131,27 @@ def http_get(url, limit=MAX_DOWNLOAD, tries=4, timeout=60):
             except urllib.error.HTTPError as exc:
                 if exc.code == 404:
                     return None
-                if exc.code not in (429, 500, 502, 503, 504) or attempt == tries - 1:
+                if exc.code in (429, 503) and slow_down < 8:
+                    try:
+                        wait = float(exc.headers.get("Retry-After") or 0)
+                    except ValueError:
+                        wait = 0.0
+                    wait = min(max(wait, 60.0 * 2 ** slow_down), 600.0)
+                    slow_down += 1
+                    # every thread waits: the next request may start only after the pause
+                    _LAST_START[0] = time.monotonic() + wait - MIN_REQUEST_GAP
+                    print(f"  arXiv asks to slow down ({exc.code}); pausing all requests for {wait:.0f} s", flush=True)
+                    continue
+                attempt += 1
+                if exc.code not in (500, 502, 504) or attempt >= tries:
                     raise
-                try:
-                    retry_after = float(exc.headers.get("Retry-After") or 0)
-                except ValueError:
-                    retry_after = None
             except (urllib.error.URLError, TimeoutError, ConnectionError, http.client.HTTPException, OSError):
-                if attempt == tries - 1:
+                attempt += 1
+                if attempt >= tries:
                     raise
-        time.sleep(min(retry_after, 600) if retry_after else delay + random.random())
+        time.sleep(delay + random.random())
         delay = min(delay * 2, 300)
-    return None
+
 
 
 # ---------------------------------------------------------------------------
