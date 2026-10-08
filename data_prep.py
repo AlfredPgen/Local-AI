@@ -2394,6 +2394,16 @@ def _prepare(args, state=None):
     # ------------------------------------------------------------------
     # Leakage audit (sampled word 13-grams, train vs val), after the dataset is complete
     # ------------------------------------------------------------------
+    tok_dist = None
+    try:  # informational, like the leakage audit: a failure must not cost the finished dataset
+        t_dist = time.time()
+        tok_dist = _token_distribution(out, tok)
+        print(f"\nToken use on the training data ({time.time() - t_dist:,.0f} s; every piece in token_counts.tsv):\n  "
+              + "\n  ".join(_distribution_lines(tok_dist)), flush=True)
+    except SystemExit:
+        raise
+    except BaseException as exc:  # noqa: BLE001 - Ctrl+C included: it only skips this summary
+        print(f"Token distribution skipped ({type(exc).__name__}: {exc}).", flush=True)
     leakage = []
     if args.leakage_check == "on":
         try:  # an informational check: its failure or a Ctrl+C must not throw away a finished dataset
@@ -2408,6 +2418,7 @@ def _prepare(args, state=None):
             notes.append(f"The leakage audit {what} and was skipped.")
 
     tok_stats = _tokenizer_stats(tok, docs, split_of, doc_tokens)
+    tok_stats["distribution"] = tok_dist
     _write_report(out, args, sources, ledger, duplicates, removed_lines, line_examples, keyword_totals,
                   manifest, tok_stats, forced_train, leakage, tok, t_start, notes=notes)
     _cleanup(work, args.keep_work)
@@ -2420,6 +2431,7 @@ def _prepare(args, state=None):
 
 LOCK_NAME = "_build.lock"
 _OUTPUT_NAMES = {"_work", "tokenizer.model", "report.md", "docs.tsv", "duplicates.tsv", "boilerplate.tsv",
+                 "token_counts.tsv",
                  "keyword_hits.tsv", "leakage.tsv", "manifest.json.tmp", "docs.tsv.tmp", "report.md.tmp", LOCK_NAME}
 
 
@@ -2843,6 +2855,56 @@ def superbpe_extend(proto, corpus, extra, max_words=4, sample_tokens=20_000_000,
     return out, info
 
 
+def _token_distribution(out, tok, top=30, sample_tokens=40):
+    """How the vocabulary is used on the finished training token files: the most
+    frequent pieces, how many pieces cover 50/90/99% of all tokens, unused and
+    rare pieces, token share by piece type, the longest pieces, and the first
+    tokens of each source exactly as the model sees them. Also writes
+    token_counts.tsv (every piece with its count) for plots."""
+    _, arrays = open_token_files(out, verify=False)
+    counts = np.zeros(tok.vocab_size, dtype=np.int64)
+    samples = {}
+    for name, arr in arrays["train"].items():
+        for s in range(0, len(arr), 1 << 26):  # 64M tokens at a time: bounded memory on any dataset size
+            counts += np.bincount(np.asarray(arr[s:s + (1 << 26)]), minlength=tok.vocab_size)[:tok.vocab_size]
+        samples[name] = [tok.piece(int(i)) for i in np.asarray(arr[:sample_tokens])]
+    total = int(counts.sum())
+    order = np.argsort(-counts, kind="stable")
+    cum = np.cumsum(counts[order]) / max(total, 1)
+    cover = {q: int(min(np.searchsorted(cum, q / 100) + 1, tok.vocab_size)) for q in (50, 90, 99)}
+    cats = [token_category(tok, i) for i in range(tok.vocab_size)]
+    by_cat = collections.Counter()
+    for i, c in enumerate(counts):
+        by_cat[cats[i]] += int(c)
+    words = [i for i in range(tok.vocab_size) if cats[i] not in ("special", "byte fallback", "whitespace/newline")]
+    longest = sorted(words, key=lambda i: (-len(tok.piece(i).replace("\u2581", "")), i))[:12]
+    with open(os.path.join(out, "token_counts.tsv"), "w", encoding="utf-8", newline="\n") as handle:
+        handle.write("id\tpiece\ttype\tcount\tshare\n")
+        for i in order:
+            handle.write(f"{int(i)}\t{tok.piece(int(i))!r}\t{cats[i]}\t{int(counts[i])}\t"
+                         f"{counts[i] / max(total, 1):.3e}\n")
+    return {"total": total, "vocab": tok.vocab_size, "cover": cover, "unused": int((counts == 0).sum()),
+            "rare": int(((counts > 0) & (counts < 100)).sum()),
+            "top": [(tok.piece(int(i)), int(counts[i]), counts[i] / max(total, 1)) for i in order[:top]],
+            "by_type": {k: v / max(total, 1) for k, v in by_cat.most_common()},
+            "longest": [(tok.piece(i), int(counts[i])) for i in longest], "samples": samples}
+
+
+def _distribution_lines(d):
+    """Plain-text summary of _token_distribution, for the terminal and report.md."""
+    v = d["vocab"]
+    lines = [f"{d['total']:,} training tokens: {d['cover'][50]:,} pieces ({d['cover'][50] / v:.1%} of the "
+             f"vocabulary) make up half of them, {d['cover'][90]:,} make up 90% and {d['cover'][99]:,} make up 99%; "
+             f"{d['unused']:,} pieces are never used and {d['rare']:,} fewer than 100 times.",
+             "Share of tokens by piece type: " + ", ".join(f"{k} {s:.1%}" for k, s in d["by_type"].items()),
+             "Most frequent: " + ", ".join(f"{p!r} {s:.2%}" for p, _, s in d["top"]),
+             "Longest pieces: " + ", ".join(f"{p!r} ({c:,}x)" for p, c in d["longest"]),
+             "First tokens of each source, as the model sees them (| between tokens):"]
+    for name, pieces in d["samples"].items():
+        lines.append(f"  {name}: " + "|".join(p.replace("\n", "\\n") for p in pieces))
+    return lines
+
+
 def _tokenizer_stats(tok, docs, split_of, doc_tokens):
     chars, tokens = collections.Counter(), collections.Counter()
     for i, n in doc_tokens.items():
@@ -3081,6 +3143,13 @@ def _write_report(out, args, sources, ledger, duplicates, removed_lines, line_ex
         L.append("\nExamples:\n")
         for term, pieces in tok_stats["examples"].items():
             L.append(f"- `{term!r}` -> {len(pieces)} tokens: `{' '.join(repr(p)[1:-1] for p in pieces)}`")
+        if tok_stats.get("distribution"):
+            L.append("\n### Token use on the training data\n")
+            dist_lines = _distribution_lines(tok_stats["distribution"])
+            L.extend(line + "\n" for line in dist_lines[:4])
+            L.append(dist_lines[4] + "\n")
+            L.extend(f"- `{line.strip()}`" for line in dist_lines[5:])
+            L.append("\nEvery piece with its count: token_counts.tsv.")
         L.append("\n## Document lengths (tokens)\n")
         for name, entry in manifest["sources"].items():
             L.append(f"- {name}: " + ", ".join(f"p{q} {v:,}" for q, v in entry["doc_tokens_percentiles"].items()))

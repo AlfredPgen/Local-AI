@@ -229,6 +229,15 @@ class TestPipeline(unittest.TestCase):
                 self.assertEqual(len(arr), manifest["sources"][name][split]["tokens"])
         self.assertTrue(os.path.isfile(os.path.join(self.ds, "report.md")))
         self.assertFalse(os.path.exists(os.path.join(self.ds, "_work")), "work spool must be removed")
+        # token distribution: printed, in report.md, and every piece counted in token_counts.tsv
+        self.assertIn("Token use on the training data", self.prep_log)
+        report = open(os.path.join(self.ds, "report.md"), encoding="utf-8").read()
+        self.assertIn("### Token use on the training data", report)
+        with open(os.path.join(self.ds, "token_counts.tsv"), encoding="utf-8") as handle:
+            rows = handle.read().splitlines()[1:]
+        self.assertEqual(len(rows), manifest["tokenizer"]["vocab_size"])
+        train_total = sum(len(arr) for arr in arrays["train"].values())
+        self.assertEqual(sum(int(r.split("	")[3]) for r in rows), train_total)
 
     def test_cleaning_and_skips_are_recorded(self):
         docs = self.read_docs()
