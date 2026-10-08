@@ -100,13 +100,18 @@ def batch_tensors(items, device):
 
 
 def sequence_logp(model, x, y, amp_dtype, device):
-    """Sum of log-probabilities of the labelled (answer) tokens, per sequence."""
+    """Sum of log-probabilities of the labelled (answer) tokens, per sequence
+    (the output layer applied in pieces: no full tokens x vocabulary table)."""
     with torch.autocast(device.type, dtype=amp_dtype or torch.float32, enabled=amp_dtype is not None):
-        logits = model(x)
-    logp = F.log_softmax(logits.float(), dim=-1)
-    mask = y != -100
-    picked = logp.gather(-1, y.clamp(min=0).unsqueeze(-1)).squeeze(-1)
-    return (picked * mask).sum(-1)
+        return tiny_gpt.target_logprobs(model, x, y).sum(-1)
+
+
+def pieces(items, size):
+    return [items[i:i + size] for i in range(0, len(items), size)]
+
+
+def is_oom(exc):
+    return isinstance(exc, RuntimeError) and "out of memory" in str(exc).lower()
 
 
 def save(model, tok, cfg, base_obj, path, info, history):
@@ -146,6 +151,8 @@ def train(args):
         for p in reference.parameters():
             p.requires_grad_(False)
     model.train()
+    model.grad_checkpoint = args.activation_checkpointing
+    mem = {"micro": min(args.micro_batch or args.batch, args.batch)}  # halved, or checkpointing added, on OOM
     decay = [p for p in model.parameters() if p.dim() >= 2]
     other = [p for p in model.parameters() if p.dim() < 2]
     opt = torch.optim.AdamW([{"params": decay, "weight_decay": args.weight_decay},
@@ -173,13 +180,23 @@ def train(args):
         # The frozen reference never changes: score every pair once, then free the copy.
         with torch.no_grad():
             for items in (train_items, val_items):
-                for i in range(0, len(items), args.batch):
-                    chunk = items[i:i + args.batch]
-                    xc, yc = batch_tensors([c for c, *_ in chunk], device)
-                    xr, yr = batch_tensors([r for _, r, *_ in chunk], device)
-                    rc = sequence_logp(reference, xc, yc, amp_dtype, device).tolist()
-                    rr = sequence_logp(reference, xr, yr, amp_dtype, device).tolist()
-                    items[i:i + args.batch] = [(c, r, a, b) for (c, r, *_), a, b in zip(chunk, rc, rr)]
+                i = 0
+                while i < len(items):
+                    chunk = items[i:i + mem["micro"]]
+                    try:
+                        xc, yc = batch_tensors([c for c, *_ in chunk], device)
+                        xr, yr = batch_tensors([r for _, r, *_ in chunk], device)
+                        rc = sequence_logp(reference, xc, yc, amp_dtype, device).tolist()
+                        rr = sequence_logp(reference, xr, yr, amp_dtype, device).tolist()
+                    except RuntimeError as exc:
+                        if not is_oom(exc) or mem["micro"] == 1:
+                            raise
+                        mem["micro"] //= 2
+                        if device.type == "cuda":
+                            torch.cuda.empty_cache()
+                        continue
+                    items[i:i + len(chunk)] = [(c, r, a, b) for (c, r, *_), a, b in zip(chunk, rc, rr)]
+                    i += len(chunk)
         del reference
         if device.type == "cuda":
             torch.cuda.empty_cache()
@@ -190,10 +207,8 @@ def train(args):
         if args.mode == "sft":
             x, y = batch_tensors(items, device)
             with torch.autocast(device.type, dtype=amp_dtype or torch.float32, enabled=amp_dtype is not None):
-                logits = model(x)
-            total = F.cross_entropy(logits.float().reshape(-1, logits.size(-1)), y.reshape(-1), ignore_index=-100,
-                                    reduction="sum")
-            n = int((y != -100).sum())
+                total, _, n = tiny_gpt.chunked_lm_loss(model(x, return_hidden=True), model.lm_head.weight, y)
+            n = int(n)
             return total / max(n, 1), total.item(), n, {}
         xc, yc = batch_tensors([c for c, *_ in items], device)
         xr, yr = batch_tensors([r for _, r, *_ in items], device)
@@ -205,12 +220,47 @@ def train(args):
         return losses.mean(), losses.sum().item(), len(items), {"reward_accuracy": (margin > 0).float().sum().item(),
                                                                  "margin": margin.sum().item()}
 
+    def units_of(items):
+        return sum(len(ids) - n_prompt for ids, n_prompt, *_ in items) if args.mode == "sft" else len(items)
+
+    def train_batch(items):
+        """Gradients of one optimizer step's batch, accumulated over micro-batches of
+        mem['micro'] examples (each weighted by its share of the batch's units); on
+        out-of-memory the micro-batch is halved, then activation checkpointing is
+        switched on, and the batch starts again. Returns the batch's mean loss."""
+        while True:
+            opt.zero_grad(set_to_none=True)
+            total_units = units_of(items)
+            loss_sum = 0.0
+            try:
+                for part in pieces(items, mem["micro"]):
+                    loss, part_sum, n, _ = step_loss(part)
+                    weight = n / max(total_units, 1)
+                    if scaler is not None:
+                        scaler.scale(loss * weight).backward()
+                    else:
+                        (loss * weight).backward()
+                    loss_sum += part_sum
+                return loss_sum / max(total_units, 1)
+            except RuntimeError as exc:
+                if not is_oom(exc) or (mem["micro"] == 1 and model.grad_checkpoint):
+                    raise
+                opt.zero_grad(set_to_none=True)
+                if device.type == "cuda":
+                    torch.cuda.empty_cache()
+                if mem["micro"] > 1:
+                    mem["micro"] //= 2
+                    print(f"out of memory: micro-batch {mem['micro']} (gradients accumulated to {args.batch})")
+                else:
+                    model.grad_checkpoint = True
+                    print("out of memory at micro-batch 1: activation checkpointing on")
+
     def evaluate_items(items):
         model.eval()
         total, units, extra = 0.0, 0, {}
         with torch.no_grad():
-            for i in range(0, len(items), args.batch):
-                _, loss_sum, n, info = step_loss(items[i:i + args.batch])
+            for i in range(0, len(items), mem["micro"]):
+                _, loss_sum, n, info = step_loss(items[i:i + mem["micro"]])
                 total, units = total + loss_sum, units + n
                 for k, v in info.items():
                     extra[k] = extra.get(k, 0.0) + v
@@ -228,19 +278,16 @@ def train(args):
             step += 1
             for group in opt.param_groups:
                 group["lr"] = schedule.lr_at(step)
-            loss, *_ = step_loss(train_items[i:i + args.batch])
-            opt.zero_grad(set_to_none=True)
+            loss = train_batch(train_items[i:i + args.batch])
             if scaler is not None:
-                scaler.scale(loss).backward()
                 scaler.unscale_(opt)
                 torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
                 scaler.step(opt)
                 scaler.update()
             else:
-                loss.backward()
                 torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
                 opt.step()
-            running.append(loss.item())
+            running.append(loss)
         val_loss, val_info = evaluate_items(val_items)
         history.append({"epoch": epoch, "step": step, "train_loss": sum(running) / len(running),
                         "val_loss": val_loss, **val_info})
@@ -287,7 +334,13 @@ def main(argv=None):
         s.add_argument("--name", required=True, help="output checkpoint name")
         s.add_argument("--out-dir", default=HERE)
         s.add_argument("--epochs", type=int, default=3)
-        s.add_argument("--batch", type=int, default=8)
+        s.add_argument("--batch", type=int, default=8, help="examples per optimizer step")
+        s.add_argument("--micro-batch", type=int,
+                       help="examples per forward pass (default: --batch); gradients are accumulated to --batch, "
+                            "and an out-of-memory error halves it automatically")
+        s.add_argument("--activation-checkpointing", action="store_true",
+                       help="recompute blocks in the backward pass (less memory, slower; switched on "
+                            "automatically after an out-of-memory error at micro-batch 1)")
         s.add_argument("--lr", type=float, default=1e-4 if mode == "sft" else 1e-5)
         s.add_argument("--beta", type=float, default=0.1, help="DPO: strength of the preference")
         s.add_argument("--weight-decay", type=float, default=0.0)

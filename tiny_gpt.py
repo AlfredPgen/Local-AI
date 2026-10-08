@@ -56,6 +56,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torch.utils.checkpoint
 
 import data_prep
 
@@ -482,6 +483,9 @@ class TinyGPT(nn.Module):
                 nn.init.normal_(p, mean=0.0, std=resid_std)
         if cfg.tie_embeddings:
             self.lm_head.weight = self.token_embedding.weight
+        # Activation checkpointing: keep only each block's input during the forward pass and recompute the
+        # block in the backward pass (about a third more compute, a fraction of the activation memory).
+        self.grad_checkpoint = False
 
     @staticmethod
     def _init_weights(module):
@@ -494,11 +498,18 @@ class TinyGPT(nn.Module):
         for block in self.blocks:
             block.attn.impl = impl
 
-    def forward(self, tokens):
+    def forward(self, tokens, return_hidden=False):
+        """Logits, or (return_hidden=True) the final normalised hidden states, from
+        which chunked_lm_loss computes the loss without all logits at once."""
         x = self.embedding_dropout(self.token_embedding(tokens))
+        recompute = self.grad_checkpoint and self.training and torch.is_grad_enabled()
         for block in self.blocks:
-            x = block(x, self.rope)
-        return self.lm_head(self.norm(x))
+            if recompute:
+                x = torch.utils.checkpoint.checkpoint(block, x, self.rope, use_reentrant=False)
+            else:
+                x = block(x, self.rope)
+        x = self.norm(x)
+        return x if return_hidden else self.lm_head(x)
 
     def param_counts(self):
         total = sum(p.numel() for p in self.parameters())
@@ -506,6 +517,52 @@ class TinyGPT(nn.Module):
         if not self.cfg.tie_embeddings:
             embed += self.lm_head.weight.numel()
         return total, total - embed
+
+
+LOSS_CHUNK_TOKENS = 4096  # tokens per piece when the loss is computed in pieces
+
+
+def _chunk_loss(h, weight, y):
+    logits = F.linear(h, weight).float()
+    lse = torch.logsumexp(logits, dim=-1)
+    valid = y != -100
+    target = logits.gather(-1, y.clamp(min=0).unsqueeze(-1)).squeeze(-1)
+    return ((lse - target) * valid).sum(), (lse.pow(2) * valid).sum()
+
+
+def _chunk_logp(h, weight, y):
+    logits = F.linear(h, weight).float()
+    target = logits.gather(-1, y.clamp(min=0).unsqueeze(-1)).squeeze(-1)
+    return (target - torch.logsumexp(logits, dim=-1)) * (y != -100)
+
+
+def chunked_lm_loss(hidden, weight, targets, chunk_tokens=LOSS_CHUNK_TOKENS):
+    """(sum of cross-entropy, sum of log Z^2, number of labelled tokens) of the
+    output layer `weight` applied to `hidden`, computed `chunk_tokens` tokens at a
+    time; each piece's logits are recomputed in the backward pass, so the
+    (tokens x vocabulary) table never exists in full. Labels of -100 are ignored."""
+    h = hidden.reshape(-1, hidden.size(-1))
+    y = targets.reshape(-1)
+    ce = z = None
+    for s in range(0, y.numel(), chunk_tokens):
+        c, zc = torch.utils.checkpoint.checkpoint(_chunk_loss, h[s:s + chunk_tokens], weight, y[s:s + chunk_tokens],
+                                                  use_reentrant=False)
+        ce, z = (c, zc) if ce is None else (ce + c, z + zc)
+    return ce, z, (y != -100).sum()
+
+
+def target_logprobs(model, x, y, chunk_tokens=LOSS_CHUNK_TOKENS):
+    """log p(y_t | x_<=t) at every position (0 where y is -100), shaped like y,
+    without the full (tokens x vocabulary) table: the output layer is applied
+    in pieces (recomputed in the backward pass when gradients are needed)."""
+    h = model(x, return_hidden=True)
+    flat_h, flat_y = h.reshape(-1, h.size(-1)), y.reshape(-1)
+    pieces = []
+    for s in range(0, flat_y.numel(), chunk_tokens):
+        args = (flat_h[s:s + chunk_tokens], model.lm_head.weight, flat_y[s:s + chunk_tokens])
+        pieces.append(torch.utils.checkpoint.checkpoint(_chunk_logp, *args, use_reentrant=False)
+                      if torch.is_grad_enabled() else _chunk_logp(*args))
+    return torch.cat(pieces).view_as(y)
 
 
 def count_params(cfg):
@@ -1321,8 +1378,13 @@ def score_probes(model, tok, probes, device, amp_dtype, batch_size=64, floor=Tru
             targets += ids[len(ids) - n_cont:]
             owner += [b] * n_cont
         with torch.autocast(device.type, dtype=amp_dtype or torch.float32, enabled=amp_dtype is not None):
-            logits = model(x.to(device))
-        picked = logits[torch.tensor(rows, device=device), torch.tensor(cols, device=device)].float()
+            if isinstance(model, TinyGPT):  # the output layer only at the scored positions, not everywhere
+                hidden = model(x.to(device), return_hidden=True)
+                picked = model.lm_head(hidden[torch.tensor(rows, device=device), torch.tensor(cols, device=device)])
+            else:
+                logits = model(x.to(device))
+                picked = logits[torch.tensor(rows, device=device), torch.tensor(cols, device=device)]
+        picked = picked.float()
         target_logp = (picked.gather(-1, torch.tensor(targets, device=device)[:, None]).squeeze(-1)
                        - torch.logsumexp(picked, dim=-1))  # only the scored positions, not the whole vocabulary
         sums = torch.zeros(len(chunk), device=device).index_add_(0, torch.tensor(owner, device=device),
@@ -1478,7 +1540,7 @@ def default_kv_heads(n_heads):
 def shape_ladder(vocab_size, ctx=512):
     """Candidate shapes, depth growing with width (small models favour depth)."""
     out = []
-    for d in (128, 192, 256, 320, 384, 448, 512, 640, 768, 896, 1024, 1280, 1536, 2048):
+    for d in (128, 192, 256, 320, 384, 448, 512, 640, 768, 896, 1024, 1280, 1536, 2048, 2560, 3072):
         heads = d // default_head_dim(d)
         out.append(ModelConfig(vocab_size=vocab_size, ctx=ctx, d_model=d, n_layers=default_layers(d),
                                n_heads=heads, n_kv_heads=default_kv_heads(heads)))
@@ -1508,26 +1570,67 @@ def device_memory_budget(device):
     return int(avail * 0.4), f"{avail / 2 ** 30:.1f} GiB free RAM"
 
 
-def estimate_train_bytes(cfg, micro_batch, amp=True):
-    n_total, _ = count_params(cfg)
+def estimate_train_bytes(cfg, micro_batch, amp=True, checkpointing=False, loss_chunk=0, optimizer="adamw"):
+    """Training memory: FP32 weights and gradients (4 + 4 bytes per parameter),
+    optimizer state (AdamW 8; Muon 4 for the block matrices), activations kept
+    for the backward pass (only each block's input with activation
+    checkpointing, plus one block being recomputed) and the output-layer logits
+    (one piece of loss_chunk tokens when the loss is computed in pieces)."""
+    n_total, n_nonembed = count_params(cfg)
     t = micro_batch * cfg.ctx
     b = 2 if amp else 4
     kv = cfg.n_kv_heads * cfg.head_dim
     per_token_layer = 4 * cfg.d_model + b * (7 * cfg.d_model + 4 * kv + 4 * cfg.ffn_hidden) + 3 * cfg.n_heads
-    activations = t * cfg.n_layers * per_token_layer
-    logits = t * cfg.vocab_size * (b + 4 + 4)
-    return int((activations + logits) * 1.3 + n_total * 16 + 400 * 2 ** 20)
+    if checkpointing:
+        activations = t * cfg.n_layers * b * cfg.d_model + t * per_token_layer
+    else:
+        activations = t * cfg.n_layers * per_token_layer
+    logits = (min(t, loss_chunk) if loss_chunk else t) * cfg.vocab_size * (b + 4 + 4)
+    if loss_chunk:
+        logits += t * cfg.d_model * (b + 4)  # the hidden states and their gradient, kept whole
+    state = 8 * n_total if optimizer != "muon" else 8 * (n_total - n_nonembed) + 4 * n_nonembed
+    return int((activations + logits) * 1.3 + n_total * 8 + state + 400 * 2 ** 20)
+
+
+def memory_options(checkpointing="auto", loss_chunk=None):
+    """(activation checkpointing, loss chunk tokens) choices allowed by the
+    command line, cheapest first: the chunked loss costs a few per cent more
+    compute, activation checkpointing about a third."""
+    ck = [False, True] if checkpointing == "auto" else [checkpointing == "on"]
+    lc = [0, LOSS_CHUNK_TOKENS] if loss_chunk is None else [loss_chunk]
+    return sorted(((c, l) for c in ck for l in lc), key=lambda o: (o[0], o[1] != 0))
+
+
+def choose_memory_plan(cfg, tokens_per_step, budget_bytes, amp, optimizer="adamw", checkpointing="auto",
+                       loss_chunk=None, micro=None):
+    """(micro-batch, accumulation, activation checkpointing, loss chunk tokens):
+    the cheapest memory option that reaches a micro-batch of min(target, 4)
+    sequences, else the cheapest that fits at all. With `micro` given (an
+    explicit --batch-size), the cheapest option that fits that batch."""
+    target = max(1, tokens_per_step // cfg.ctx)
+    options = memory_options(checkpointing, loss_chunk)
+    fits = lambda m, o: estimate_train_bytes(cfg, m, amp, o[0], o[1], optimizer) <= budget_bytes  # noqa: E731
+    if micro is not None:
+        chosen = next((o for o in options if fits(micro, o)), options[-1])
+        return micro, max(1, target // micro), chosen[0], chosen[1]
+    best = {}
+    for o in options:
+        if fits(1, o):
+            m = 1
+            while m * 2 <= target and fits(m * 2, o):
+                m *= 2
+            best[o] = m
+    if not best:
+        raise SystemExit(f"The model does not fit in memory even at batch 1 (ctx {cfg.ctx}) with activation "
+                         "checkpointing and the loss in pieces; choose a smaller --d-model/--layers/--ctx.")
+    want = min(target, 4)
+    o = next((o for o in options if best.get(o, 0) >= want), next(o for o in options if o in best))
+    return best[o], max(1, target // best[o]), o[0], o[1]
 
 
 def choose_micro_batch(cfg, tokens_per_step, budget_bytes, amp):
-    target = max(1, tokens_per_step // cfg.ctx)
-    micro = 1
-    while micro * 2 <= target and estimate_train_bytes(cfg, micro * 2, amp) <= budget_bytes:
-        micro *= 2
-    if estimate_train_bytes(cfg, micro, amp) > budget_bytes:
-        raise SystemExit(f"The model does not fit in memory even at batch 1 (ctx {cfg.ctx}); "
-                         "choose a smaller --d-model/--layers/--ctx.")
-    return micro, max(1, target // micro)
+    micro, accum, _, _ = choose_memory_plan(cfg, tokens_per_step, budget_bytes, amp)
+    return micro, accum
 
 
 def plan_run(args, manifest, device, amp_dtype, token_cap=None):
@@ -1602,20 +1705,24 @@ def plan_run(args, manifest, device, amp_dtype, token_cap=None):
             tps = max(cfg.ctx, planned // args.steps)
         else:
             tps = tokens_per_step_for(n)
+        amp, opt_kind = amp_dtype is not None, args.optimizer or "adamw"
         if args.batch_size:
-            micro = args.batch_size
+            micro, accum, ck, lc = choose_memory_plan(cfg, tps, budget_bytes, amp, opt_kind,
+                                                      args.activation_checkpointing, args.loss_chunk_tokens,
+                                                      micro=args.batch_size)
             accum = args.grad_accum or max(1, tps // (micro * cfg.ctx))
-            if estimate_train_bytes(cfg, micro, amp_dtype is not None) > budget_bytes:
-                lines.append(f"WARNING: batch {micro} x ctx {cfg.ctx} may not fit ({budget_text}); "
-                             "an out-of-memory error at step 1 halves it automatically.")
-            return micro, accum
-        micro, accum = choose_micro_batch(cfg, tps, budget_bytes, amp_dtype is not None)
-        return micro, (args.grad_accum or accum)
+            if estimate_train_bytes(cfg, micro, amp, ck, lc, opt_kind) > budget_bytes:
+                lines.append(f"WARNING: batch {micro} x ctx {cfg.ctx} may not fit ({budget_text}); an "
+                             "out-of-memory error at step 1 switches on memory savings or halves the batch.")
+            return micro, accum, ck, lc
+        micro, accum, ck, lc = choose_memory_plan(cfg, tps, budget_bytes, amp, opt_kind,
+                                                  args.activation_checkpointing, args.loss_chunk_tokens)
+        return micro, (args.grad_accum or accum), ck, lc
 
     if explicit_shape:
         cfg = shaped(fitting[-1] if fitting else ladder[0])  # options given override the data-chosen shape
         shape_why = "command-line values, ladder defaults for the rest"
-        micro, accum = batch_for(cfg)
+        micro, accum, ckpt, chunk = batch_for(cfg)
     else:
         shape_why = (f"largest ladder shape with <= D/{r:g} = {target / 1e6:,.2f}M parameters"
                      if fitting else f"smallest ladder shape (the data supports only {target / 1e6:,.2f}M)")
@@ -1623,7 +1730,7 @@ def plan_run(args, manifest, device, amp_dtype, token_cap=None):
         for k, base in enumerate(candidates):
             cfg = shaped(base)
             try:
-                micro, accum = batch_for(cfg)
+                micro, accum, ckpt, chunk = batch_for(cfg)
             except SystemExit:
                 if k == len(candidates) - 1:
                     raise
@@ -1647,7 +1754,7 @@ def plan_run(args, manifest, device, amp_dtype, token_cap=None):
         "lr": lr, "min_lr": lr * args.min_lr_ratio, "warmup_steps": warmup, "schedule": args.schedule,
         "decay_frac": args.decay_frac, "decay_shape": args.decay_shape, "weight_decay": args.weight_decay,
         "betas": [args.beta1, args.beta2], "grad_clip": args.grad_clip, "planned_train_tokens": train_tokens,
-        "optimizer": args.optimizer or "adamw",
+        "optimizer": args.optimizer or "adamw", "activation_checkpointing": ckpt, "loss_chunk_tokens": chunk,
     }
     lines += [
         f"unique training tokens U = {unique:,} ({', '.join(f'{k} {v:,}' for k, v in train_by_source.items())}); "
@@ -1664,6 +1771,11 @@ def plan_run(args, manifest, device, amp_dtype, token_cap=None):
         f"learning rate {lr:.2e} peak (heuristic for {n_total / 1e6:,.1f}M parameters), min {lr * args.min_lr_ratio:.2e}; "
         f"dropout {dropout} ({'set' if args.dropout is not None else 'auto: 0 for <= 4 epochs, else 0.1'}); "
         f"weight decay {args.weight_decay} on matrices only; optimizer {OPTIMIZER_LABELS[args.optimizer or 'adamw']}",
+        "memory: " + ("activation checkpointing on (blocks recomputed in the backward pass)" if ckpt
+                      else "activation checkpointing off") + "; "
+        + (f"loss computed {chunk:,} tokens at a time" if chunk else "loss computed on the whole micro-batch")
+        + f" (estimated {estimate_train_bytes(cfg, micro, amp_dtype is not None, ckpt, chunk, args.optimizer or 'adamw') / 2 ** 30:.1f} GiB "
+        f"of {budget_text})",
     ]
     if args.steps and train_tokens > max_epochs * unique:
         lines.append(f"note: --steps {args.steps:,} trains {epochs:.2f} epochs, more than --max-epochs {max_epochs:g}.")
@@ -1673,25 +1785,33 @@ def plan_run(args, manifest, device, amp_dtype, token_cap=None):
     return cfg, settings, lines
 
 
-def measure_seconds_per_step(cfg, micro, accum, device, amp_dtype, attn_pref="auto", warmup=2, timed=3):
-    """Time real training micro-steps of this shape on this device (random tokens).
-    Runs inside fork_rng so the caller's random state (model initialisation) is untouched."""
+def measure_seconds_per_step(cfg, micro, accum, device, amp_dtype, attn_pref="auto", warmup=2, timed=3,
+                             checkpointing=False, loss_chunk=0):
+    """Time real training micro-steps of this shape on this device (random tokens),
+    with the planned memory options. Runs inside fork_rng so the caller's random
+    state (model initialisation) is untouched."""
     with torch.random.fork_rng(devices=[device] if device.type == "cuda" else []):
         torch.manual_seed(0)
-        return _measure(cfg, micro, accum, device, amp_dtype, attn_pref, warmup, timed)
+        return _measure(cfg, micro, accum, device, amp_dtype, attn_pref, warmup, timed, checkpointing, loss_chunk)
 
 
-def _measure(cfg, micro, accum, device, amp_dtype, attn_pref, warmup, timed):
+def _measure(cfg, micro, accum, device, amp_dtype, attn_pref, warmup, timed, checkpointing=False, loss_chunk=0):
     probe_cfg = ModelConfig(**dataclasses.asdict(cfg))
     model = TinyGPT(probe_cfg).to(device)
     model.set_attention_impl(choose_attention(device, probe_cfg, amp_dtype, attn_pref)[0])
+    model.grad_checkpoint = checkpointing
     opt = torch.optim.AdamW(model.parameters(), lr=1e-4, **({"fused": True} if device.type == "cuda" else {}))
     x = torch.randint(0, cfg.vocab_size, (micro, cfg.ctx + 1), device=device)
 
     def micro_step():
         with torch.autocast(device.type, dtype=amp_dtype or torch.float32, enabled=amp_dtype is not None):
-            logits = model(x[:, :-1])
-        F.cross_entropy(logits.float().view(-1, cfg.vocab_size), x[:, 1:].reshape(-1)).backward()
+            if loss_chunk:
+                ce, _, n = chunked_lm_loss(model(x[:, :-1], return_hidden=True), model.lm_head.weight, x[:, 1:],
+                                           loss_chunk)
+                loss = ce / n
+            else:
+                loss = F.cross_entropy(model(x[:, :-1]).float().view(-1, cfg.vocab_size), x[:, 1:].reshape(-1))
+        loss.backward()
 
     try:
         for _ in range(warmup):
@@ -1762,7 +1882,9 @@ def plan_with_time_budget(args, manifest, device, amp_dtype):
 
     def trial(shape_args):
         c, st, _ = plan_run(shape_args, manifest, device, amp_dtype)
-        measured = measure_seconds_per_step(c, st["micro_batch"], st["grad_accum"], device, amp_dtype, args.attn)
+        measured = measure_seconds_per_step(c, st["micro_batch"], st["grad_accum"], device, amp_dtype, args.attn,
+                                            checkpointing=st["activation_checkpointing"],
+                                            loss_chunk=st["loss_chunk_tokens"])
         sec = max(measured, st["tokens_per_step"] * flops_per_token(c) / speed) if speed else measured * 1.6
         fit_tokens = int(budget_s / sec) * st["tokens_per_step"]
         tokens = min(fit_tokens, st["planned_train_tokens"])
@@ -1910,6 +2032,14 @@ def parse_args(argv=None):
     g.add_argument("--beta1", type=float, default=0.9)
     g.add_argument("--beta2", type=float, default=0.95)
     g.add_argument("--grad-clip", type=float, default=1.0, help="clip the gradient norm to this (0 = off)")
+    g.add_argument("--activation-checkpointing", choices=("auto", "on", "off"), default="auto",
+                   help="recompute each block in the backward pass instead of storing its activations: much less "
+                        "memory, about a third more compute (auto: only when the model would not otherwise fit "
+                        "with a micro-batch of 4); may be changed on --resume")
+    g.add_argument("--loss-chunk-tokens", type=int,
+                   help="compute the output layer and loss this many tokens at a time, so the full tokens x "
+                        "vocabulary table never exists (0 = off; default: auto, %d when it is needed to fit); may be "
+                        "changed on --resume" % LOSS_CHUNK_TOKENS)
     g.add_argument("--optimizer", choices=("adamw", "muon"),
                    help="adamw (default), or muon: Muon for the matrices inside the blocks and AdamW for the embedding "
                         "and norm gains, both driven by --lr and the schedule (Muon's step is scaled to AdamW's "
@@ -2006,6 +2136,8 @@ def validate_args(args, parser):
     if sum(x is not None for x in (args.steps, args.train_tokens, args.epochs)) > 1:
         parser.error("give only one of --steps, --train-tokens, --epochs")
     args.out_dir = os.path.abspath(args.out_dir)
+    if args.loss_chunk_tokens is not None and not (args.loss_chunk_tokens == 0 or 64 <= args.loss_chunk_tokens):
+        parser.error("--loss-chunk-tokens must be 0 (off) or at least 64")
     if args.stop_after_steps is not None and args.stop_after_steps <= 0:
         parser.error("--stop-after-steps must be positive")
     if not os.path.isdir(args.out_dir):
@@ -2348,6 +2480,13 @@ def cmd_train(args):
         cfg = ModelConfig(**resume_obj["model_config"])
         settings = dict(resume_obj["train_config"])
         settings.setdefault("optimizer", "adamw")  # runs from before --optimizer used AdamW
+        # memory options do not change the mathematics, so a resumed run may switch them (e.g. on another machine)
+        settings.setdefault("activation_checkpointing", False)
+        settings.setdefault("loss_chunk_tokens", 0)
+        if args.activation_checkpointing != "auto":
+            settings["activation_checkpointing"] = args.activation_checkpointing == "on"
+        if args.loss_chunk_tokens is not None:
+            settings["loss_chunk_tokens"] = args.loss_chunk_tokens
         if args.optimizer and args.optimizer != settings["optimizer"]:
             print(f"Note: --optimizer {args.optimizer} ignored on --resume: this run uses {settings['optimizer']} "
                   "(start a new run, or --init-from this one, to change it).")
@@ -2410,6 +2549,8 @@ def cmd_train(args):
             raise SystemExit(f"Checkpoint weights do not fit the model (missing {missing[:3]}, "
                              f"unexpected {unexpected[:3]}).")
     opt, opt_name, param_names, opt_note = build_optimizer(model, settings, device)
+    model.grad_checkpoint = bool(settings.get("activation_checkpointing"))
+    loss_chunk = int(settings.get("loss_chunk_tokens") or 0)
     scaler = torch.amp.GradScaler(device.type) if need_scaler else None
     schedule = LRSchedule(settings["schedule"], total_steps, settings["lr"], settings["min_lr"],
                           settings["warmup_steps"], settings["decay_frac"], settings["decay_shape"])
@@ -2637,18 +2778,28 @@ def cmd_train(args):
                 lr *= (step - start_step) / rewarm_steps
             for group in opt.param_groups:
                 group["lr"] = lr
+            loss_before = (interval_loss.clone(), progress_loss.clone())  # restored if this step is retried
             try:
                 for _ in range(accum):
                     x, y = batcher.next()
                     with torch.autocast(device.type, dtype=amp_dtype or torch.float32, enabled=amp_dtype is not None):
-                        logits = train_model(x)
-                    flat = logits.float().view(-1, cfg.vocab_size)
-                    loss = F.cross_entropy(flat, y.reshape(-1))
+                        if loss_chunk:
+                            ce, zsum, n_tok = chunked_lm_loss(train_model(x, return_hidden=True),
+                                                              model.lm_head.weight, y, loss_chunk)
+                            flat = None
+                        else:
+                            logits = train_model(x)
+                    if loss_chunk:
+                        loss = ce / n_tok
+                    else:
+                        flat = logits.float().view(-1, cfg.vocab_size)
+                        loss = F.cross_entropy(flat, y.reshape(-1))
                     interval_loss += loss.detach()
                     progress_loss += loss.detach()
                     if z_loss:
                         # PaLM z-loss: keeps log Z (the softmax normaliser) near 0; reported loss excludes it
-                        loss = loss + z_loss * torch.logsumexp(flat, dim=-1).pow(2).mean()
+                        loss = loss + z_loss * (zsum / n_tok if loss_chunk
+                                                else torch.logsumexp(flat, dim=-1).pow(2).mean())
                     if scaler is not None:
                         scaler.scale(loss / accum).backward()
                     else:
@@ -2663,23 +2814,35 @@ def cmd_train(args):
                     opt.step()
                 opt.zero_grad(set_to_none=True)
             except RuntimeError as exc:  # torch.cuda.OutOfMemoryError / MPS OOM are RuntimeErrors
-                if not first_step or micro == 1 or "out of memory" not in str(exc).lower():
+                saving_left = not loss_chunk or not model.grad_checkpoint
+                if not first_step or (micro == 1 and not saving_left) or "out of memory" not in str(exc).lower():
                     raise
                 opt.zero_grad(set_to_none=True)
-                x = y = logits = flat = loss = None  # drop the failed batch and its graph before retrying
+                x = y = logits = flat = loss = ce = zsum = None  # drop the failed batch and its graph before retrying
                 if device.type == "cuda":
                     torch.cuda.empty_cache()
-                old_tps = settings["tokens_per_step"]
-                micro, accum = micro // 2, math.ceil(micro * accum / (micro // 2))
-                settings["micro_batch"], settings["grad_accum"] = micro, accum
-                settings["tokens_per_step"] = micro * accum * cfg.ctx
-                batcher.batch_size = micro
-                eval_batch = max(1, min(eval_batch, micro))
-                interval_loss.zero_()
-                progress_loss.zero_()
-                print(f"Out of memory at the first step; retrying with micro-batch {micro} x {accum} accumulation "
-                      + ("(same tokens per step)." if settings["tokens_per_step"] == old_tps else
-                         f"({settings['tokens_per_step']:,} tokens per step instead of {old_tps:,})."))
+                interval_loss.copy_(loss_before[0])
+                progress_loss.copy_(loss_before[1])
+                # cheapest remedy first: the loss in pieces, then a smaller micro-batch, then recomputation
+                if not loss_chunk:
+                    loss_chunk = settings["loss_chunk_tokens"] = LOSS_CHUNK_TOKENS
+                    print(f"Out of memory at the first step; retrying with the loss computed {loss_chunk:,} tokens "
+                          "at a time.")
+                elif micro > 1:
+                    old_tps = settings["tokens_per_step"]
+                    micro, accum = micro // 2, math.ceil(micro * accum / (micro // 2))
+                    settings["micro_batch"], settings["grad_accum"] = micro, accum
+                    settings["tokens_per_step"] = micro * accum * cfg.ctx
+                    batcher.batch_size = micro
+                    eval_batch = max(1, min(eval_batch, micro))
+                    print(f"Out of memory at the first step; retrying with micro-batch {micro} x {accum} "
+                          "accumulation " + ("(same tokens per step)." if settings["tokens_per_step"] == old_tps
+                                             else f"({settings['tokens_per_step']:,} tokens per step instead of "
+                                                  f"{old_tps:,})."))
+                else:
+                    model.grad_checkpoint = settings["activation_checkpointing"] = True
+                    print("Out of memory at the first step with micro-batch 1; retrying with activation "
+                          "checkpointing (blocks recomputed in the backward pass).")
                 step -= 1
                 continue
             first_step = False

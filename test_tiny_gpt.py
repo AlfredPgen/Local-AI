@@ -956,6 +956,88 @@ class TestPipeline(unittest.TestCase):
                     finally:
                         sys.stderr = old
 
+    def test_memory_savings_for_larger_models(self):
+        """Activation checkpointing and the chunked loss leave the mathematics unchanged; the planner turns them
+        on only when needed; a run with them stops, resumes exactly, and may switch them on resume; fine-tuning
+        accumulates micro-batches to the same result as whole batches."""
+        torch.manual_seed(0)
+        cfg = tiny_gpt.ModelConfig(vocab_size=300, ctx=32, d_model=64, n_layers=3, n_heads=4, n_kv_heads=2)
+        model = tiny_gpt.TinyGPT(cfg)
+        x = torch.randint(0, 300, (3, 33))
+
+        def loss_and_grads(checkpointing, chunk):
+            model.zero_grad()
+            model.grad_checkpoint = checkpointing
+            if chunk:
+                ce, z, n = tiny_gpt.chunked_lm_loss(model(x[:, :-1], return_hidden=True), model.lm_head.weight,
+                                                    x[:, 1:], chunk)
+                loss = ce / n + 1e-4 * z / n
+            else:
+                flat = model(x[:, :-1]).float().view(-1, 300)
+                loss = torch.nn.functional.cross_entropy(flat, x[:, 1:].reshape(-1)) + 1e-4 * torch.logsumexp(flat, -1).pow(2).mean()
+            loss.backward()
+            return loss.item(), torch.cat([p.grad.flatten() for p in model.parameters()])
+
+        base_loss, base_grad = loss_and_grads(False, 0)
+        for checkpointing, chunk in ((True, 0), (False, 20), (True, 7)):
+            loss, grad = loss_and_grads(checkpointing, chunk)
+            self.assertAlmostEqual(loss, base_loss, places=5)
+            self.assertLess((grad - base_grad).abs().max().item(), 1e-6)
+        y = x[:, 1:].clone()
+        y[0, :5] = -100
+        with torch.no_grad():
+            want = torch.log_softmax(model(x[:, :-1]).float(), -1).gather(-1, y.clamp(min=0)[..., None]).squeeze(-1)
+            got = tiny_gpt.target_logprobs(model, x[:, :-1], y, 13)
+        self.assertLess(((want * (y != -100)) - got).abs().max().item(), 1e-5)
+        # planner: nothing switched on when it fits; savings when it does not
+        big = tiny_gpt.ModelConfig(vocab_size=16384, ctx=1024, d_model=1024, n_layers=18, n_heads=16, n_kv_heads=4)
+        self.assertEqual(tiny_gpt.choose_memory_plan(big, 262_144, 64 * 2 ** 30, True)[2:], (False, 0))
+        micro, _, ckpt, _ = tiny_gpt.choose_memory_plan(big, 262_144, int(5.6 * 2 ** 30), True)
+        self.assertTrue(ckpt)
+        self.assertGreaterEqual(micro, 1)
+        with self.assertRaises(SystemExit):
+            tiny_gpt.choose_memory_plan(big, 262_144, 2 * 2 ** 30, True)
+        # a run with both savings: stopped, resumed (and switched off on resume) like an uninterrupted run
+        mem = self.common + ["--activation-checkpointing", "on", "--loss-chunk-tokens", "128", "--no-probes",
+                             "--dropout", "0"]
+        code, out = run(mem + ["--name", "S", "--steps", "16"])
+        self.assertEqual(code, 0, out)
+        self.assertIn("activation checkpointing on", out)
+        self.assertIn("loss computed 128 tokens at a time", out)
+        code, out_s = run(mem + ["--name", "T", "--steps", "16", "--stop-after-steps", "8"])
+        self.assertEqual(code, 0, out_s)
+        log = os.path.join(self.runs, "log.txt")
+        code, out_r = run(["tiny_gpt.py", "--name", "T", "--out-dir", self.runs, "--log-file", log, "--device", "cpu",
+                           "--resume", "--eval-every", "8", "--eval-tokens", "2048", "--sample-tokens", "8",
+                           "--no-probes"])
+        self.assertEqual(code, 0, out_r)
+
+        def val16(text):
+            return [float(v) for v in re.findall(r"step +16/16 \| train [\d.]+ \| val ([\d.]+)", text)]
+
+        self.assertTrue(val16(out))
+        self.assertEqual(val16(out), val16(out_r), "a resumed run with the memory savings must reproduce the run")
+        ck = torch.load(os.path.join(self.runs, "T.pt"), map_location="cpu", weights_only=True)
+        self.assertEqual((ck["train_config"]["activation_checkpointing"], ck["train_config"]["loss_chunk_tokens"]),
+                         (True, 128))
+        code, out_o = run(["tiny_gpt.py", "--name", "T", "--out-dir", self.runs, "--log-file", log, "--device", "cpu",
+                           "--resume", "--steps", "20", "--eval-every", "8", "--eval-tokens", "2048",
+                           "--sample-tokens", "8", "--no-probes", "--activation-checkpointing", "off",
+                           "--loss-chunk-tokens", "0"])
+        self.assertEqual(code, 0, out_o)
+        ck = torch.load(os.path.join(self.runs, "T.pt"), map_location="cpu", weights_only=True)
+        self.assertEqual((ck["step"], ck["train_config"]["activation_checkpointing"]), (20, False))
+        # fine-tuning in micro-batches of 1 with recomputation: the same held-out loss as whole batches of 4
+        examples = os.path.join(HERE, "finetune_examples")
+        losses = []
+        for name, extra in (("S_sft4", []), ("S_sft1", ["--micro-batch", "1", "--activation-checkpointing"])):
+            code, out_f = run(["finetune.py", "sft", "--base", os.path.join(self.runs, "S_best.pt"), "--data",
+                               os.path.join(examples, "sft_examples.jsonl"), "--name", name, "--out-dir", self.runs,
+                               "--epochs", "1", "--batch", "4", "--device", "cpu", "--log-file", log] + extra)
+            self.assertEqual(code, 0, out_f)
+            losses.append(float(re.findall(r"epoch 1 \| train loss [\d.]+ \| held-out loss ([\d.]+)", out_f)[0]))
+        self.assertAlmostEqual(losses[0], losses[1], places=3)
+
     def test_muon_optimizer(self):
         """--optimizer muon: Muon for the 14 block matrices, AdamW for the embedding and 5 norm gains; an
         interrupted run resumes exactly, keeps its optimizer, and the recipe reaches experiments.csv."""
