@@ -14,18 +14,26 @@ token-level standard error would be far too optimistic.
 Reading the result: a negative difference means A compresses the text better
 (lower BPB). If the 95% interval excludes 0 the difference is unlikely to be
 noise. Use --device cpu while a training run is using the GPU.
+
+A model trained on another dataset may have trained on some of these
+validation documents. Its training dataset's docs.tsv says which (same source
+and document id, or the same text under another name or source, by content
+hash); those documents are left out. If that dataset is not on this
+computer, a warning is printed and no verdict is given (--allow-different-datasets
+gives one anyway).
 """
 
 import argparse
 import csv
 import datetime
+import gc
+import json
 import math
 import os
 import sys
 
 import numpy as np
 import torch
-import torch.nn.functional as F
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -33,8 +41,10 @@ import data_prep  # noqa: E402
 import tiny_gpt  # noqa: E402
 
 
-def validation_documents(dataset_dir, per_source, max_chars):
-    """Evenly spaced validation documents per source, as text."""
+def validation_documents(dataset_dir, per_source, max_chars, layout=None):
+    """Evenly spaced validation documents per source, as text. With a dict as
+    `layout`, layout[source] = (segments found, offset): segment k is the
+    (k + offset)-th validation document of that source (offset None: unknown)."""
     manifest, arrays = data_prep.open_token_files(dataset_dir, verify=False)
     meta = manifest["tokenizer"]
     tok = data_prep.Tokenizer.from_file(os.path.join(dataset_dir, meta["file"]), meta.get("encode_mode", "lines"))
@@ -45,6 +55,8 @@ def validation_documents(dataset_dir, per_source, max_chars):
         if len(starts) == 0:
             starts = np.array([0])
         ends = np.append(starts[1:], len(arr))
+        if layout is not None:  # a segment starts at a document's start token, or after its end token
+            layout[source] = (len(starts), 0 if tok.bos_id >= 0 else 1 if boundary >= 0 else None)
         chosen = np.unique(np.linspace(0, len(starts) - 1, min(per_source, len(starts))).astype(int))
         for k in chosen:
             text = tok.decode(np.asarray(arr[starts[k]:ends[k]]).tolist()).strip()
@@ -80,13 +92,142 @@ def document_nll(model, tok, text, device):
         x[i, :len(a)] = torch.tensor(a)
         y[i, :len(b)] = torch.tensor(b)
     for i in range(0, len(rows_x), 16):
-        logits = model(x[i:i + 16].to(device)).float()
-        total += F.cross_entropy(logits.reshape(-1, logits.size(-1)), y[i:i + 16].reshape(-1).to(device),
-                                 ignore_index=-100, reduction="sum").item()
+        # the output layer in pieces: no (windows x context x vocabulary) table; -100 labels count 0
+        total += -tiny_gpt.target_logprobs(model, x[i:i + 16].to(device), y[i:i + 16].to(device)).sum().item()
     return total, predicted_bytes
 
 
 MIN_DOCS = 20  # fewer documents: numbers are shown, but no verdict
+
+
+def _ledger_rows(dataset_dir):
+    """Yields the column names of a dataset's docs.tsv, then each row as a dict
+    (streamed: a full ledger can hold millions of documents); nothing without a
+    docs.tsv. Rows end at \\n only, as data_prep reads them (older files kept \\r
+    inside titles)."""
+    path = os.path.join(dataset_dir, "docs.tsv")
+    if not os.path.isfile(path):
+        return
+    with open(path, encoding="utf-8", newline="\n") as handle:
+        head = handle.readline().rstrip("\r\n").split("\t")
+        yield head
+        for line in handle:
+            yield dict(zip(head, line.rstrip("\r\n").split("\t")))
+
+
+def _hash(row):
+    """A row's content hash as an int, or None (older builds, or no hash)."""
+    try:
+        return int(row.get("content_hash") or "", 16)
+    except ValueError:
+        return None
+
+
+def read_validation_ledger(dataset_dir, sources):
+    """({source: [(doc_id, content hash or None), ...] in file order}, has hashes)
+    for the validation rows of `sources` in a dataset's docs.tsv, or (None, False)
+    without one. Documents are written to the token files in docs.tsv's order,
+    so the k-th validation document of a source is its k-th validation row."""
+    rows = _ledger_rows(dataset_dir)
+    head = next(rows, None)
+    if head is None:
+        return None, False
+    val = {}
+    for row in rows:
+        if row.get("status") == "val" and row.get("source") in sources:
+            val.setdefault(row["source"], []).append((row["doc_id"], _hash(row)))
+    return val, "content_hash" in head
+
+
+def read_training_matches(dataset_dir, keys, hashes):
+    """(the (source, doc_id) keys, the content hashes) among `keys` / `hashes`
+    that a dataset's docs.tsv marks 'train', and whether it has content hashes;
+    None without a docs.tsv. Only the wanted rows are kept (a full ledger can
+    hold millions of documents). Keys are compared as data_prep's
+    --keep-split-from compares them (/ and \\ alike)."""
+    rows = _ledger_rows(dataset_dir)
+    head = next(rows, None)
+    if head is None:
+        return None
+    hit_keys, hit_hashes = set(), set()
+    for row in rows:
+        if row.get("status") != "train":
+            continue
+        key = data_prep._split_key(row.get("source", ""), row.get("doc_id", ""))
+        if key in keys:
+            hit_keys.add(key)
+        h = _hash(row) if hashes else None
+        if h is not None and h in hashes:
+            hit_hashes.add(h)
+    return hit_keys, hit_hashes, "content_hash" in head
+
+
+def document_ids(dataset_dir, docs, layout):
+    """(docs.tsv's (doc_id, content hash) of each (source, k, text) document, None
+    where it cannot be told; whether the ledger has content hashes)."""
+    val, has_hash = read_validation_ledger(dataset_dir, {source for source, _, _ in docs})
+    out = []
+    for source, k, _ in docs:
+        ids = (val or {}).get(source, [])
+        n, offset = layout.get(source, (0, None))
+        j = None if offset is None or n != len(ids) else k + offset
+        out.append(ids[j] if j is not None and j < len(ids) else None)
+    return out, has_hash
+
+
+def same_folder(a, b):
+    return os.path.normcase(os.path.abspath(a)) == os.path.normcase(os.path.abspath(b))
+
+
+def training_overlap(docs, dataset, layout, models):
+    """Documents of `dataset`'s validation split that a model may have trained on.
+    models: {label: the checkpoint's 'dataset' entry}. A model trained on exactly
+    this dataset (same fingerprint) never saw them. For a model trained on another
+    dataset, that dataset's docs.tsv says which documents it trained on: the same
+    source and doc_id, or the same text (content hash: files renamed, moved or
+    re-numbered, or the same paper in another source), as data_prep's
+    --keep-split-from matches them. Returns (indices of docs to drop, {label: why
+    its dataset differs but cannot be checked}, {label: why its dataset is
+    unknown})."""
+    try:
+        with open(os.path.join(dataset, "manifest.json"), encoding="utf-8") as handle:
+            fingerprint = json.load(handle).get("fingerprint")
+    except (OSError, ValueError):
+        fingerprint = None
+    drop, unchecked, unknown, ids, has_hash = set(), {}, {}, None, False
+    for label, info in models.items():
+        path, fp = (info or {}).get("path"), (info or {}).get("fingerprint")
+        if fp and fingerprint and fp == fingerprint or (not fp and path and same_folder(path, dataset)):
+            continue
+        if not path:
+            unknown[label] = "its checkpoint does not say which dataset it was trained on"
+            continue
+        if same_folder(path, dataset):
+            unchecked[label] = f"it was trained on an earlier build of {dataset} (another fingerprint)"
+            continue
+        if not os.path.isfile(os.path.join(path, "docs.tsv")):
+            unchecked[label] = f"its training dataset {path} (or its docs.tsv) is not on this computer"
+            continue
+        if ids is None:
+            ids, has_hash = document_ids(dataset, docs, layout)
+        if any(d is None for d in ids):
+            unchecked[label] = f"the documents of {dataset} cannot be matched to its docs.tsv"
+            continue
+        keys = [data_prep._split_key(source, d[0]) for (source, _, _), d in zip(docs, ids)]
+        hashes = [d[1] for d in ids]
+        found = read_training_matches(path, set(keys), {h for h in hashes if h is not None})
+        if found is None:
+            unchecked[label] = f"its training dataset {path} (or its docs.tsv) is not on this computer"
+            continue
+        hit_keys, hit_hashes, other_has_hash = found
+        hits = {i for i, (key, h) in enumerate(zip(keys, hashes)) if key in hit_keys or h in hit_hashes}
+        print(f"  model {label} was trained on {path}: {len(hits)} of these documents were in its training split; "
+              "they are left out")
+        if not (has_hash and other_has_hash):
+            print(f"  note: {dataset if not has_hash else path} has no content hashes (an older build): only "
+                  "documents with the same source and id were checked, not the same text under another name")
+        drop |= hits
+    return drop, unchecked, unknown
 
 
 def bootstrap(nll_a, nll_b, bytes_a, bytes_b, reps, seed):
@@ -122,6 +263,9 @@ def main():
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--device", choices=("cpu", "cuda", "mps", "auto"), default="cpu")
     p.add_argument("--trust-checkpoint", action="store_true")
+    p.add_argument("--allow-different-datasets", action="store_true",
+                   help="give a verdict even when a model was trained on another dataset that cannot be checked "
+                        "for these validation documents")
     args = p.parse_args()
     for path in (args.a, args.b):
         if not os.path.exists(path):
@@ -129,13 +273,31 @@ def main():
     if not 1 <= args.docs <= 5000 or not 100 <= args.reps <= 100_000:
         p.error("--docs must be 1-5000 and --reps 100-100000")
     device = tiny_gpt.select_device(args.device)
+    trained_on = {}
     model_a, tok_a, cfg_a, obj_a = tiny_gpt.load_for_inference(args.a, device, args.trust_checkpoint)
+    trained_on["A"] = obj_a.get("dataset") if isinstance(obj_a.get("dataset"), dict) else None
+    del obj_a  # the raw checkpoint (weights, optimizer state) is not needed beside the model
+    gc.collect()
     model_b, tok_b, cfg_b, obj_b = tiny_gpt.load_for_inference(args.b, device, args.trust_checkpoint)
-    dataset = args.dataset or (obj_a.get("dataset") or {}).get("path")
+    trained_on["B"] = obj_b.get("dataset") if isinstance(obj_b.get("dataset"), dict) else None
+    del obj_b
+    gc.collect()
+    dataset = args.dataset or (trained_on["A"] or {}).get("path")
     if not dataset or not os.path.isdir(dataset):
         p.error("no dataset: pass --dataset (checkpoint A's dataset folder is missing)")
-    docs = validation_documents(dataset, args.docs, args.max_chars)
+    layout = {}
+    docs = validation_documents(dataset, args.docs, args.max_chars, layout)
     print(f"A: {args.a}\nB: {args.b}\n{len(docs)} validation documents from {dataset} on {tiny_gpt.device_label(device)}")
+    # a model trained on another dataset may have trained on some of these documents: its BPB would look too good
+    drop, unchecked, unknown = training_overlap(docs, dataset, layout, trained_on)
+    if drop:
+        docs = [d for i, d in enumerate(docs) if i not in drop]
+        print(f"  {len(docs)} documents left that neither model trained on")
+    for who, why in unknown.items():
+        print(f"  note: model {who} cannot be checked for training on these documents: {why}")
+    for who, why in unchecked.items():
+        print(f"  WARNING: model {who} was trained on another dataset and may have trained on some of these "
+              f"documents ({why}); its bits per byte may look too good")
     rows, skipped, lossy = [], 0, {"A": 0, "B": 0}
     for i, (source, k, text) in enumerate(docs, 1):
         n_bytes = len(text.encode("utf-8"))
@@ -173,6 +335,9 @@ def main():
                                        np.array([r[6] for r in rows], dtype=float), args.reps, args.seed)
     if len(rows) < MIN_DOCS:
         verdict = f"too few documents ({len(rows)}) for a verdict; use at least {MIN_DOCS}"
+    elif unchecked and not args.allow_different_datasets:
+        verdict = (f"none: model {' and '.join(unchecked)} may have trained on these documents (see the warning "
+                   "above; --allow-different-datasets gives one anyway)")
     else:
         verdict = ("A is better" if high < 0 else "B is better" if low > 0 else "no reliable difference")
     print(f"\nVerdict: {verdict} (difference in bits per byte {point:+.4f}, 95% interval {low:+.4f} to {high:+.4f}).")

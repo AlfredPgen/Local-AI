@@ -140,11 +140,10 @@ def style_tables(doc):
 def update_toc_with_word(path):
     """Let Word compute the table of contents and page numbers (Windows only)."""
     try:
-        import win32com.client  # noqa: F401
+        import win32com.client
     except ImportError:
         print("pywin32 not available; open the document in Word and update fields")
         return
-    import win32com.client
     word = win32com.client.DispatchEx("Word.Application")
     word.Visible = False
     word.DisplayAlerts = 0

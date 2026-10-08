@@ -33,7 +33,6 @@ but it ranks the options.
 
 import argparse
 import csv
-import fnmatch
 import glob
 import math
 import os
@@ -122,18 +121,18 @@ def markdown_source(name, dirs, args, use_kw, rng):
     t = Tally(name, "markdown")
     patterns = args.md_glob or list(dp.MD_PATTERNS_DEFAULT)
     files, seen = [], set()
+    # the same files data_prep reads: names matched ignoring case, [ ] in folder paths taken literally
+    excludes = [ex.lower().replace("\\", "/") for ex in args.md_exclude]
     for directory in dirs:
-        found = []
-        for pattern in patterns:
-            spec = os.path.join(directory, "**", pattern) if args.md_recursive else os.path.join(directory, pattern)
-            found.extend(glob.glob(spec, recursive=args.md_recursive))
-        for path in sorted(set(found)):
+        if not os.path.isdir(directory):
+            raise SystemExit(f"--md-dir is not a folder: {directory}")
+        for path in dp.list_text_files(directory, patterns, args.md_recursive):
             real = os.path.realpath(path)
             rel = os.path.relpath(path, directory)
             if real in seen or not os.path.isfile(real):
                 continue
             seen.add(real)
-            if any(fnmatch.fnmatch(os.path.basename(path), ex) or fnmatch.fnmatch(rel, ex) for ex in args.md_exclude):
+            if dp._excluded(path, rel, excludes):
                 continue
             size = os.path.getsize(path)
             if size <= 512 * 1024 * 1024:

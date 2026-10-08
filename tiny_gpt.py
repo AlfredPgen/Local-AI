@@ -45,6 +45,7 @@ import os
 import platform
 import random
 import re
+import signal
 import subprocess
 import sys
 import threading
@@ -211,8 +212,26 @@ def _mps_bf16_ok():
         return False
 
 
-def choose_precision(device, preference="auto"):
-    """Return (autocast dtype or None, label, needs GradScaler)."""
+def _mps_scaler_ok():
+    """Whether this PyTorch can scale FP16 gradients on MPS (GradScaler('mps'))."""
+    try:
+        p = torch.nn.Parameter(torch.ones(4, device="mps"))
+        opt = torch.optim.SGD([p], lr=0.1)
+        scaler = torch.amp.GradScaler("mps")
+        scaler.scale(p.sum()).backward()
+        scaler.unscale_(opt)
+        scaler.step(opt)
+        scaler.update()
+        return bool(torch.isfinite(p).all().item())
+    except Exception:  # noqa: BLE001 - any failure means "not supported"
+        return False
+
+
+def choose_precision(device, preference="auto", training=True):
+    """Return (autocast dtype or None, label, needs GradScaler). FP16 training
+    needs loss scaling (GradScaler) so small gradients do not underflow; on MPS
+    it is used when this PyTorch supports it, otherwise FP16 training is refused
+    (training=False: inference only, no gradients, so no scaler is needed)."""
     if preference == "auto":
         if device.type == "cuda":
             preference = "bf16" if torch.cuda.is_bf16_supported() else "fp16"
@@ -229,7 +248,12 @@ def choose_precision(device, preference="auto"):
     if preference == "fp16":
         if device.type == "cpu":
             raise SystemExit("--precision fp16 is not supported on CPU; use fp32 or bf16.")
-        return torch.float16, "FP16 autocast", device.type == "cuda"
+        if device.type == "mps" and training:
+            if not _mps_scaler_ok():
+                raise SystemExit("--precision fp16 on Apple MPS needs gradient (loss) scaling, which this PyTorch does "
+                                 "not support on MPS; use --precision bf16 (or auto) or fp32.")
+            return torch.float16, "FP16 autocast + loss scaling", True
+        return torch.float16, "FP16 autocast", device.type == "cuda" and training
     raise SystemExit(f"Unknown precision {preference!r}")
 
 
@@ -295,7 +319,7 @@ def choose_attention(device, cfg, amp_dtype, preference="auto"):
                 fn().float().sum().backward()
             synchronize(device)
             times[name] = (time.perf_counter() - t0) / 5
-    del q, k, v
+    q = k = v = None  # freed (not del: the timing lambdas share these names, which pyflakes flags)
     best = min(times, key=times.get)
     other = "repeat_kv" if best == "gqa_native" else "gqa_native"
     result = (best, f"timed on this GPU: {times[best] * 1e3:.1f} ms vs {times[other] * 1e3:.1f} ms for {other}")
@@ -520,6 +544,9 @@ class TinyGPT(nn.Module):
 
 
 LOSS_CHUNK_TOKENS = 4096  # tokens per piece when the loss is computed in pieces
+# FP16 updates the GradScaler may skip in a row (overflowing gradients) before the run counts as diverged; a fresh
+# run's scale (65,536) settles within a handful of skips, so 20 in a row means no update is getting through
+MAX_OVERFLOW_SKIPS = 20
 
 
 def _chunk_loss(h, weight, y):
@@ -625,10 +652,20 @@ class LRSchedule:
 # ---------------------------------------------------------------------------
 # Checkpoints
 # ---------------------------------------------------------------------------
-def safe_load(path, trust=False):
-    """torch.load with weights_only=True (no arbitrary Python objects)."""
+def safe_load(path, trust=False, mmap=False):
+    """torch.load with weights_only=True (no arbitrary Python objects).
+
+    mmap=True maps the file instead of reading it: tensors are read from disk only
+    when used. Ignored on Windows, where a mapped file cannot be replaced, so a
+    training run's atomic_save could not overwrite a checkpoint held open here;
+    files that cannot be mapped (the old non-zip format) are read normally."""
     if not os.path.isfile(path):
         raise SystemExit(f"Checkpoint not found: {path}")
+    if mmap and os.name != "nt":
+        try:
+            return torch.load(path, map_location="cpu", weights_only=True, mmap=True)
+        except Exception:  # noqa: BLE001 - old (non-zip) files, or ones that need --trust-checkpoint: below
+            pass
     try:
         return torch.load(path, map_location="cpu", weights_only=True)
     except Exception as exc:  # noqa: BLE001
@@ -684,10 +721,40 @@ def tokenizer_from_checkpoint(obj):
     raise SystemExit("This checkpoint has no tokenizer; it cannot be used for generation.")
 
 
-def model_from_checkpoint(obj, device="cpu"):
-    """(model in eval mode, tokenizer, config) from an already loaded checkpoint (any format)."""
+def _model_assigned(obj, cfg, device):
+    """The model built on the meta device and given the checkpoint's own tensors
+    (load_state_dict(assign=True)): no random initialisation and no second copy of
+    the weights. None when this PyTorch cannot do it or something stays unset."""
+    try:
+        with torch.device("meta"):
+            model = TinyGPT(cfg)
+        missing, unexpected = model.load_state_dict(obj["model"], strict=False, assign=True)
+    except (TypeError, RuntimeError, NotImplementedError):  # older PyTorch
+        return None
+    missing = [m for m in missing if not (m == "lm_head.weight" and cfg.tie_embeddings)]
+    if missing or unexpected:
+        raise SystemExit(f"Checkpoint weights do not match the architecture "
+                         f"(missing {missing[:4]}, unexpected {unexpected[:4]}).")
+    if cfg.tie_embeddings:
+        model.lm_head.weight = model.token_embedding.weight  # assign=True replaced the shared parameter
+    model.rope = RotaryEmbedding(cfg.head_dim, cfg.ctx, cfg.rope_base)  # its buffers are not in the file
+    if any(t.is_meta for t in list(model.parameters()) + list(model.buffers())):
+        return None
+    return model.float().to(device).eval()  # float32 as below (no copy if already float32 on the CPU)
+
+
+def model_from_checkpoint(obj, device="cpu", assign=False):
+    """(model in eval mode, tokenizer, config) from an already loaded checkpoint (any format).
+
+    assign=True: the model holds the checkpoint's own tensors instead of copies
+    (less memory, no random initialisation); changing the model then changes
+    obj["model"] too, so use it only when obj is not saved again."""
     cfg = config_from_checkpoint(obj)
     cfg.dropout = 0.0
+    if assign:
+        model = _model_assigned(obj, cfg, device)
+        if model is not None:
+            return model, tokenizer_from_checkpoint(obj), cfg
     model = TinyGPT(cfg)
     missing, unexpected = model.load_state_dict(obj["model"], strict=False)
     missing = [m for m in missing if not (m == "lm_head.weight" and cfg.tie_embeddings)]
@@ -728,11 +795,17 @@ def to_cpu(obj):
 
 
 def atomic_save(obj, path):
-    """Write to a temp file in the same folder, then rename over the target.
-    Retries briefly if Windows reports the target as in use (e.g. open in the viewer)."""
+    """Write to a temp file in the same folder, flush it to the disk, then rename
+    over the target (so a power cut right after a save cannot leave a renamed but
+    unwritten file in place of the previous good one). Retries briefly if Windows
+    reports the target as in use (e.g. open in the viewer); returns the path
+    actually written, which differs from `path` only if it stayed locked."""
     tmp = f"{path}.tmp-{os.getpid()}"
     try:
-        torch.save(obj, tmp)
+        with open(tmp, "wb") as handle:
+            torch.save(obj, handle)
+            handle.flush()
+            os.fsync(handle.fileno())
         for attempt in range(6):
             try:
                 os.replace(tmp, path)
@@ -1341,7 +1414,7 @@ def shuffled_prompt(prompt, k):
 
 
 @torch.no_grad()
-def score_probes(model, tok, probes, device, amp_dtype, batch_size=64, floor=True):
+def score_probes(model, tok, probes, device, amp_dtype, batch_size=64, floor=True, template=None):
     """Cloze fact probes: is the correct continuation more probable (per
     character) than every distractor? A proxy for factual reliability, not a
     hallucination rate. All (probe, option) sequences are scored in right-padded
@@ -1349,7 +1422,11 @@ def score_probes(model, tok, probes, device, amp_dtype, batch_size=64, floor=Tru
 
     With floor=True each probe is also scored with its question's words shuffled
     (FLOOR_SHUFFLES orders): what topic words alone achieve. That share, not
-    chance, is the realistic floor; accuracy above it needs the sentence itself."""
+    chance, is the realistic floor; accuracy above it needs the sentence itself.
+
+    template (a format string with {prompt}, e.g. finetune.TEMPLATE) wraps each
+    prompt after any shuffling, so only the question's words are shuffled and
+    the template stays intact; results keep the unwrapped prompt."""
     was_training = model.training
     model.eval()
     prefix = [tok.bos_id] if tok.bos_id >= 0 else []
@@ -1361,7 +1438,8 @@ def score_probes(model, tok, probes, device, amp_dtype, batch_size=64, floor=Tru
         options = [encode_cont(o) for o in [probe["answer"]] + probe["distractors"]]  # once, not per version
         chars = [max(len(o), 1) for o in [probe["answer"]] + probe["distractors"]]
         for v in range(versions):
-            context = prefix + tok.encode(probe["prompt"] if v == 0 else shuffled_prompt(probe["prompt"], v))
+            text = probe["prompt"] if v == 0 else shuffled_prompt(probe["prompt"], v)
+            context = prefix + tok.encode(template.format(prompt=text) if template else text)
             for j, cont in enumerate(options):
                 ids = (context + cont)[-model.ctx - 1:]
                 seqs.append((i, v, j, ids, len(cont), chars[j]))
@@ -1463,6 +1541,7 @@ def watermark_green(key, prev_token, vocab_size, gamma=0.25, _cache={}):
     return _cache[k]
 
 
+@torch.no_grad()
 def generate(model, tok, prompt, max_new_tokens, device, amp_dtype=None, temperature=0.8, top_k=50,
              top_p=0.95, generator=None, watermark=None):
     """Sample a continuation. Sampling runs on CPU with its own generator, so
@@ -1477,7 +1556,10 @@ def generate(model, tok, prompt, max_new_tokens, device, amp_dtype=None, tempera
     for _ in range(max_new_tokens):
         x = torch.tensor([ids[-model.ctx:]], device=device)
         with torch.autocast(device.type, dtype=amp_dtype or torch.float32, enabled=amp_dtype is not None):
-            logits = model(x)[0, -1].float().cpu()
+            if isinstance(model, TinyGPT):  # the output layer only at the last position, the one sampled from
+                logits = model.lm_head(model(x, return_hidden=True)[:, -1])[0].float().cpu()
+            else:
+                logits = model(x)[0, -1].float().cpu()
         if watermark:
             key, gamma, delta = watermark
             logits = logits + delta * watermark_green(key, ids[-1], logits.numel(), gamma).float()
@@ -1572,24 +1654,26 @@ def device_memory_budget(device):
 
 def estimate_train_bytes(cfg, micro_batch, amp=True, checkpointing=False, loss_chunk=0, optimizer="adamw"):
     """Training memory: FP32 weights and gradients (4 + 4 bytes per parameter),
-    optimizer state (AdamW 8; Muon 4 for the block matrices), activations kept
-    for the backward pass (only each block's input with activation
-    checkpointing, plus one block being recomputed) and the output-layer logits
-    (one piece of loss_chunk tokens when the loss is computed in pieces)."""
+    the half-precision weight copies autocast keeps during a step (2), optimizer
+    state (AdamW 8; Muon 4 for the block matrices), activations kept for the
+    backward pass (only each block's FP32 input with activation checkpointing,
+    plus one block being recomputed) and the output-layer logits (one piece of
+    loss_chunk tokens when the loss is computed in pieces)."""
     n_total, n_nonembed = count_params(cfg)
     t = micro_batch * cfg.ctx
     b = 2 if amp else 4
     kv = cfg.n_kv_heads * cfg.head_dim
     per_token_layer = 4 * cfg.d_model + b * (7 * cfg.d_model + 4 * kv + 4 * cfg.ffn_hidden) + 3 * cfg.n_heads
     if checkpointing:
-        activations = t * cfg.n_layers * b * cfg.d_model + t * per_token_layer
+        activations = t * cfg.n_layers * 4 * cfg.d_model + t * per_token_layer  # the residual stream is FP32
     else:
         activations = t * cfg.n_layers * per_token_layer
     logits = (min(t, loss_chunk) if loss_chunk else t) * cfg.vocab_size * (b + 4 + 4)
     if loss_chunk:
-        logits += t * cfg.d_model * (b + 4)  # the hidden states and their gradient, kept whole
+        logits += t * cfg.d_model * (4 + 4)  # the (FP32) hidden states and their gradient, kept whole
     state = 8 * n_total if optimizer != "muon" else 8 * (n_total - n_nonembed) + 4 * n_nonembed
-    return int((activations + logits) * 1.3 + n_total * 8 + state + 400 * 2 ** 20)
+    weight_cache = (2 if amp else 0) * n_total
+    return int((activations + logits) * 1.3 + n_total * 8 + weight_cache + state + 400 * 2 ** 20)
 
 
 def memory_options(checkpointing="auto", loss_chunk=None):
@@ -1612,6 +1696,7 @@ def choose_memory_plan(cfg, tokens_per_step, budget_bytes, amp, optimizer="adamw
     fits = lambda m, o: estimate_train_bytes(cfg, m, amp, o[0], o[1], optimizer) <= budget_bytes  # noqa: E731
     if micro is not None:
         chosen = next((o for o in options if fits(micro, o)), options[-1])
+        # rounded down like split_batch: never more tokens per step than asked for (the caller may round otherwise)
         return micro, max(1, target // micro), chosen[0], chosen[1]
     best = {}
     for o in options:
@@ -1625,7 +1710,22 @@ def choose_memory_plan(cfg, tokens_per_step, budget_bytes, amp, optimizer="adamw
                          "checkpointing and the loss in pieces; choose a smaller --d-model/--layers/--ctx.")
     want = min(target, 4)
     o = next((o for o in options if best.get(o, 0) >= want), next(o for o in options if o in best))
-    return best[o], max(1, target // best[o]), o[0], o[1]
+    m, accum = split_batch(target, best[o], want)
+    return m, accum, o[0], o[1]
+
+
+def split_batch(target, largest, smallest=1):
+    """(micro-batch, accumulation) whose product is closest to `target` sequences
+    without exceeding it, the micro-batch between max(largest / 2, smallest) and
+    `largest` (the largest that fits); ties go to the larger micro-batch. Powers of
+    two divide exactly, so they keep `largest`; other targets (from --steps) no
+    longer lose up to half their tokens to rounding (61 = 32 x 1 becomes 30 x 2)."""
+    best = None
+    for m in range(largest, max((largest + 1) // 2, min(smallest, largest), 1) - 1, -1):
+        accum = max(1, target // m)
+        if best is None or m * accum > best[0] * best[1]:
+            best = (m, accum)
+    return best
 
 
 def choose_micro_batch(cfg, tokens_per_step, budget_bytes, amp):
@@ -1710,7 +1810,10 @@ def plan_run(args, manifest, device, amp_dtype, token_cap=None):
             micro, accum, ck, lc = choose_memory_plan(cfg, tps, budget_bytes, amp, opt_kind,
                                                       args.activation_checkpointing, args.loss_chunk_tokens,
                                                       micro=args.batch_size)
-            accum = args.grad_accum or max(1, tps // (micro * cfg.ctx))
+            if args.steps:  # steps fixed: rounding up would train past the token budget (and the epoch cap)
+                accum = args.grad_accum or max(1, tps // (micro * cfg.ctx))
+            else:  # steps = budget // tokens per step below, so the nearest accumulation stays within the budget
+                accum = args.grad_accum or max(1, round(tps / (micro * cfg.ctx)))
             if estimate_train_bytes(cfg, micro, amp, ck, lc, opt_kind) > budget_bytes:
                 lines.append(f"WARNING: batch {micro} x ctx {cfg.ctx} may not fit ({budget_text}); an "
                              "out-of-memory error at step 1 switches on memory savings or halves the batch.")
@@ -1824,7 +1927,7 @@ def _measure(cfg, micro, accum, device, amp_dtype, attn_pref, warmup, timed, che
         synchronize(device)
         return (time.perf_counter() - t0) / timed * accum
     finally:
-        del model, opt, x
+        model = opt = x = None  # freed before empty_cache (not del: micro_step shares these names)
         if device.type == "cuda":
             torch.cuda.empty_cache()
 
@@ -1894,10 +1997,32 @@ def plan_with_time_budget(args, manifest, device, amp_dtype):
                      f"{fit_tokens:,} tokens fit in time")
         return n * r <= tokens, tokens
 
+    def is_oom(exc):  # torch.cuda.OutOfMemoryError is a RuntimeError
+        if "out of memory" not in str(exc).lower():
+            return False
+        if device.type == "cuda":
+            torch.cuda.empty_cache()
+        return True
+
     explicit = any(v is not None for v in (args.d_model, args.layers, args.heads, args.kv_heads))
     if explicit:
-        _, tokens = trial(args)
         chosen_args = args
+        while True:  # the given shape must be measured: on out-of-memory, halve the micro-batch and measure again
+            try:
+                _, tokens = trial(chosen_args)
+                break
+            except RuntimeError as exc:
+                if not is_oom(exc):
+                    raise
+                micro = plan_run(chosen_args, manifest, device, amp_dtype)[1]["micro_batch"]
+                if micro == 1:
+                    raise SystemExit("time budget: this model shape runs out of memory on this device even at "
+                                     "micro-batch 1; choose a smaller --d-model/--layers/--ctx.")
+                notes.append(f"time budget: micro-batch {micro} ran out of memory in the speed test; using "
+                             f"{micro // 2}")
+                chosen_args = argparse.Namespace(**{**vars(chosen_args), "batch_size": micro // 2,
+                                                    "grad_accum": chosen_args.grad_accum * 2
+                                                    if chosen_args.grad_accum else None})
     else:
         ladder = shape_ladder(int(manifest["tokenizer"]["vocab_size"]))
         top = max(i for i, c in enumerate(ladder) if c.d_model <= cfg.d_model)
@@ -1915,11 +2040,9 @@ def plan_with_time_budget(args, manifest, device, amp_dtype):
                     results[i] = trial(shape_args(i))
                 except SystemExit:
                     results[i] = (False, 0)
-                except RuntimeError as exc:  # torch.cuda.OutOfMemoryError is a RuntimeError
-                    if "out of memory" not in str(exc).lower():
+                except RuntimeError as exc:
+                    if not is_oom(exc):
                         raise
-                    if device.type == "cuda":
-                        torch.cuda.empty_cache()
                     results[i] = (False, 0)
             return results[i][0]
 
@@ -2236,6 +2359,14 @@ def load_any(path, trust=False):
     return safe_load(path, trust)
 
 
+def _home_short(path):
+    """`path` with the home folder shown as ~, so a file meant for sharing does not carry the user name."""
+    home = os.path.expanduser("~")
+    if os.path.normcase(path).startswith(os.path.normcase(home) + os.sep):
+        return "~" + path[len(home):]
+    return path
+
+
 def cmd_export(args):
     """Write <folder>/model.safetensors + config.json + tokenizer.model."""
     ckpt_path, best_path, _ = checkpoint_paths(args)
@@ -2257,7 +2388,7 @@ def cmd_export(args):
     config = {"architecture": "tinyGPT decoder-only Transformer: interleaved-pair RoPE, RMSNorm, SwiGLU, "
                               "grouped-query attention, tied input/output embeddings, no biases",
               "model_config": dataclasses.asdict(cfg), "tokenizer": {**tok.meta(), "file": "tokenizer.model"},
-              "source_checkpoint": os.path.abspath(path), "step": obj.get("step"),
+              "source_checkpoint": _home_short(os.path.abspath(path)), "step": obj.get("step"),
               "metrics": {"best_val": metrics.get("best_val", obj.get("best_val")),
                           "best_step": metrics.get("best_step", obj.get("best_val_step"))},
               "exported": now_iso()}
@@ -2284,7 +2415,7 @@ def cmd_benchmark(args):
     if not os.path.isfile(probes_file):
         raise SystemExit(f"Probe file not found: {probes_file}")
     device = select_device(args.device)
-    amp_dtype, amp_name, _ = choose_precision(device, args.precision)
+    amp_dtype, amp_name, _ = choose_precision(device, args.precision, training=False)
     model, tok, cfg, obj = load_for_inference(path, device, args.trust_checkpoint)
     model.set_attention_impl(choose_attention(device, cfg, amp_dtype, args.attn)[0])
     probes = read_probes(probes_file)
@@ -2333,7 +2464,7 @@ def cmd_generate(args):
             hint = " Your legacy model is still available: --checkpoint tiny_gpt_bpe_best.pt"
         raise SystemExit(f"No checkpoint {path}; train first or pass --checkpoint.{hint}")
     device = select_device(args.device)
-    amp_dtype, amp_name, _ = choose_precision(device, args.precision)
+    amp_dtype, amp_name, _ = choose_precision(device, args.precision, training=False)
     model, tok, cfg, obj = load_for_inference(path, device, args.trust_checkpoint)
     impl, _ = choose_attention(device, cfg, amp_dtype, args.attn)
     model.set_attention_impl(impl)
@@ -2416,7 +2547,86 @@ def _resume_hint(args):
             ". Pass the right one with --name, e.g. --name " + found[0] + " --resume") if found else ""
 
 
+def newer_fallbacks(path):
+    """Files that atomic_save wrote instead of `path` while it was locked by another
+    program (<base>.HHMMSS.pt) and that are newer than `path`, oldest first."""
+    folder, name = os.path.split(path)
+    pattern = re.compile(re.escape(os.path.splitext(name)[0]) + r"\.\d{6}\.pt")
+    since = os.path.getmtime(path) if os.path.exists(path) else 0.0
+    found = [os.path.join(folder, f) for f in os.listdir(folder or ".") if pattern.fullmatch(f)]
+    return sorted((f for f in found if os.path.getmtime(f) > since), key=os.path.getmtime)
+
+
+class DeferInterrupt:
+    """Holds Ctrl+C while the optimizer update runs, so a step is applied in full
+    or not at all (an interrupt halfway through Muon's or AdamW's update would
+    save a partly updated model under the previous step number); deliver()
+    raises the held KeyboardInterrupt afterwards. Only possible in the main
+    thread with Python's own Ctrl+C handler; otherwise it does nothing."""
+
+    def __init__(self):
+        self.hit, self.old = False, None
+
+    def _hold(self, signum, frame):
+        self.hit = True
+
+    def __enter__(self):
+        self.old = None
+        try:
+            if signal.getsignal(signal.SIGINT) is signal.default_int_handler:
+                self.old = signal.signal(signal.SIGINT, self._hold)
+        except ValueError:  # not the main thread
+            pass
+        return self
+
+    def __exit__(self, *exc):
+        if self.old is not None:
+            signal.signal(signal.SIGINT, self.old)
+            self.old = None
+        return False
+
+    def deliver(self):
+        if self.hit:
+            self.hit = False
+            raise KeyboardInterrupt
+
+
+def acquire_run_lock(args):
+    """Mark <out_dir>/<name> as being trained by this process (an exclusive
+    <name>.train.lock holding the process id), so two trainers never write the
+    same run's checkpoints. A lock whose process has ended is stale and replaced."""
+    os.makedirs(args.out_dir, exist_ok=True)
+    lock = os.path.join(args.out_dir, f"{args.name}.train.lock")
+    for attempt in (1, 2):
+        try:
+            fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            break
+        except FileExistsError:
+            if attempt == 2 or data_prep._lock_owner_alive(lock):
+                raise SystemExit(f"Run {args.name!r} in {args.out_dir} is being trained by another process (see "
+                                 f"{lock}). Wait for it to finish or stop it first; delete the lock file only if "
+                                 "no training is running.")
+            os.remove(lock)  # stale: its run ended without removing it
+    started = None
+    try:
+        import psutil
+        started = psutil.Process().create_time()
+    except Exception:  # noqa: BLE001 - without psutil only the process id is checked
+        pass
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        json.dump({"pid": os.getpid(), "started": started}, handle)
+    return lock
+
+
 def cmd_train(args):
+    lock = acquire_run_lock(args)
+    try:
+        return _train(args)
+    finally:
+        data_prep._release_lock(lock)
+
+
+def _train(args):
     ckpt_path, best_path, metrics_path = checkpoint_paths(args)
     run_id = datetime.datetime.now().strftime("%Y%m%d-%H%M%S") + f"-{os.getpid()}"
     t_run = time.perf_counter()
@@ -2434,6 +2644,15 @@ def cmd_train(args):
     resume_obj = init_obj = None
     from_best = False  # resuming from <name>_best.pt because no training state was ever saved
     if args.resume:
+        late = newer_fallbacks(ckpt_path)
+        if late:
+            raise SystemExit(f"{late[-1]} is a newer training state than {ckpt_path}: it was saved under that name "
+                             f"because {os.path.basename(ckpt_path)} was locked by another program. Rename it to "
+                             f"{ckpt_path} (replacing the older file) and resume again, or delete it to resume from "
+                             "the older state.")
+        for late_best in newer_fallbacks(best_path):
+            print(f"Note: {late_best} is a newer best model than {best_path} (saved there while the file was "
+                  "locked); rename it over the best file to use it.")
         if os.path.exists(ckpt_path):
             resume_path = ckpt_path
         elif os.path.exists(best_path):
@@ -2517,6 +2736,12 @@ def cmd_train(args):
         plan_lines.append(f"architecture taken from --init-from {args.init_from}; dropout {cfg.dropout} "
                           f"({'set' if args.dropout is not None else 'default 0 when continuing from weights'}, "
                           f"not the planned value above)")
+        if init_obj.get("optimizer") and checkpoint_info(init_obj)[1] == "training" and not args.steps:
+            # a training state continues its schedule at its own step, so the planned steps come after that step
+            init_step = int(init_obj.get("step", 0) or 0)
+            settings["steps"] += init_step
+            plan_lines.append(f"steps: the schedule continues at the --init-from checkpoint's step {init_step:,}, "
+                              f"so the planned steps run from there: {settings['steps']:,} in total")
     else:
         cfg, settings, plan_lines = plan_with_time_budget(args, manifest, device, amp_dtype)
     if cfg.vocab_size != tok.vocab_size:
@@ -2563,7 +2788,7 @@ def cmd_train(args):
 
     start_step, tokens_seen, train_seconds = 0, 0, 0.0
     run_seconds_before = 0.0  # wall-clock time of earlier sessions of this run (before --resume)
-    rewarm_steps = 0
+    rewarm_start, rewarm_steps = 0, 0  # learning-rate ramp after resuming from a best checkpoint
     interval_state = None
     history, best_val, best_step, last_eval = [], float("inf"), None, None
     resume_note = "fresh run"
@@ -2582,12 +2807,15 @@ def cmd_train(args):
             # The best checkpoint has the weights, step, schedule and history, but not the optimizer's running averages
             # or the sampler state: the averages restart (they rebuild within ~50 steps, so the learning rate is
             # re-warmed over those steps) and the sampler is re-seeded so the first windows are not replayed.
-            rewarm_steps = min(50, max(total_steps - start_step, 1))
+            rewarm_start, rewarm_steps = start_step, min(50, max(total_steps - start_step, 1))
+            # stored, so a pause during the ramp resumes inside it instead of at the full learning rate
+            settings["rewarm_start"], settings["rewarm_steps"] = rewarm_start, rewarm_steps
             batcher.gen.manual_seed(int(args.seed) + start_step)
             resume_note = (f"RESUMED FROM {best_path} at step {start_step:,}: no training state had been saved "
                            f"({ckpt_path} missing), so the optimizer's averages restart and the learning rate is re-warmed "
                            f"over {rewarm_steps} steps; weights, schedule position and history are kept")
         else:
+            rewarm_start, rewarm_steps = int(settings.get("rewarm_start", 0)), int(settings.get("rewarm_steps", 0))
             restored, total_p = load_optimizer_by_name(opt, resume_obj["optimizer"],
                                                        resume_obj["optimizer_param_names"], param_names)
             if scaler is not None and resume_obj.get("scaler"):
@@ -2613,7 +2841,7 @@ def cmd_train(args):
                               "by something better.")
                         best_val, best_step = float(nm["best_val"]), nm.get("best_step")
                     del newer
-                except Exception as exc:  # noqa: BLE001
+                except (Exception, SystemExit) as exc:  # noqa: BLE001 - safe_load reports a bad file as SystemExit
                     print(f"Note: could not read {best_path} ({exc}); it may be replaced by the next best.")
             resume_note = (f"RESUMED {ckpt_path} at step {start_step:,} (optimizer state {restored}/{total_p} "
                            f"tensors; best {best_val:.4f} @{best_step}; last eval "
@@ -2632,7 +2860,8 @@ def cmd_train(args):
         if start_step >= total_steps:
             raise SystemExit(f"--init-from checkpoint is at step {start_step:,}; set --steps above that.")
 
-    train_model = maybe_compile(model, args.compile, device)
+    train_model = maybe_compile(model, args.compile, device, return_hidden=bool(loss_chunk), amp_dtype=amp_dtype,
+                                micro=micro)
     n_total, n_nonembed = model.param_counts()
     unique = sum(len(a) for a in arrays["train"].values())
 
@@ -2757,6 +2986,7 @@ def cmd_train(args):
     progress_loss = torch.zeros((), device=device)
     progress_micro = 0
     last_gnorm = torch.zeros((), device=device)
+    overflow_run = 0  # FP16 updates skipped in a row by the GradScaler (gradients overflowed)
     seg = time.perf_counter()
     interval_wall, interval_start_step = time.perf_counter(), start_step
     last_print = time.perf_counter()
@@ -2766,19 +2996,50 @@ def cmd_train(args):
     if interval_state:  # resumed between evaluations: the next "train" value covers the whole interval
         interval_loss += float(interval_state.get("loss_sum", 0.0))
         interval_micro = int(interval_state.get("micro", 0))
+    held = DeferInterrupt()
+    micro_floor = min(4, micro)  # first-step out-of-memory: halve to here, then recompute blocks, then halve further
+    fallbacks = {}  # file atomic_save wrote instead of a locked checkpoint in this session (deleted once superseded)
+
+    def save(path, inference_only, at_step):
+        written = atomic_save(payload(at_step, inference_only), path)
+        old = fallbacks.pop(path, None)
+        if old and old != written:
+            try:
+                os.remove(old)
+            except OSError:
+                pass
+        if written != path:
+            fallbacks[path] = written
+        return written
+
+    def snapshot():
+        """Everything an unfinished step changes before its update: sampler, dropout RNG, loss sums."""
+        return (batcher.gen.get_state(),
+                torch.get_rng_state() if cfg.dropout > 0 else None,
+                torch.cuda.get_rng_state_all() if cfg.dropout > 0 and device.type == "cuda" else None,
+                interval_loss.clone(), progress_loss.clone())
+
+    def rewind(snap):
+        """Undo an unfinished step, so it is replayed exactly (same windows, dropout masks and loss sums)."""
+        batcher.gen.set_state(snap[0])
+        if snap[1] is not None:
+            torch.set_rng_state(snap[1])
+        if snap[2] is not None:
+            torch.cuda.set_rng_state_all(snap[2])
+        interval_loss.copy_(snap[3])
+        progress_loss.copy_(snap[4])
+
     try:
         step = start_step
         while step < total_steps:
+            step_start = snapshot()  # taken before the step number moves on, so it always belongs to this step
+            scaler_state = scaler.state_dict() if scaler is not None and first_step else None
             step += 1
-            sampler_snapshot = (batcher.gen.get_state(),
-                                torch.get_rng_state() if cfg.dropout > 0 else None,
-                                torch.cuda.get_rng_state_all() if cfg.dropout > 0 and device.type == "cuda" else None)
             lr = schedule.lr_at(step)
-            if step - start_step <= rewarm_steps:  # only after resuming from a best checkpoint
-                lr *= (step - start_step) / rewarm_steps
+            if rewarm_steps and step - rewarm_start <= rewarm_steps:  # only after resuming from a best checkpoint
+                lr *= (step - rewarm_start) / rewarm_steps
             for group in opt.param_groups:
                 group["lr"] = lr
-            loss_before = (interval_loss.clone(), progress_loss.clone())  # restored if this step is retried
             try:
                 for _ in range(accum):
                     x, y = batcher.next()
@@ -2804,31 +3065,61 @@ def cmd_train(args):
                         scaler.scale(loss / accum).backward()
                     else:
                         (loss / accum).backward()
-                if scaler is not None:
-                    scaler.unscale_(opt)
-                last_gnorm = torch.nn.utils.clip_grad_norm_(model.parameters(), settings["grad_clip"] or float("inf"))
-                if scaler is not None:
-                    scaler.step(opt)
-                    scaler.update()
-                else:
-                    opt.step()
-                opt.zero_grad(set_to_none=True)
+                with held:  # Ctrl+C waits until the update and its bookkeeping are complete
+                    if scaler is not None:
+                        scaler.unscale_(opt)
+                    gnorm = torch.nn.utils.clip_grad_norm_(model.parameters(), settings["grad_clip"] or float("inf"))
+                    if scaler is not None:
+                        scale = scaler.get_scale()
+                        scaler.step(opt)
+                        scaler.update()
+                        # a lower scale means the FP16 gradients overflowed: the scaler skipped this update (normal
+                        # now and then), so its infinite norm is no sign of divergence and the last norm stands.
+                        # Many skips in a row (or a scale below 1) mean every update is being dropped: that run
+                        # has diverged, and the infinite norm is kept so the save and Ctrl+C checks stop it.
+                        new_scale = scaler.get_scale()
+                        if new_scale >= scale:
+                            last_gnorm, overflow_run = gnorm, 0
+                        else:
+                            overflow_run += 1
+                            if overflow_run >= MAX_OVERFLOW_SKIPS or new_scale < 1.0:
+                                last_gnorm = gnorm
+                    else:
+                        opt.step()
+                        last_gnorm = gnorm
+                    opt.zero_grad(set_to_none=True)
+                    interval_micro += accum
+                    progress_micro += accum
+                    interval_tokens += settings["tokens_per_step"]
+                    tokens_seen += settings["tokens_per_step"]
+                    done_step = step
             except RuntimeError as exc:  # torch.cuda.OutOfMemoryError / MPS OOM are RuntimeErrors
-                saving_left = not loss_chunk or not model.grad_checkpoint
-                if not first_step or (micro == 1 and not saving_left) or "out of memory" not in str(exc).lower():
+                oom = "out of memory" in str(exc).lower()
+                # a compiled model that fails at the first step for another reason (a graph recompiled after an
+                # earlier out-of-memory retry) is retried once in eager mode; an eager failure is raised as it is
+                if not first_step or not (oom or train_model is not model):
                     raise
                 opt.zero_grad(set_to_none=True)
                 x = y = logits = flat = loss = ce = zsum = None  # drop the failed batch and its graph before retrying
                 if device.type == "cuda":
                     torch.cuda.empty_cache()
-                interval_loss.copy_(loss_before[0])
-                progress_loss.copy_(loss_before[1])
-                # cheapest remedy first: the loss in pieces, then a smaller micro-batch, then recomputation
-                if not loss_chunk:
+                rewind(step_start)  # the retry trains on the same windows, as an uninterrupted run would
+                if scaler is not None:  # a new scaler with the same scale: forgets an unscale_ already done
+                    scaler = torch.amp.GradScaler(device.type)
+                    scaler.load_state_dict(scaler_state)
+                # cheapest remedy first: the loss in pieces, then a smaller micro-batch down to 4, then recomputation,
+                # then smaller still; never one that the command line switched off
+                chunk_ok = not loss_chunk and args.loss_chunk_tokens != 0
+                ckpt_ok = not model.grad_checkpoint and args.activation_checkpointing != "off"
+                if not oom:
+                    train_model = model
+                    print(f"torch.compile failed at the first step ({type(exc).__name__}: {str(exc)[:120]}); "
+                          "retrying in eager mode.")
+                elif chunk_ok:
                     loss_chunk = settings["loss_chunk_tokens"] = LOSS_CHUNK_TOKENS
                     print(f"Out of memory at the first step; retrying with the loss computed {loss_chunk:,} tokens "
                           "at a time.")
-                elif micro > 1:
+                elif micro > 1 and (micro > micro_floor or not ckpt_ok):
                     old_tps = settings["tokens_per_step"]
                     micro, accum = micro // 2, math.ceil(micro * accum / (micro // 2))
                     settings["micro_batch"], settings["grad_accum"] = micro, accum
@@ -2839,18 +3130,25 @@ def cmd_train(args):
                           "accumulation " + ("(same tokens per step)." if settings["tokens_per_step"] == old_tps
                                              else f"({settings['tokens_per_step']:,} tokens per step instead of "
                                                   f"{old_tps:,})."))
-                else:
+                elif ckpt_ok:
                     model.grad_checkpoint = settings["activation_checkpointing"] = True
-                    print("Out of memory at the first step with micro-batch 1; retrying with activation "
+                    print(f"Out of memory at the first step with micro-batch {micro}; retrying with activation "
                           "checkpointing (blocks recomputed in the backward pass).")
+                else:
+                    forced = [o for o, off in (("--loss-chunk-tokens 0", args.loss_chunk_tokens == 0),
+                                               ("--activation-checkpointing off",
+                                                args.activation_checkpointing == "off")) if off]
+                    raise SystemExit(
+                        "Out of memory at the first step even at micro-batch 1"
+                        + (f"; {' and '.join(forced)} kept those memory savings off: drop "
+                           f"{'them' if len(forced) > 1 else 'it'} or" if forced
+                           else " with the loss in pieces and activation checkpointing;")
+                        + " choose a smaller --d-model/--layers/--ctx.") from exc
                 step -= 1
+                held.deliver()  # a Ctrl+C held during the failed update
                 continue
             first_step = False
-            done_step = step
-            interval_micro += accum
-            progress_micro += accum
-            interval_tokens += settings["tokens_per_step"]
-            tokens_seen += settings["tokens_per_step"]
+            held.deliver()  # a Ctrl+C held during the update: the step is complete, so it is saved as done
 
             do_eval = step % args.eval_every == 0 or step == total_steps
             do_progress = args.log_every and step % args.log_every == 0 and not do_eval
@@ -2866,6 +3164,7 @@ def cmd_train(args):
             now = time.perf_counter()
             interval_train_time += now - seg
             train_seconds += now - seg
+            seg = None  # counted: evaluation, sampling and saving below are not training time
 
             if do_progress or heartbeat:
                 ptrain = (progress_loss / max(progress_micro, 1)).item()
@@ -2914,11 +3213,20 @@ def cmd_train(args):
                          "co2e_g": round(meter.co2e_g(), 1), "cost_gbp": round(meter.cost_gbp() or 0.0, 4),
                          "is_best": is_best, "time": now_iso()}
                 history.append(entry)
-                write_metrics(entry)
                 if is_best:  # before printing or sampling, so Ctrl+C can never leave an announced best unsaved
-                    atomic_save(payload(step, inference_only=True), best_path)
+                    try:
+                        save(best_path, True, step)
+                    except BaseException:
+                        # not written (Ctrl+C, full disk): record no best that no file holds
+                        best_val, best_step, entry["is_best"] = prev_best, prev_step, False
+                        try:  # the evaluation stays in history (and the saved training state): keep the file in step
+                            write_metrics(entry)
+                        except Exception:  # noqa: BLE001 - the disk may be the problem; the first error matters
+                            pass
+                        raise
                     if dashboard_on:
                         launch_dashboard(best_path, args, dashboard)
+                write_metrics(entry)
                 if is_best:
                     status_text = (f"NEW BEST (prev {prev_best:.3f} @{prev_step})" if prev_step is not None
                                    else "NEW BEST (first evaluation)")
@@ -2946,31 +3254,29 @@ def cmd_train(args):
                         f"gradients became {float(last_gnorm)} by step {step}; {ckpt_path} was not overwritten and "
                         "still holds the last good training state. Resume it with a lower --lr (a new --name with "
                         "--init-from).")
-                atomic_save(payload(step, inference_only=False), ckpt_path)
+                saved = save(ckpt_path, False, step)
                 last_save = time.perf_counter()
             if stop_now and step < total_steps:
                 status = "stopped"
                 print(f"Stopped after {args.stop_after_steps:,} steps this session (--stop-after-steps); saved "
-                      f"{ckpt_path}.\nContinue with: python tiny_gpt.py --name {args.name} --resume")
+                      f"{saved}.\nContinue with: python tiny_gpt.py --name {args.name} --resume")
                 break
             seg = time.perf_counter()
     except KeyboardInterrupt:
         status = "interrupted"
-        train_seconds += time.perf_counter() - seg
+        if seg is not None:  # the time since the last counted point was training
+            train_seconds += time.perf_counter() - seg
         if done_step < step:
-            # Ctrl+C arrived inside a step: its update never happened. Rewind the
-            # sampler so --resume replays exactly that step, and save the last
-            # completed step (the original script saved the unfinished step number).
-            batcher.gen.set_state(sampler_snapshot[0])
-            if sampler_snapshot[1] is not None:  # dropout masks of the replayed step
-                torch.set_rng_state(sampler_snapshot[1])
-            if sampler_snapshot[2] is not None:
-                torch.cuda.set_rng_state_all(sampler_snapshot[2])
+            # Ctrl+C arrived inside a step, before its update (which Ctrl+C never
+            # splits). Rewind the sampler, dropout RNG and loss sums so --resume
+            # replays exactly that step, and save the last completed step (the
+            # original script saved the unfinished step number).
+            rewind(step_start)
             opt.zero_grad(set_to_none=True)
             step = done_step
         if bool(torch.isfinite(last_gnorm)):
-            atomic_save(payload(step, inference_only=False), ckpt_path)
-            print(f"\nPaused after step {step:,} (last completed update); saved {ckpt_path}.\n"
+            saved = save(ckpt_path, False, step)
+            print(f"\nPaused after step {step:,} (last completed update); saved {saved}.\n"
                   f"Resume with: python tiny_gpt.py --name {args.name} --resume")
         else:
             crash = os.path.join(args.out_dir, f"{args.name}_crash.pt")
@@ -2996,6 +3302,8 @@ def cmd_train(args):
             "heads": cfg.n_heads, "kv_heads": cfg.n_kv_heads, "ctx": cfg.ctx, "vocab": cfg.vocab_size,
             "tokens_seen": tokens_seen, "tokens_per_step": settings["tokens_per_step"],
             "micro_batch": settings["micro_batch"], "grad_accum": settings["grad_accum"],
+            "activation_checkpointing": "on" if settings.get("activation_checkpointing") else "off",
+            "loss_chunk_tokens": int(settings.get("loss_chunk_tokens") or 0),
             "optimizer": OPTIMIZER_LABELS.get(settings.get("optimizer", "adamw")), "lr": f"{settings['lr']:.3g}",
             "min_lr": f"{settings['min_lr']:.3g}", "schedule": {"wsd": "WSD"}.get(settings["schedule"],
                                                                                  settings["schedule"]),
@@ -3027,8 +3335,8 @@ def cmd_train(args):
 
 EXPERIMENT_COLUMNS = ["time", "event", "name", "status", "step", "total_steps", "params", "non_embedding_params",
                       "d_model", "layers", "heads", "kv_heads", "ctx", "vocab", "tokens_seen", "tokens_per_step",
-                      "micro_batch", "grad_accum", "optimizer", "lr", "min_lr", "schedule", "warmup_steps",
-                      "decay_frac", "decay_shape", "weight_decay", "betas", "grad_clip", "z_loss", "dropout",
+                      "micro_batch", "grad_accum", "activation_checkpointing", "loss_chunk_tokens", "optimizer", "lr",
+                      "min_lr", "schedule", "warmup_steps", "decay_frac", "decay_shape", "weight_decay", "betas", "grad_clip", "z_loss", "dropout",
                       "precision", "dataset", "best_val", "best_step", "last_val", "last_bpb", "last_ppl",
                       "benchmark_accuracy", "benchmark_floor", "benchmark_items", "tok_s", "device", "train_hours",
                       "run_hours", "energy_kwh", "co2e_kg", "cost_gbp", "checkpoint", "notes"]
@@ -3146,11 +3454,19 @@ def _args_with_shape(args, cfg):
     return clone
 
 
-def maybe_compile(model, mode, device):
+def maybe_compile(model, mode, device, return_hidden=False, amp_dtype=None, micro=1):
+    """The model compiled with torch.compile, warmed up once with exactly the call
+    training makes (a (micro, ctx) batch under the same autocast; return_hidden:
+    the chunked loss), so the training graph is compiled here and a compile failure
+    falls back to eager instead of failing step 1; or the model itself (eager)
+    when compiling is off, unavailable or fails. Running out of memory in the
+    warm-up is not a compile failure: the compiled model is returned and the
+    first step's out-of-memory handling chooses the memory savings."""
     if mode == "off":
         return model
     try:
-        import triton  # noqa: F401
+        import triton  # only whether it imports matters
+        del triton
         have_triton = True
     except ImportError:
         have_triton = False
@@ -3162,16 +3478,32 @@ def maybe_compile(model, mode, device):
         print("torch.compile skipped: Triton is not installed (on Windows: python -m pip install triton-windows, the "
               "version matching PyTorch); using eager mode.")
         return model
+    compiled, failure = None, None
     try:
-        compiled = torch.compile(model)
-        x = torch.zeros((1, min(model.ctx, 64)), dtype=torch.long, device=device)
-        compiled(x).float().sum().backward()
-        model.zero_grad(set_to_none=True)
-        return compiled
+        # dynamic=False: a new shape (a halved micro-batch after an out-of-memory error) gets its own static graph
+        # instead of turning the training graph into a slower dynamic-shape one
+        compiled = torch.compile(model, dynamic=False)
+        # the shape and autocast state training uses: Dynamo guards on both, so this graph is the one step 1 reuses
+        x = torch.zeros((max(1, int(micro)), model.ctx), dtype=torch.long, device=device)
+        # fork_rng: the warm-up's dropout masks must not consume the (restored) random state of the run
+        with torch.random.fork_rng(devices=[device] if device.type == "cuda" else []):
+            with torch.autocast(device.type, dtype=amp_dtype or torch.float32, enabled=amp_dtype is not None):
+                out = compiled(x, return_hidden=return_hidden)
+            out.float().sum().backward()
+        del out
     except Exception as exc:  # noqa: BLE001
-        print(f"torch.compile failed ({type(exc).__name__}: {str(exc)[:120]}); using eager mode.")
-        model.zero_grad(set_to_none=True)
-        return model
+        failure = (type(exc).__name__, str(exc))  # not the exception: its traceback would keep the warm-up's tensors
+    model.zero_grad(set_to_none=True)
+    if failure is None:
+        return compiled
+    if device.type == "cuda":
+        torch.cuda.empty_cache()
+    if compiled is not None and "out of memory" in failure[1].lower():
+        print("torch.compile warm-up ran out of memory; keeping the compiled model (the first step's "
+              "out-of-memory handling picks the memory savings).")
+        return compiled
+    print(f"torch.compile failed ({failure[0]}: {failure[1][:120]}); using eager mode.")
+    return model
 
 
 def cmd_plan(args):

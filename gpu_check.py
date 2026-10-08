@@ -179,7 +179,8 @@ def load_test(seconds):
 def train_bench(args):
     import tiny_gpt
     device = tiny_gpt.select_device(args.device)
-    amp_dtype, amp_name, _ = tiny_gpt.choose_precision(device, args.precision)
+    # training steps: FP16 is timed with the loss scaling a real run would use (and refused where it has none)
+    amp_dtype, amp_name, need_scaler = tiny_gpt.choose_precision(device, args.precision)
     if device.type == "cuda":
         torch.backends.cuda.matmul.allow_tf32 = True
         torch.backends.cudnn.allow_tf32 = True
@@ -203,6 +204,7 @@ def train_bench(args):
         model.set_attention_impl(impl)
         kwargs = {"fused": True} if device.type == "cuda" else {}
         opt = torch.optim.AdamW(model.parameters(), lr=1e-4, **kwargs)
+        scaler = torch.amp.GradScaler(device.type) if need_scaler else None
         x = torch.randint(0, args.vocab, (args.batch, args.ctx + 1), device=device)
         if device.type == "cuda":
             torch.cuda.reset_peak_memory_stats()
@@ -211,9 +213,16 @@ def train_bench(args):
             with torch.autocast(device.type, dtype=amp_dtype or torch.float32, enabled=amp_dtype is not None):
                 logits = model(x[:, :-1])
             loss = F.cross_entropy(logits.float().view(-1, args.vocab), x[:, 1:].reshape(-1))
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-            opt.step()
+            if scaler is None:
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                opt.step()
+            else:
+                scaler.scale(loss).backward()
+                scaler.unscale_(opt)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                scaler.step(opt)
+                scaler.update()
             opt.zero_grad(set_to_none=True)
 
         for _ in range(args.warmup):
@@ -224,14 +233,23 @@ def train_bench(args):
             step()
         tiny_gpt.synchronize(device)
         dt = (time.perf_counter() - t0) / args.steps
-        peak = torch.cuda.max_memory_allocated() / 2 ** 30 if device.type == "cuda" else float("nan")
+        memory_label = "peak memory"
+        if device.type == "cuda":
+            peak = torch.cuda.max_memory_allocated() / 2 ** 30
+        elif device.type == "mps":  # no peak counter on MPS: what the driver holds after the timed steps
+            torch.mps.synchronize()
+            peak, memory_label = torch.mps.driver_allocated_memory() / 2 ** 30, "memory allocated"
+        else:
+            peak = float("nan")
         tok_s = args.batch * args.ctx / dt
         results.append((impl, dropout, dt, tok_s, peak))
         print(f"  attention {impl:10s} dropout {dropout:<4} : {dt * 1000:8.1f} ms/step | {tok_s:>10,.0f} tok/s | "
-              f"peak memory {peak:.2f} GiB")
-        del model, opt
+              f"{memory_label} {peak:.2f} GiB")
+        model = opt = None  # free them before the next variant (step() reads them)
         if device.type == "cuda":
             torch.cuda.empty_cache()
+        elif device.type == "mps":
+            torch.mps.empty_cache()
     if len(results) > 1:
         slow = max(results, key=lambda r: r[2])
         fast = min(results, key=lambda r: r[2])

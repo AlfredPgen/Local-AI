@@ -38,6 +38,7 @@ import re
 import subprocess
 import sys
 import textwrap
+import time
 import warnings
 
 import numpy as np
@@ -76,15 +77,18 @@ def parse_args():
                         "this repository's folder)")
     p.add_argument("--dpi", type=int, default=150)
     p.add_argument("--pca-labels", type=int, default=50,
-                   help="most frequent tokens labelled in the 'Token embeddings (PCA)' panel")
+                   help="most frequent tokens labelled in the 'Token embeddings (PCA)' panel (without a forward "
+                        "pass: the lowest token IDs)")
     p.add_argument("--sim-tokens", type=int, default=100,
-                   help="most frequent word tokens in the 'Token similarity (clustered)' panel")
+                   help="most frequent word tokens in the 'Token similarity (clustered)' panel (without a forward "
+                        "pass: the lowest token IDs)")
     p.add_argument("--dataset", help="dataset folder for forward-pass panels (default: the one in the checkpoint)")
     p.add_argument("--eval-text", help="plain-text file for forward-pass panels when no dataset is available")
     p.add_argument("--probes", default=os.path.join(HERE, "probes_biology.tsv"), help="cloze fact probes TSV")
     p.add_argument("--no-forward", action="store_true", help="skip panels that run the model")
     p.add_argument("--history-log", help="log.txt to read loss curves from (for checkpoints without history)")
-    p.add_argument("--device", choices=("cpu", "auto"), default="cpu", help="device for forward-pass panels")
+    p.add_argument("--device", choices=("cpu", "auto", "cuda", "mps"), default="cpu",
+                   help="device for forward-pass panels (auto: CUDA, else Apple MPS, else CPU)")
     p.add_argument("--trust-checkpoint", action="store_true")
     args = p.parse_args()
     exported = os.path.isdir(args.file) and os.path.isfile(os.path.join(args.file, "model.safetensors"))
@@ -111,7 +115,7 @@ class Checkpoint:
 
     def __init__(self, path, trust=False):
         self.path = path
-        self.obj = tiny_gpt.load_any(path, trust)
+        self.obj = load_checkpoint(path, trust)
         self.family, self.kind = tiny_gpt.checkpoint_info(self.obj)
         self.weights = self._find_weights(self.obj)
         self.cfg = self.tok = None
@@ -129,6 +133,10 @@ class Checkpoint:
         self.metrics = self._metrics()
         self.history = self.metrics.get("history") or []
         self.history_source = "checkpoint" if self.history else None
+        # SFT/DPO files (finetune.py): fine-tuned weights, but step, metrics and train_config are the base
+        # model's pre-training; the fine-tuning curve is in finetune["history"].
+        ft = self.obj.get("finetune") if isinstance(self.obj, dict) else None
+        self.finetune = ft if isinstance(ft, dict) else None
 
     @staticmethod
     def _find_weights(obj):
@@ -182,6 +190,61 @@ class Checkpoint:
             seen.add(ptr)
             names.append(name)
         return names
+
+
+def load_checkpoint(path, trust=False):
+    """tiny_gpt.load_any, memory-mapped where that is safe: tensors (the optimizer
+    state of a training checkpoint included) are then read from disk only when a
+    panel uses them. Not on Windows, where a mapped file cannot be replaced, so
+    training could not save over a checkpoint while its dashboard is drawn."""
+    if os.name != "nt" and os.path.isfile(path):
+        try:
+            return torch.load(path, map_location="cpu", weights_only=True, mmap=True)
+        except Exception:  # noqa: BLE001 - old (non-zip) files, or ones that need --trust-checkpoint
+            pass
+    return tiny_gpt.load_any(path, trust)
+
+
+def build_model(ck, device):
+    """The checkpoint's model in eval mode, like tiny_gpt.model_from_checkpoint, but
+    built on the meta device and given the checkpoint's own tensors (assign=True):
+    no random initialisation and no second copy of the weights in memory."""
+    cfg = tiny_gpt.config_from_checkpoint(ck.obj)
+    cfg.dropout = 0.0
+    try:
+        with torch.device("meta"):
+            model = tiny_gpt.TinyGPT(cfg)
+        missing, unexpected = model.load_state_dict(ck.obj["model"], strict=False, assign=True)
+    except (TypeError, RuntimeError, NotImplementedError):  # older PyTorch: the normal way
+        return tiny_gpt.model_from_checkpoint(ck.obj, device)[0]
+    missing = [m for m in missing if not (m == "lm_head.weight" and cfg.tie_embeddings)]
+    if missing or unexpected:
+        raise SystemExit(f"Checkpoint weights do not match the architecture "
+                         f"(missing {missing[:4]}, unexpected {unexpected[:4]}).")
+    if cfg.tie_embeddings:
+        model.lm_head.weight = model.token_embedding.weight
+    model.rope = tiny_gpt.RotaryEmbedding(cfg.head_dim, cfg.ctx, cfg.rope_base)  # buffers not in the file
+    if any(t.is_meta for t in list(model.parameters()) + list(model.buffers())):
+        return tiny_gpt.model_from_checkpoint(ck.obj, device)[0]
+    return model.float().to(device).eval()  # float32 like model_from_checkpoint (no copy if already float32)
+
+
+def scrub(text):
+    """Text drawn on the dashboard with the home folder shown as ~ (the PNG may be
+    pushed to GitHub): plain, forward-slash and doubled-backslash (repr) forms."""
+    home = os.path.expanduser("~")
+    for variant in sorted({home, home.replace("\\", "/"), home.replace("\\", "\\\\")}, key=len, reverse=True):
+        text = re.sub(re.escape(variant), "~", str(text), flags=re.IGNORECASE)
+    return text
+
+
+def path_name(path):
+    """Last part of a path written on any system (a Windows path read on the Mac too)."""
+    return re.split(r"[\\/]", str(path or "?").rstrip("\\/"))[-1]
+
+
+def finetune_label(ft):
+    return str(ft.get("method", "fine-tuning")).upper()
 
 
 def family_label(family):
@@ -245,25 +308,38 @@ def print_summary(ck):
             extra += f" | tokens seen {o['tokens_seen']:,}"
         if o.get("train_seconds"):
             extra += f" | training time {tiny_gpt.fmt_hms(o['train_seconds'])}"
-        print(f"step: {o['step']:,} / {total if total is not None else '?'}{extra}")
+        print(f"step: {o['step']:,} / {total if total is not None else '?'}{extra}"
+              + (" (base model's pre-training)" if ck.finetune else ""))
+    ft = ck.finetune
+    base_note = ""
+    if ft:
+        hist = ft.get("history") or []
+        held = (f" | held-out loss {hist[-1]['val_loss']:.4f} after epoch {hist[-1].get('epoch', len(hist))}"
+                if hist and hist[-1].get("val_loss") is not None else "")
+        base = path_name(ft.get("base"))
+        print(f"fine-tuned: {finetune_label(ft)} from {base}, {ft.get('examples', '?')} examples, "
+              f"{ft.get('epochs', '?')} epochs, lr {ft.get('lr', '?')}{held}")
+        base_note = " (base model, before fine-tuning)"
     m = ck.metrics
-    last = m.get("last_eval")
+    # fine-tuned files keep the base model's last evaluation (newer ones as base_last_eval)
+    last = m.get("last_eval") or (m.get("base_last_eval") if ft else None)
     if last:
         per = last.get("per_source") or {}
         per_text = (" [" + ", ".join(f"{k} {v:.4f}" for k, v in per.items()) + "]") if len(per) > 1 else ""
         ppl = math.exp(min(last["loss"], 50)) if last.get("loss") is not None else None
-        print(f"latest validation: loss {fmt(last.get('loss'))} measured at step {last.get('step')}{per_text} | "
-              f"perplexity {fmt(ppl, ',.2f')}"
+        print(f"latest validation{base_note}: loss {fmt(last.get('loss'))} measured at step {last.get('step')}"
+              f"{per_text} | perplexity {fmt(ppl, ',.2f')}"
               + (f" | entropy {last['entropy']:.3f} nats | mean confidence {last['confidence']:.3f} | top-1 "
                  f"accuracy {last['top1']:.3f} | ECE {last['ece']:.3f}" if "entropy" in last else ""))
     if m.get("best_val") is not None and math.isfinite(float(m["best_val"])):
-        print(f"best validation: loss {float(m['best_val']):.4f} at step {m.get('best_step')} | perplexity "
-              f"{math.exp(min(float(m['best_val']), 50)):,.2f}")
+        print(f"best validation{base_note}: loss {float(m['best_val']):.4f} at step {m.get('best_step')} | "
+              f"perplexity {math.exp(min(float(m['best_val']), 50)):,.2f}")
     if ck.family.startswith("legacy"):
         print("  note: v3 logs printed the latest validation value at every report step, so values between "
               "evaluations (every --eval-every steps, default 1000) were not fresh measurements.")
     if ck.history:
-        print(f"history: {len(ck.history)} evaluations stored (steps {ck.history[0]['step']}-{ck.history[-1]['step']})")
+        print(f"history{base_note}: {len(ck.history)} evaluations stored "
+              f"(steps {ck.history[0]['step']}-{ck.history[-1]['step']})")
     ds = o.get("dataset")
     if isinstance(ds, dict):
         exists = os.path.isdir(ds.get("path", ""))
@@ -321,7 +397,23 @@ def eval_windows(ck, args, max_windows=16):
     if ck.tok is None or ck.cfg is None:
         return None, "no tokenizer/architecture in this checkpoint"
     ctx = ck.cfg.ctx
-    ds_path = args.dataset or ((ck.obj.get("dataset") or {}).get("path") if isinstance(ck.obj, dict) else None)
+    stored = ((ck.obj.get("dataset") if isinstance(ck.obj, dict) else None) or {})
+    stored = stored if isinstance(stored, dict) else {}
+    want = stored.get("fingerprint")
+    ds_path, found, refused = args.dataset, "", ""
+    if not ds_path and stored.get("path"):
+        ds_path = stored["path"]
+        if not os.path.isdir(ds_path):
+            # moved to another machine (or folder): the same dataset by name in this repository's datasets/
+            alt = os.path.join(HERE, "datasets", path_name(ds_path))
+            ds_path = alt if want and os.path.isdir(alt) and _fingerprint(alt) == want else None
+            found = " (found by name in datasets/)"
+        elif want and _fingerprint(ds_path) != want:
+            # rebuilt at the same path: its validation split may hold text this model trained on
+            refused = (f"the dataset now at {path_name(ds_path)} is not the one this model was trained on "
+                       "(different fingerprint), so its validation windows may contain training text; pass "
+                       "--dataset to use it anyway, or --eval-text")
+            ds_path = None
     if ds_path and os.path.isdir(ds_path):
         manifest, arrays = data_prep.open_token_files(ds_path, verify=False)
         meta = manifest["tokenizer"]
@@ -340,7 +432,7 @@ def eval_windows(ck, args, max_windows=16):
                 if len(ids) >= ctx + 1:
                     rows.append(ids[:ctx + 1])
         if rows:
-            note = "validation windows of " + os.path.basename(os.path.normpath(ds_path))
+            note = "validation windows of " + os.path.basename(os.path.normpath(ds_path)) + found
             return torch.from_numpy(np.stack(rows)), note + ("" if same else " (re-tokenized for this checkpoint)")
     if args.eval_text:
         with open(args.eval_text, encoding="utf-8", errors="replace") as handle:
@@ -350,34 +442,51 @@ def eval_windows(ck, args, max_windows=16):
             starts = np.linspace(0, len(ids) - ctx - 1, n).astype(np.int64)
             return torch.from_numpy(np.stack([ids[s:s + ctx + 1] for s in starts])), os.path.basename(args.eval_text)
         return None, f"{args.eval_text} is shorter than one context window ({ctx + 1} tokens)"
-    return None, "no evaluation text: the checkpoint's dataset is not available; pass --dataset or --eval-text"
+    return None, refused or ("no evaluation text: the checkpoint's dataset is not available; pass --dataset or "
+                             "--eval-text")
+
+
+def _fingerprint(ds_path):
+    """The fingerprint in a dataset folder's manifest (None if it has no readable manifest)."""
+    try:
+        return data_prep.read_manifest(ds_path).get("fingerprint")
+    except (SystemExit, OSError, ValueError):
+        return None
 
 
 @torch.no_grad()
-def forward_stats(model, windows, vocab, device, bins=10):
+def forward_stats(model, windows, vocab, device, bins=10, token_budget=4096, rows=1024):
+    """Output-preference and calibration statistics over the windows. The model runs
+    on about token_budget tokens at a time and the output layer on `rows` positions
+    at a time, so the (tokens x vocabulary) table never exists in full."""
     mean_prob = torch.zeros(vocab, dtype=torch.float64)
     freq = torch.zeros(vocab, dtype=torch.float64)
     conf_sum = torch.zeros(bins, dtype=torch.float64)
     acc_sum = torch.zeros(bins, dtype=torch.float64)
     count = torch.zeros(bins, dtype=torch.float64)
     nll, n = 0.0, 0
-    for start in range(0, windows.shape[0], 8):
-        batch = windows[start:start + 8].to(device)
-        x, y = batch[:, :-1], batch[:, 1:]
-        logp = F.log_softmax(model(x).float(), dim=-1)
-        probs = logp.exp()
-        mean_prob += probs.sum((0, 1)).double().cpu()
-        freq += torch.bincount(y.flatten().cpu(), minlength=vocab).double()
-        conf, pred = probs.max(-1)
-        c = conf.double().flatten().cpu()
-        ok = torch.isfinite(c)  # NaN weights (a diverged run) give NaN confidences; skip them
-        right = (pred == y).double().flatten().cpu()[ok]
-        c = c[ok]
-        which = (c.clamp(0, 1 - 1e-9) * bins).long().clamp(0, bins - 1)  # float64: 1.0 stays in the top bin
-        conf_sum += torch.bincount(which, c, bins)
-        acc_sum += torch.bincount(which, right, bins)
-        count += torch.bincount(which, minlength=bins).double()
-        nll += -logp.gather(-1, y.unsqueeze(-1)).sum().item()
+    per = max(1, token_budget // max(windows.shape[1] - 1, 1))
+    for start in range(0, windows.shape[0], per):
+        batch = windows[start:start + per].to(device)
+        x, y = batch[:, :-1], batch[:, 1:].reshape(-1)
+        hidden = model(x, return_hidden=True)
+        hidden = hidden.reshape(-1, hidden.size(-1))
+        for s in range(0, y.numel(), rows):
+            ys = y[s:s + rows]
+            logp = model.lm_head(hidden[s:s + rows]).float()
+            logp -= torch.logsumexp(logp, dim=-1, keepdim=True)  # log-softmax in place
+            nll += -logp.gather(-1, ys.unsqueeze(-1)).sum().item()
+            top, pred = logp.max(-1)
+            mean_prob += logp.exp_().sum(0).cpu().double()  # probabilities, in place (MPS has no float64)
+            freq += torch.bincount(ys.cpu(), minlength=vocab).double()
+            c = top.exp().cpu().double()
+            ok = torch.isfinite(c)  # NaN weights (a diverged run) give NaN confidences; skip them
+            right = (pred == ys).cpu().double()[ok]
+            c = c[ok]
+            which = (c.clamp(0, 1 - 1e-9) * bins).long().clamp(0, bins - 1)  # float64: 1.0 stays in the top bin
+            conf_sum += torch.bincount(which, c, bins)
+            acc_sum += torch.bincount(which, right, bins)
+            count += torch.bincount(which, minlength=bins).double()
         n += y.numel()
     total = max(n, 1)
     nz = count > 0
@@ -389,16 +498,30 @@ def forward_stats(model, windows, vocab, device, bins=10):
 
 
 @torch.no_grad()
-def attention_entropy(model, window, device):
-    """Mean entropy (bits) of each head's attention distribution over one window."""
+def attention_entropy(model, window, device, budget=2 ** 25):
+    """Mean entropy (bits) of each head's attention distribution over one window,
+    computed for a few heads at a time (about `budget` values per heads x T x T table)."""
     x = window[None, :-1].to(device)
     h = model.token_embedding(x)
     out = []
     t = x.shape[1]
     denom = torch.log2(torch.arange(1, t + 1, device=device).float()).clamp(min=1e-9)
+    mask = torch.ones(t, t, dtype=torch.bool, device=device).triu(1)
+    group = max(1, budget // (t * t))
     for block in model.blocks:
-        w = block.attn.attention_weights(block.attn_norm(h), model.rope)[0]  # (H, T, T)
-        ent = -(w * torch.log2(w.clamp(min=1e-12))).sum(-1)  # (H, T)
+        attn = block.attn
+        q, k, _ = attn._qkv(block.attn_norm(h), model.rope)  # as in attention_weights: causal softmax(QK^T/sqrt(d))
+        k = k.repeat_interleave(attn.n_rep, dim=1)
+        ent = []
+        for h0 in range(0, q.size(1), group):
+            scores = (q[0, h0:h0 + group].float() @ k[0, h0:h0 + group].float().transpose(-1, -2))
+            scores.div_(math.sqrt(attn.head_dim))
+            logw = scores.masked_fill_(mask, float("-inf")).log_softmax(-1)
+            del scores
+            w = logw.exp()
+            ent.append(-(w.mul_(logw.clamp_(min=-1e4))).sum(-1) / math.log(2))  # 0 * log 0 counts as 0
+            del logw, w
+        ent = torch.cat(ent)  # (H, T)
         out.append((ent[:, 1:] / denom[1:]).mean(-1).cpu().numpy())
         h = block(h, model.rope)
     return np.stack(out)  # (layers, heads), 0 = attends to one token, 1 = uniform over the prefix
@@ -412,19 +535,26 @@ OLD_LINE = re.compile(r"step\s+(\d+) \| training loss ([\d.]+) \| validation los
                      r"([\d.,]+) \| lr ([\d.e+-]+)")
 
 
-def history_from_log(path, ck_path=None, max_step=None):
+def history_from_log(path, ck_path=None, max_step=None, family=None):
     """History of the viewed checkpoint's run from log.txt. tinyGPT sessions are
     matched by the checkpoint path in their header ("checkpoints: ...<name>.pt"),
     and all sessions of that run (resumes included) are merged, the latest value
-    per step winning, up to the checkpoint's step. Without a match the last run is
-    used, and the source label says so. v3 lines repeat a stale validation value
-    between evaluations, so for v3 only evaluation steps keep a val point."""
+    per step winning, up to the checkpoint's step. A tinyGPT checkpoint that no
+    session names gets no curve (never another run's); a legacy (original script)
+    checkpoint is read from the last v3 run only; a file of unknown family falls
+    back to the last run, and the source label says so. v3 lines repeat a stale
+    validation value between evaluations, so for v3 only evaluation steps keep a
+    val point."""
     with open(path, encoding="utf-8", errors="replace") as handle:
         text = handle.read()
     blocks = re.split(r"\n(?=--- run started |={20,}\nRUN )", text)
-    stem = re.sub(r"_best$", "", os.path.splitext(os.path.basename(os.path.normpath(ck_path)))[0]) if ck_path else None
-    tiny = [b for b in blocks if NEW_LINE.search(b)]
+    # path_name, not os.path.basename: an export's exported_from may be a Windows path read on the Mac
+    stem = re.sub(r"_best$", "", os.path.splitext(path_name(ck_path))[0]) if ck_path else None
+    legacy = bool(family) and family.startswith("legacy")
+    tiny = [] if legacy else [b for b in blocks if NEW_LINE.search(b)]
     mine = [b for b in tiny if stem and re.search(r"checkpoints: .*?[\\/]" + re.escape(stem) + r"\.pt ", b)]
+    if family == "tinygpt" and not mine:
+        return [], f"no tinyGPT session in {os.path.basename(path)} names {stem}.pt"
     if mine or tiny:
         merged = {}
         for block in (mine or tiny[-1:]):
@@ -449,6 +579,8 @@ def history_from_log(path, ck_path=None, max_step=None):
             out, first = [], True
             for s, tr, va, ppl, lr in v3:
                 s = int(s)
+                if max_step is not None and s > int(max_step):
+                    break
                 entry = {"step": s, "train_loss": float(tr), "lr": float(lr), "val_loss": None, "ppl": None}
                 if (first and not resumed) or s % every == 0 or s == final:
                     entry["val_loss"], entry["ppl"] = float(va), float(ppl.replace(",", ""))
@@ -469,7 +601,8 @@ def label_text(piece, limit=12):
     for ch in s:
         out.append(ch if _renderable(ch) else f"\\u{ord(ch):04x}")
     s = "".join(out)
-    return s if len(s) <= limit else s[:limit - 1] + "\u2026"
+    s = s if len(s) <= limit else s[:limit - 1] + "\u2026"
+    return s.replace("$", r"\$")  # an even number of $ would be read as matplotlib mathtext
 
 
 _GLYPHS = None
@@ -489,8 +622,8 @@ def _renderable(ch):
 
 def titled(ax, main, sub=None):
     """Bold panel title plus a wrapped grey subtitle (keeps titles inside their column)."""
-    lines = textwrap.wrap(sub, 92) if sub else []
-    ax.set_title(main, loc="left", fontsize=10.5, pad=6 + 10.5 * len(lines))
+    lines = textwrap.wrap(scrub(sub), 92) if sub else []
+    ax.set_title(scrub(main), loc="left", fontsize=10.5, pad=6 + 10.5 * len(lines))
     if lines:
         ax.text(0, 1.012, "\n".join(lines), transform=ax.transAxes, fontsize=7.5, color=INK2, va="bottom",
                 ha="left", linespacing=1.25)
@@ -498,7 +631,7 @@ def titled(ax, main, sub=None):
 
 def message(ax, text, title):
     titled(ax, title)
-    ax.text(0.5, 0.5, text, ha="center", va="center", wrap=True, fontsize=9, color=INK2,
+    ax.text(0.5, 0.5, scrub(text), ha="center", va="center", wrap=True, fontsize=9, color=INK2,
             transform=ax.transAxes)
     ax.set_xticks([])
     ax.set_yticks([])
@@ -569,26 +702,38 @@ def create_dashboard(ck, args):
 
     history = ck.history
     if not history and args.history_log:
-        history, ck.history_source = history_from_log(args.history_log, ck.path,
-                                                      (ck.obj or {}).get("step") if isinstance(ck.obj, dict) else None)
+        # an --export folder is named in no log header: match the checkpoint it was exported from
+        src = (ck.obj.get("exported_from") if isinstance(ck.obj, dict) else None) or ck.path
+        history, ck.history_source = history_from_log(args.history_log, src,
+                                                      ck.obj.get("step") if isinstance(ck.obj, dict) else None,
+                                                      ck.family)
     pieces = ck.pieces()
     classes = [token_class(ck.tok, i) for i in range(ck.tok.vocab_size)] if ck.tok is not None else None
 
-    # forward-pass material, computed once
+    # forward-pass material, computed once; the model is kept when only the windows or statistics fail,
+    # so the fact benchmark (which needs much less memory) can still be scored
     model = fstats = windows = None
     fnote = "forward-pass panels disabled (--no-forward)" if args.no_forward else ""
-    device = torch.device("cuda" if args.device == "auto" and torch.cuda.is_available() else "cpu")
+    device = torch.device("cpu")
     if not args.no_forward and ck.cfg is not None and ck.tok is not None:
         try:
-            model, _, _ = tiny_gpt.model_from_checkpoint(ck.obj, device)
-            windows, fnote = eval_windows(ck, args)
-            if windows is not None:
-                fstats = forward_stats(model, windows, ck.cfg.vocab_size, device)
+            device = torch.device("cpu") if args.device == "cpu" else tiny_gpt.select_device(args.device)
+            model = build_model(ck, device)
         except SystemExit as exc:
             fnote = str(exc)
-        except Exception as exc:  # noqa: BLE001 - a failed forward pass only disables the forward panels
-            model = fstats = windows = None
-            fnote = f"forward pass failed: {type(exc).__name__}: {str(exc)[:120]}"
+        except Exception as exc:  # noqa: BLE001 - a model that cannot be built only disables the forward panels
+            fnote = f"model could not be built: {type(exc).__name__}: {str(exc)[:120]}"
+        if model is not None:
+            try:
+                windows, fnote = eval_windows(ck, args)
+                if windows is not None:
+                    fstats = forward_stats(model, windows, ck.cfg.vocab_size, device)
+            except SystemExit as exc:
+                fstats = windows = None
+                fnote = str(exc)
+            except Exception as exc:  # noqa: BLE001 - a failed forward pass only disables the forward panels
+                fstats = windows = None
+                fnote = f"forward pass failed: {type(exc).__name__}: {str(exc)[:120]}"
     elif not args.no_forward:
         fnote = "no tiny_gpt architecture/tokenizer in this file"
 
@@ -607,7 +752,7 @@ def create_dashboard(ck, args):
         ("Singular value spectra", lambda ax: panel_spectra(ax, ck)),
         ("Per-head projection scale", lambda ax: panel_heads(ax, fig, ck, seq)),
         ("Calibration", lambda ax: panel_calibration(ax, ck, fstats, fnote)),
-        ("Cloze fact probes", lambda ax: panel_probes(ax, ck, model, device, args)),
+        ("Cloze fact probes", lambda ax: panel_probes(ax, ck, model, device, args, fnote)),
         ("Attention entropy", lambda ax: panel_attention(ax, fig, model, windows, device, seq, fnote)),
         ("Adam update size", lambda ax: panel_adam(ax, fig, ck, seq)),
     ]
@@ -616,24 +761,68 @@ def create_dashboard(ck, args):
             draw(ax)
             if not ax.get_title(loc="left"):
                 ax.set_title(title, loc="left")
-        except Exception as exc:  # noqa: BLE001 - one broken panel must not kill the dashboard
+        except (Exception, SystemExit) as exc:  # noqa: BLE001 - one broken panel must not kill the dashboard
             ax.cla()
-            text = str(exc).replace(os.path.expanduser("~"), "~")  # the dashboard may be published
-            message(ax, f"panel failed: {type(exc).__name__}: {text[:120]}", title)
+            message(ax, f"panel failed: {type(exc).__name__}: {scrub(exc)[:120]}", title)  # it may be published
             print(f"WARNING: dashboard panel '{title}' failed: {type(exc).__name__}: {exc}")
 
-    fig.suptitle(ck.model_name, fontsize=12, color=INK, x=0.01, ha="left")
+    suptitle = ck.model_name
+    if ck.finetune:
+        suptitle += (f"  |  fine-tuned ({finetune_label(ck.finetune)}) from {path_name(ck.finetune.get('base'))}: "
+                     "the pre-training history panels show the base model before fine-tuning")
+    fig.suptitle(scrub(suptitle), fontsize=12, color=INK, x=0.01, ha="left")
     out = args.out or output_name(ck, "dashboard", ".png")
     finalize_legends(fig)
-    fig.savefig(out, dpi=args.dpi, facecolor=SURFACE)
+    fmt_name = os.path.splitext(out)[1].lstrip(".").lower() or "png"
+    written = save_replacing(lambda tmp: fig.savefig(tmp, dpi=args.dpi, facecolor=SURFACE, format=fmt_name), out)
     plt.close(fig)
-    print(f"Saved dashboard: {out}")
-    return out
+    print(f"Saved dashboard: {written}")
+    return written if written == out else None  # a fallback name is not pushed
+
+
+def save_replacing(write, out):
+    """write(tmp) to a temporary file next to `out`, then rename it over `out`, so
+    nobody (an image viewer, a second viewer, the push) ever sees a half-written
+    file. Retries briefly while Windows reports `out` as in use; if it stays
+    locked, the file is kept under a time-stamped name, which is returned."""
+    root, ext = os.path.splitext(out)
+    tmp = f"{root}.tmp-{os.getpid()}{ext}"
+    try:
+        write(tmp)
+        for attempt in range(6):
+            try:
+                os.replace(tmp, out)
+                return out
+            except PermissionError:
+                time.sleep(0.5 * (attempt + 1))
+        fallback = f"{root}.{time.strftime('%H%M%S')}{ext}"
+        os.replace(tmp, fallback)
+        print(f"WARNING: {out} is locked by another program; saved to {fallback} instead.")
+        return fallback
+    finally:
+        if os.path.exists(tmp):
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
 
 
 # ---- row 1: training history -------------------------------------------------
+def _history_sub(ck, sub=None):
+    """Subtitle plus where the curve came from (a log file) and, for a fine-tuned
+    file, that it is the base model's pre-training."""
+    parts = [sub] if sub else []
+    if ck.history_source and ck.history_source != "checkpoint":
+        parts.append("curve from " + ck.history_source)
+    if ck.finetune:
+        parts.append(f"base model pre-training (before {finetune_label(ck.finetune)})")
+    return "; ".join(parts) or None
+
+
 def _no_history(ax, ck, title):
-    if ck.family == "tinygpt":
+    if ck.history_source and ck.history_source != "checkpoint":
+        why = f"no history: {ck.history_source}"
+    elif ck.family == "tinygpt":
         why = "this checkpoint stores no evaluation history yet"
     elif ck.family.startswith("legacy"):
         why = ("v3 checkpoints store only the latest and best validation loss.\n"
@@ -643,8 +832,31 @@ def _no_history(ax, ck, title):
     message(ax, why, title)
 
 
+def panel_finetune_loss(ax, ck):
+    """The SFT/DPO curve stored in the fine-tuned file (finetune["history"], one point per epoch)."""
+    ft = ck.finetune
+    method = finetune_label(ft)
+    rows = ft["history"]
+    xs = [h.get("step", h.get("epoch")) for h in rows]
+    tr = [(x, h["train_loss"]) for x, h in zip(xs, rows) if h.get("train_loss") is not None]
+    va = [(x, h["val_loss"]) for x, h in zip(xs, rows) if h.get("val_loss") is not None]
+    if tr:
+        ax.plot(*zip(*tr), color=SERIES[0], lw=2, marker="o", ms=3.5, label="training (mean over the epoch)")
+    if va:
+        ax.plot(*zip(*va), color=SERIES[1], lw=2, marker="o", ms=3.5, label="held-out (after each epoch)")
+        ax.annotate(f"{va[-1][1]:.3f}", va[-1], xytext=(-4, 8), textcoords="offset points", ha="right",
+                    fontsize=7.5, color=INK2)
+    ax.set_xlabel(f"{method} optimizer step" if any(h.get("step") is not None for h in rows) else "epoch")
+    ax.set_ylabel("cross-entropy of the answer tokens (nats)" if method == "SFT" else f"{method} loss")
+    place_legend(ax)
+    titled(ax, f"Fine-tuning loss ({method})",
+           f"{len(rows)} epochs from {path_name(ft.get('base'))}; the other row-1 panels show its pre-training")
+
+
 def panel_loss(ax, history, ck):
     title = "Loss by step"
+    if ck.finetune and ck.finetune.get("history"):
+        return panel_finetune_loss(ax, ck)
     if not history:
         return _no_history(ax, ck, title)
     tr = [(h["step"], h["train_loss"]) for h in history if h.get("train_loss") is not None]
@@ -670,8 +882,8 @@ def panel_loss(ax, history, ck):
     ax.set_xlabel("optimizer step")
     ax.set_ylabel("cross-entropy (nats per token)")
     place_legend(ax)
-    titled(ax, title, "training: one batch per step; validation: random batches" if legacy else
-                      "training: mean since the previous line; validation: fixed windows")
+    titled(ax, title, _history_sub(ck, "training: one batch per step; validation: random batches" if legacy else
+                                   "training: mean since the previous line; validation: fixed windows"))
 
 
 def panel_ppl(ax, history, ck):
@@ -687,7 +899,7 @@ def panel_ppl(ax, history, ck):
                 color=INK2)
     ax.set_xlabel("optimizer step")
     ax.set_ylabel("exp(validation loss)")
-    titled(ax, title, "log scale; lower is better")
+    titled(ax, title, _history_sub(ck, "log scale; lower is better"))
 
 
 def panel_lr(ax, history, ck):
@@ -714,7 +926,7 @@ def panel_lr(ax, history, ck):
     from matplotlib.ticker import FuncFormatter
     ax.yaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{v:.1e}"))
     place_legend(ax)
-    titled(ax, title)
+    titled(ax, title, _history_sub(ck))
 
 
 def panel_confidence(ax, history, ck):
@@ -736,7 +948,7 @@ def panel_confidence(ax, history, ck):
     ax.set_xlabel("optimizer step")
     ax.set_ylabel("proportion")
     place_legend(ax)
-    titled(ax, title, "confidence above accuracy = overconfident")
+    titled(ax, title, _history_sub(ck, "confidence above accuracy = overconfident"))
 
 
 # ---- row 2: tokens ------------------------------------------------------------
@@ -859,15 +1071,32 @@ def finalize_legends(fig):
     _LEGENDS.clear()
 
 
+def embedding_pca(ck, n):
+    """(coordinates on the first two principal components, their shares of the
+    variance) of the first n embedding rows, from the top eigenvectors of the
+    d x d covariance: no (vocabulary x d) SVD. Computed once (the --html explorer
+    uses the same); each axis points to its largest-magnitude loading."""
+    cached = getattr(ck, "_pca", None)
+    if cached is not None and cached[0] == n:
+        return cached[1], cached[2]
+    e = ck.embedding.float()[:n]
+    centered = e - e.mean(0, keepdim=True)
+    cov = (centered.T @ centered).double()
+    vals, vecs = torch.linalg.eigh(cov)  # ascending
+    top = vecs[:, -2:].flip(-1)
+    top = top * torch.sign(top.gather(0, top.abs().argmax(0, keepdim=True)))
+    coords = (centered @ top.float()).numpy()
+    total = float(cov.diagonal().sum())  # total variance = squared Frobenius norm of the centred rows
+    var = (vals[-2:].flip(0).clamp(min=0) / max(total, 1e-30)).numpy()
+    ck._pca = (n, coords, var)
+    return coords, var
+
+
 def panel_pca(ax, ck, pieces, classes, fstats, n_labels=50):
     title = "Token embeddings (PCA)"
     if ck.embedding is None or classes is None:
         return message(ax, "no token embedding or tokenizer in this file", title)
-    e = ck.embedding.float()[:len(classes)]
-    centered = e - e.mean(0, keepdim=True)
-    _, s, vh = torch.linalg.svd(centered, full_matrices=False)
-    coords = (centered @ vh[:2].T).numpy()
-    var = (s ** 2 / (s ** 2).sum()).numpy()
+    coords, var = embedding_pca(ck, len(classes))
     counts = {}
     for k, cls in enumerate(TOKEN_CLASSES + ["other"]):
         idx = [i for i, c in enumerate(classes) if c == cls]
@@ -884,7 +1113,9 @@ def panel_pca(ax, ck, pieces, classes, fstats, n_labels=50):
     ax.set_xlabel(f"PC 1 ({var[0]:.1%} of variance)")
     ax.set_ylabel(f"PC 2 ({var[1]:.1%} of variance)")
     place_legend(ax, markerscale=1.6, fontsize=6.5)
-    titled(ax, title, f"one dot per token; {shown} frequent tokens labelled; \u2581 marks a word start")
+    which = ("most frequent tokens (in the evaluation windows)" if fstats is not None
+             else "earliest-merged tokens (lowest IDs; no forward pass)")
+    titled(ax, title, f"one dot per token; {shown} {which} labelled; \u2581 marks a word start")
 
 
 def panel_similarity(ax, fig, ck, pieces, classes, fstats, cmap, n_tokens=100):
@@ -913,7 +1144,9 @@ def panel_similarity(ax, fig, ck, pieces, classes, fstats, cmap, n_tokens=100):
     ax.set_yticklabels(labels, fontsize=tick_size)
     ax.set_xlabel("token (same clustered order as rows)")
     ax.set_ylabel("token")
-    titled(ax, title, f"{len(ids)} most frequent word tokens, clustered by cosine similarity")
+    which = ("most frequent word tokens (in the evaluation windows)" if fstats is not None
+             else "earliest-merged word tokens (lowest IDs; no forward pass)")
+    titled(ax, title, f"{len(ids)} {which}, clustered by cosine similarity")
 
 
 def panel_norms(ax, ck, classes):
@@ -1069,12 +1302,14 @@ def panel_heads(ax, fig, ck, cmap):
 # ---- row 4: behaviour -----------------------------------------------------------
 def panel_calibration(ax, ck, fstats, fnote):
     title = "Calibration of the top prediction"
-    last = ck.metrics.get("last_eval") or {}
+    last = ck.metrics.get("last_eval") or (ck.metrics.get("base_last_eval") if ck.finetune else None) or {}
     cal, ece = None, None
     if fstats is not None:
         cal, ece = fstats["calibration"], fstats["ece"]
     elif last.get("calibration"):
         cal, ece = last["calibration"], last.get("ece")
+        if ck.finetune:
+            title += " (base model, before fine-tuning)"
     if cal is None:
         return message(ax, "No calibration data: " + fnote, title)
     conf, acc, cnt = (np.array(cal[k]) for k in ("confidence", "accuracy", "count"))
@@ -1100,7 +1335,8 @@ def probe_report(ck, model, device, args):
     last = ck.metrics.get("last_eval") or {}
     stored = last.get("probes")
     step = ck.obj.get("step") if isinstance(ck.obj, dict) else None
-    if stored and stored.get("file_sha256") == sha and last.get("step") == step:
+    # a fine-tuned file carries the base model's last_eval (and step): its stored report is not these weights'
+    if stored and stored.get("file_sha256") == sha and last.get("step") == step and not ck.finetune:
         return stored
     if model is None:
         return None
@@ -1108,13 +1344,13 @@ def probe_report(ck, model, device, args):
     return tiny_gpt.probe_report(results, sha)
 
 
-def panel_probes(ax, ck, model, device, args):
+def panel_probes(ax, ck, model, device, args, fnote=""):
     title = "Fact benchmark"
     if not args.probes or not os.path.isfile(args.probes):
         return message(ax, f"probe file not found: {args.probes}", title)
     report = probe_report(ck, model, device, args)
     if report is None:
-        return message(ax, "needs a tinyGPT model with a tokenizer", title)
+        return message(ax, ("Needs the model: " + fnote) if fnote else "needs a tinyGPT model with a tokenizer", title)
     acc = report["correct"] / max(report["n"], 1)
     summary = sorted(report["category"].items(), key=lambda kv: kv[1]["accuracy"])
     names = [f"{name} (n={s['n']})" for name, s in summary]
@@ -1173,7 +1409,10 @@ def panel_adam(ax, fig, ck, cmap):
         elif idx < len(names) and isinstance(st, dict) and "momentum_buffer" in st:  # Muon
             momentum[names[idx]] = st["momentum_buffer"].float().pow(2).mean().sqrt().item()
     layers = _layers(ck)
-    muon = not any(k.startswith("blocks.") for k in size) and bool(momentum)
+    # AdamW also trains the norm gains in a Muon run, so decide from the block matrices only
+    matrices = {f"blocks.{b}.{rel}" for b in layers for _, rel in COMPONENTS}
+    tc = (ck.obj.get("train_config") if isinstance(ck.obj, dict) else None) or {}
+    muon = bool(momentum) and (tc.get("optimizer") == "muon" or not matrices & set(size))
     values = momentum if muon else size
     if not values or not layers:
         return message(ax, "optimizer state could not be matched to parameter names", title)
@@ -1225,11 +1464,8 @@ def write_embedding_html(ck, out_path):
         return None
     pieces = ck.pieces()
     classes = [token_class(ck.tok, i) for i in range(ck.tok.vocab_size)]
-    e = ck.embedding.float()[:len(pieces)]
-    c = e - e.mean(0, keepdim=True)
-    _, s, vh = torch.linalg.svd(c, full_matrices=False)
-    xy = (c @ vh[:2].T).numpy()
-    norms = e.norm(dim=1).numpy()
+    xy, var = embedding_pca(ck, len(pieces))
+    norms = ck.embedding.float()[:len(pieces)].norm(dim=1).numpy()
     w, h, pad = 900, 640, 40
     lo, hi = xy.min(0), xy.max(0)
     sx = lambda v: pad + (v - lo[0]) / max(hi[0] - lo[0], 1e-9) * (w - 2 * pad)  # noqa: E731
@@ -1256,12 +1492,14 @@ ul{{list-style:none;padding:0;display:flex;flex-wrap:wrap;gap:6px 16px;color:var
 .sw{{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:6px}} {colors}
 </style></head><body><h1>Token embeddings: {html.escape(os.path.basename(ck.path))}</h1>
 <p>Each dot is one vocabulary token's embedding row projected on its first two principal components
-(PC 1 {float((s[0] ** 2 / (s ** 2).sum())):.1%}, PC 2 {float((s[1] ** 2 / (s ** 2).sum())):.1%} of variance).
+(PC 1 {float(var[0]):.1%}, PC 2 {float(var[1]):.1%} of variance).
 Hover a dot for the token, its class and embedding norm.</p><ul>{legend}</ul>
 <svg viewBox="0 0 {w} {h}" role="img" aria-label="PCA scatter of token embeddings">{''.join(dots)}</svg>
 </body></html>"""
-    with open(out_path, "w", encoding="utf-8") as handle:
-        handle.write(page)
+    def write(tmp):
+        with open(tmp, "w", encoding="utf-8") as handle:
+            handle.write(page)
+    out_path = save_replacing(write, out_path)
     print(f"Saved embedding explorer: {out_path}")
     return out_path
 

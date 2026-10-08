@@ -158,17 +158,34 @@ def _clean(text):
     return " ".join(text.split())
 
 
-SKIP_SECTION_RE = re.compile(
-    r"^\W*(competing interests?|conflicts? of interests?|declaration of (competing )?interests?|declarations?|"
-    r"(author|authors|author's|authors'|author’s|authors’) contributions?|contributions|contributors|"
-    r"funding( information| statement| sources?)?|financial (support|disclosure)|acknowledge?ments?|"
+# Back-matter headings. The WHOLE heading must be one of these (or several joined by "and" / "," / "&",
+# e.g. "Funding and competing interests"), so body sections that only start with such a word stay:
+# "Contributions of rare variants", "Correspondence analysis", "Ethics of germline editing",
+# "Supplementary data analysis". A bare "Contributions" is left in too: in machine-learning and
+# statistics papers it is the part of the introduction that lists what the paper adds.
+_BACK_MATTER = (
+    r"(competing interests?|conflicts? of interests?|declaration of (competing )?interests?|declarations?|"
+    r"(author|authors|author's|authors'|author’s|authors’) contributions?|contributors|"
+    r"funding( information| statement| sources?)?|financial (support|disclosures?)|acknowledge?ments?|"
     r"data (and code )?availability( statement)?|availability of data( and materials?)?|"
     r"code availability|ethics( approval| statement| declarations?)?( and consent( to participate)?)?|"
     r"consent( for publication)?|abbreviations|supplementary (material|materials|information|data)|"
     r"additional (files?|information)|electronic supplementary material|publisher'?’?s note|references|"
     r"footnotes|disclosures?( forms?)?|disclaimer|open access|reporting summary|contributor information|"
     r"online content|additional data( files)?|peer review( information)?|"
-    r"(author|authors|authors'|authors’)( information| details| affiliations)|correspondence|orcid)\b",
+    r"(author|authors|authors'|authors’)( information| details| affiliations)|correspondence|orcid|"
+    r"support|sponsors?(hip)?|disclosures? of funding|role of the (funders?|funding sources?|sponsors?))")
+# Back-matter headings that never start a body section, so anything may follow them:
+# "Acknowledgments and Disclosure of Funding" (NeurIPS), "Declaration of generative AI and AI-assisted
+# technologies in the writing process" (Elsevier), "Additional file 1" (BMC),
+# "Supplementary Material for Section 3"
+_BACK_MATTER_PREFIX = (
+    r"(acknowledge?ments?\b|declaration of (the use of )?(generative ai|ai)\b|additional files?\s*\d|"
+    r"supplementary (materials?|information|data|files?)\s*(\d|for\b|to\b|[:(])|"
+    r"electronic supplementary material\b)")
+SKIP_SECTION_RE = re.compile(
+    r"^\W*(\d+(\.\d+)*\.?\s+)?(" + _BACK_MATTER + r"((\s*[,;/&]\s*|\s+)(and\s+)?" + _BACK_MATTER + r")*"
+    r"(\s+(and\s+)?(statements?|information|sections?|details|notes))?\W*$|" + _BACK_MATTER_PREFIX + r".*$)",
     re.I)
 SKIP_SEC_TYPES = {"supplementary-material", "COI-statement", "funding-information", "ethics-statement",
                   "data-availability", "author-contributions", "acknowledgment", "abbreviations"}
@@ -578,7 +595,10 @@ def article_pmcid(article):
 
 def fetch_articles(pmcids):
     """{pmcid: <article> element} for one efetch request. A batch the XML parser
-    rejects is split in halves until the bad paper is alone (then missing)."""
+    rejects is split in halves until the bad paper is alone (then missing).
+    An answer that is not a PMC article set (an error message, an HTML page),
+    or a batch answered with no article at all, is a server problem: it raises,
+    so the batch is recorded as an error and fetched again on the next run."""
     data = urllib.parse.urlencode({"db": "pmc", "id": ",".join(p[3:] for p in pmcids), "retmode": "xml",
                                    "tool": "tinygpt-downloader"}).encode()
     raw = http_get(EFETCH_URL, data=data)
@@ -587,11 +607,19 @@ def fetch_articles(pmcids):
     try:
         root = ET.fromstring(raw)
     except ET.ParseError:
+        if re.search(rb"<(!doctype\s+)?html\b", raw[:2000], re.I):  # an error page, not a paper's XML
+            raise RuntimeError("efetch answered with a web page instead of XML")
         if len(pmcids) == 1:
             return {pmcids[0]: None}
         half = len(pmcids) // 2
         return {**fetch_articles(pmcids[:half]), **fetch_articles(pmcids[half:])}
-    return {pmcid: art for art in root.iter("article") if (pmcid := article_pmcid(art))}
+    if _tag(root) != "pmc-articleset":
+        text = _clean("".join(root.itertext()))[:120]
+        raise RuntimeError(f"efetch answered <{_tag(root)}> instead of articles" + (f": {text}" if text else ""))
+    found = {pmcid: art for art in root.iter("article") if (pmcid := article_pmcid(art))}
+    if not found and len(pmcids) > 1:
+        raise RuntimeError(f"efetch answered no article for {len(pmcids)} papers")
+    return found
 
 
 def process_batch(rows, out_dir, min_body):
@@ -653,7 +681,10 @@ def parse_args(argv=None):
         p.error("--batch must be 1..200")
     if args.max_papers < 1:
         p.error("--max-papers must be >= 1")
-    args.out = os.path.abspath(args.out)
+    # %USERPROFILE% / $HOME / ~ are expanded here too: PowerShell leaves %VAR% as it is
+    args.out = os.path.abspath(os.path.expanduser(os.path.expandvars(args.out)))
+    if args.meta:
+        args.meta = os.path.expanduser(os.path.expandvars(args.meta))
     args.meta = os.path.abspath(args.meta or os.path.join(os.path.dirname(args.out),
                                                           f"_{os.path.basename(args.out)}_meta"))
     return args

@@ -246,13 +246,16 @@ def load_tokenizer_from_any(path):
         return Tokenizer.from_file(path, "lines" if _has_newline_piece(path) else "plain")
     import torch
     try:
-        ckpt = torch.load(path, map_location="cpu", weights_only=True)
+        try:  # memory-mapped: only the tokenizer entry is read, not every weight (a 1-3B model's file is 12-36 GB)
+            ckpt = torch.load(path, map_location="cpu", weights_only=True, mmap=True)
+        except (TypeError, RuntimeError):  # an older torch, or a checkpoint in the old (non-zip) format
+            ckpt = torch.load(path, map_location="cpu", weights_only=True)
     except Exception as exc:  # noqa: BLE001 - report any unpickling refusal
         raise SystemExit(f"Could not read tokenizer from {path}: {type(exc).__name__}: {exc}")
-    if isinstance(ckpt.get("tokenizer"), dict):
-        meta = ckpt["tokenizer"]
+    meta = ckpt.get("tokenizer") if isinstance(ckpt, dict) else None
+    if isinstance(meta, dict):
         return Tokenizer(meta["proto"], meta.get("encode_mode", "lines"))
-    if ckpt.get("tokenizer_proto"):
+    if isinstance(ckpt, dict) and ckpt.get("tokenizer_proto"):
         return Tokenizer(ckpt["tokenizer_proto"], "plain")
     raise SystemExit(f"{path} does not contain a SentencePiece tokenizer.")
 
@@ -328,6 +331,7 @@ _CTRL_BREAK_RE = re.compile(r"[\x0b\x0c]")
 _TRAILING_RE = re.compile(r"[ \t]+(?=\n)")
 _BLANK_RUN_RE = re.compile(r"\n{3,}")
 _MOJIBAKE_RE = re.compile("[\u00c2\u00c3][\u0080-\u00bf]")
+_SURROGATE_RE = re.compile("[\ud800-\udfff]")  # lone UTF-16 halves (JSON "\ud83d" escapes): not encodable as UTF-8
 
 
 def decode_bytes(raw, stats):
@@ -353,6 +357,10 @@ def clean_text(text, stats):
     if not unicodedata.is_normalized("NFC", text):
         text = unicodedata.normalize("NFC", text)
         stats["unicode_nfc_docs"] += 1
+    if "▁" in text:  # SentencePiece's own space marker: it would come back from the tokens as a space
+        stats["u2581_replaced_docs"] += 1
+        stats["u2581_replaced_chars"] += text.count("▁")
+        text = text.replace("▁", "_")
     text, n_break = _CTRL_BREAK_RE.subn("\n", text)
     text, n_drop = _CTRL_DROP_RE.subn("", text)
     if n_break or n_drop:
@@ -543,22 +551,61 @@ def _prefilter_patterns(terms):
     patterns): a larger alternation outgrows RE2's fast automaton memory and
     falls back to a far slower matcher (one pattern of 2,104 terms ran at 0.22
     MB/s on Wikipedia text; 16 patterns of <= 200 terms at 14.4 MB/s, with
-    identical counts, since terms within a group never overlap)."""
-    groups = []
+    identical counts, since terms within a group never overlap).
+
+    RE2 counts non-overlapping matches, but a phrase of n words whose last
+    words can repeat its first ones ('Gallus gallus' in 'Gallus gallus
+    gallus') matches more often in the Python check. If d is the smallest
+    shift at which it overlaps itself, any n consecutive start words hold at
+    most k = ceil(n / d) of its matches, so on a chain of m overlapping
+    matches RE2 finds at least ceil(m / k); the phrase is therefore added k
+    times, each copy in a different group (a phrase always overlaps itself),
+    and the summed count is at least m. Only real phrase matches are counted,
+    not every occurrence of its first word ('Johnson' for 'Johnson & Johnson'),
+    so 'top' selection does not rank pages by stray first words.
+
+    Two terms can only overlap if some word of one could be some word of the
+    other, so each group indexes its words and the full overlap check runs only
+    on those partners (4,100 terms: 52 s -> 2 s, same groups)."""
+    groups = []  # [members [(shape, rx)], {exact word: {member}}, [(member, wildcard word)]]
     items = sorted(((t,) + _term_words(t) for t in terms), key=lambda it: (-len(it[1]), it[0]))
+
+    def partners(shape, group):
+        members, exact, wild = group
+        found = set()
+        for word in shape:
+            if word[1] == "exact":
+                found.update(exact.get(word[0], ()))
+            else:  # an exact word y can be the wildcard word x* (*x) if it starts (ends) with x
+                x, test = word[0], (str.startswith if word[1] == "prefix" else str.endswith)
+                found.update(m for y, ms in exact.items() if test(y, x) for m in ms)
+            found.update(m for m, other in wild if _same_word_possible(word, other))
+        return found
+
     for term, words, shape, case_sensitive, lead, trail in items:
         if not words:
             continue
+        n = len(shape)
+        shifts = [d for d in range(1, n) if all(_same_word_possible(shape[i], shape[i - d]) for i in range(d, n))]
+        copies = -(-n // shifts[0]) if shifts else 1
         rx = _re2_term(words, case_sensitive, lead, trail)
-        for group in groups:
-            if not any(_can_overlap(shape, other) for other, _ in group):
-                group.append((shape, rx))
-                break
-        else:
-            groups.append([(shape, rx)])
+        for _copy in range(copies):
+            for group in groups:
+                if not any(_can_overlap(shape, group[0][m][0]) for m in partners(shape, group)):
+                    break
+            else:
+                group = [[], {}, []]
+                groups.append(group)
+            member = len(group[0])
+            group[0].append((shape, rx))
+            for word in shape:
+                if word[1] == "exact":
+                    group[1].setdefault(word[0], set()).add(member)
+                else:
+                    group[2].append((member, word))
     patterns = []
-    for group in groups:
-        rxs = sorted((rx for _, rx in group), key=len, reverse=True)
+    for members, _, _ in groups:
+        rxs = sorted((rx for _, rx in members), key=len, reverse=True)
         for i in range(0, len(rxs), PREFILTER_TERMS_PER_PATTERN):
             patterns.append("(?:" + "|".join(rxs[i:i + PREFILTER_TERMS_PER_PATTERN]) + ")")
     return patterns
@@ -731,6 +778,43 @@ def parse_text_sources(entries):
     return groups
 
 
+def list_text_files(directory, patterns, recursive=False):
+    """Paths of the files in `directory` (and, if recursive, its sub-folders)
+    whose name matches one of the patterns, sorted. Names are matched ignoring
+    case on every system, so a folder gives the same files on Windows and macOS
+    ('Notes.MD' is a *.md file), and the folder path is never read as a pattern
+    ('D:\\Books [2024]'). Hidden files and folders (.name) are skipped, as glob
+    does. A pattern with a path separator in it is passed to glob."""
+    found = []
+    names = [p.lower() for p in patterns if not re.search(r"[\\/]", p)]
+    for pattern in patterns:
+        if re.search(r"[\\/]", pattern):
+            base = glob.escape(directory)
+            spec = os.path.join(base, "**", pattern) if recursive else os.path.join(base, pattern)
+            found.extend(glob.glob(spec, recursive=recursive))
+
+    def take(root, files):
+        for name in files:
+            low = name.lower()
+            if any(fnmatch.fnmatchcase(low, p) for p in names if p.startswith(".") or not name.startswith(".")):
+                found.append(os.path.join(root, name))
+
+    if names and recursive:
+        for root, dirs, files in os.walk(directory, followlinks=True):
+            dirs[:] = [d for d in dirs if not d.startswith(".")]
+            take(root, files)
+    elif names:
+        with os.scandir(directory) as entries:
+            take(directory, [e.name for e in entries if not e.is_dir()])
+    return sorted(set(found))
+
+
+def _excluded(path, rel, excludes):
+    """--md-exclude: the file name or its path inside the folder matches a pattern, ignoring case (any system)."""
+    name, rel = os.path.basename(path).lower(), rel.replace(os.sep, "/").lower()
+    return any(fnmatch.fnmatchcase(name, ex) or fnmatch.fnmatchcase(rel, ex) for ex in excludes)
+
+
 def iter_markdown(dirs, patterns, excludes, recursive, stats, ledger, source="md"):
     """Documents of one text source. With several folders, ids start with the
     folder name so equal file names in different folders stay distinct."""
@@ -738,14 +822,11 @@ def iter_markdown(dirs, patterns, excludes, recursive, stats, ledger, source="md
     bases = [os.path.basename(os.path.normpath(d)) or f"folder{k + 1}" for k, d in enumerate(dirs)]
     if len({b.lower() for b in bases}) < len(bases):
         bases = [f"{k + 1}-{b}" for k, b in enumerate(bases)]
+    excludes = [ex.lower().replace("\\", "/") for ex in excludes]
     for k, directory in enumerate(dirs):
         if not os.path.isdir(directory):
             raise SystemExit(f"--md-dir is not a folder: {directory}")
-        found = []
-        for pattern in patterns:
-            spec = os.path.join(directory, "**", pattern) if recursive else os.path.join(directory, pattern)
-            found.extend(glob.glob(spec, recursive=recursive))
-        for path in sorted(set(found)):
+        for path in list_text_files(directory, patterns, recursive):
             real = os.path.realpath(path)
             if real in seen or not os.path.isfile(real):
                 continue
@@ -753,7 +834,7 @@ def iter_markdown(dirs, patterns, excludes, recursive, stats, ledger, source="md
             rel = os.path.relpath(path, directory)
             doc_id = os.path.join(bases[k], rel) if len(dirs) > 1 else rel
             stats["scanned"] += 1
-            if any(fnmatch.fnmatch(os.path.basename(path), ex) or fnmatch.fnmatch(rel, ex) for ex in excludes):
+            if _excluded(path, rel, excludes):
                 stats["skipped"]["excluded_by_glob"] += 1
                 ledger.append(_ledger_row(source, doc_id, rel, "skipped", "excluded_by_glob", os.path.getsize(path)))
                 continue
@@ -858,10 +939,11 @@ def _vector_scores(arrays, kw, text_col, title_col, score_col, min_score):
 
 def _score_file(source, file_index, kw, min_score):
     """Pass A of 'top' selection for one file (runs in a worker thread; pyarrow
-    compute releases the GIL)."""
+    compute releases the GIL). The candidates come back as numpy columns
+    (-score, file, batch, row), 32 bytes each instead of a ~150-byte Python tuple."""
     need = kw is not None and bool(kw.include_patterns)
     counts = collections.Counter({"scanned": 0})
-    cands = []
+    cols = [[], [], []]
     for _, batch_index, arrays in source.batches({file_index}):
         hits, chars, score_ok = _vector_scores(arrays, kw, source.text_col, source.title_col,
                                                source.score_col, min_score)
@@ -872,10 +954,24 @@ def _score_file(source, file_index, kw, min_score):
         if need:
             counts["keyword_min_hits"] += int((keep & (hits < kw.min_hits)).sum())
             keep &= hits >= kw.min_hits
-        for row in np.nonzero(keep)[0]:
-            score = hits[row] / math.sqrt(max(int(chars[row]), 500))
-            cands.append((-float(score), file_index, batch_index, int(row)))
-    return counts, cands
+        rows = np.nonzero(keep)[0]
+        # the same IEEE operations as hits / math.sqrt(max(chars, 500)) per row, so the ranking is unchanged
+        cols[0].append(-(hits[rows].astype(np.float64) / np.sqrt(np.maximum(chars[rows], 500).astype(np.float64))))
+        cols[1].append(np.full(len(rows), batch_index, dtype=np.int64))
+        cols[2].append(rows.astype(np.int64))
+    neg, batches, rows = (np.concatenate(c) if c else np.zeros(0) for c in cols)
+    return counts, (neg.astype(np.float64), np.full(len(neg), file_index, dtype=np.int64),
+                    batches.astype(np.int64), rows.astype(np.int64))
+
+
+def _best_candidates(cands, limit):
+    """The `limit` first candidates in (-score, file, batch, row) order, as the
+    tuple sort did; all of them when limit is None."""
+    neg, files, batches, rows = (np.concatenate([c[k] for c in cands]) for k in range(4))
+    order = np.lexsort((rows, batches, files, neg))
+    if limit is not None:
+        order = order[:limit]
+    return neg[order], files[order], batches[order], rows[order]
 
 
 def _prescored(source, kw, min_score, threads):
@@ -913,26 +1009,34 @@ def iter_table_source(name, source, kw, max_docs, select, min_score, sample_frac
     t0 = time.time()
     if select == "top":
         from concurrent.futures import ThreadPoolExecutor
-        cands = []
+        cap = int(max_docs * 1.5) + 100 if max_docs else None
+        cands, held, total = [], 0, 0  # only the best `cap` are kept, so memory follows max_docs, not the corpus
         with ThreadPoolExecutor(max_workers=max(1, threads)) as pool:
             futures = [pool.submit(_score_file, source, f, kw, min_score) for f in range(len(source.paths))]
             for done, future in enumerate(futures, 1):
                 counts, found = future.result()
+                futures[done - 1] = None
                 stats["scanned"] += counts.pop("scanned", 0)
                 for reason, count in counts.items():
                     if count:
                         stats["skipped"][reason] += count
-                cands.extend(found)
+                cands.append(found)
+                held += len(found[0])
+                total += len(found[0])
+                if cap is not None and held > 4 * cap:
+                    cands = [_best_candidates(cands, cap)]
+                    held = len(cands[0][0])
                 print(f"  [{name}] scored file {done}/{len(futures)}: {stats['scanned']:,} records, "
-                      f"{len(cands):,} candidates ({time.time() - t0:,.0f} s)", flush=True)
-        cands.sort()
-        limit = len(cands) if not max_docs else min(len(cands), int(max_docs * 1.5) + 100)
-        stats["skipped"]["not_selected_rank"] += len(cands) - limit
+                      f"{total:,} candidates ({time.time() - t0:,.0f} s)", flush=True)
+        best = _best_candidates(cands, cap) if cands else (np.zeros(0),) * 4
+        del cands
+        limit = len(best[0])
+        stats["skipped"]["not_selected_rank"] += total - limit
         wanted = collections.defaultdict(dict)
-        for rank, (_, f, b, r) in enumerate(cands[:limit]):
+        for rank, (f, b, r) in enumerate(zip(best[1].tolist(), best[2].tolist(), best[3].tolist())):
             wanted[(f, b)][r] = rank
         files = {f for f, _ in wanted}
-        del cands
+        del best
         print(f"  [{name}] reading the top {limit:,} candidates", flush=True)
         for file_index, batch_index, arrays in source.batches(files):
             picks = wanted.get((file_index, batch_index))
@@ -981,7 +1085,8 @@ def _row(arrays, r, source, file_index, batch_index):
     return str(doc_id), str(title or ""), text, meta
 
 
-def iter_jsonl(paths, text_key, title_key, id_key, max_docs, stats, kw=None, batch=5000, name="jsonl", threads=1):
+def iter_jsonl(paths, text_key, title_key, id_key, max_docs, stats, kw=None, batch=5000, name="jsonl", threads=1,
+               sample_fraction=1.0, seed=0):
     """JSON Lines (optionally .gz, e.g. peS2o shards).
 
     Fast path: pyarrow parses the JSON in C++ (all cores) into Arrow batches, the
@@ -989,7 +1094,20 @@ def iter_jsonl(paths, text_key, title_key, id_key, max_docs, stats, kw=None, bat
     Python strings. If a file does not fit that reader (for example numeric ids or
     other type changes), it falls back to line-by-line json.loads from the first
     record not yet read. Reading stops once max_docs documents have been kept
-    (stats["accepted"]). Progress is printed every 500,000 records."""
+    (stats["accepted"]). Progress is printed every 500,000 records. With
+    sample_fraction < 1 the records that pass the prefilter are hash-sampled by
+    id, as Wikipedia and Parquet records are."""
+    if sample_fraction < 1.0:
+        for doc in _iter_jsonl_all(paths, text_key, title_key, id_key, max_docs, stats, kw, batch, name, threads):
+            if stable_unit(seed, "sample", name, doc[0]) >= sample_fraction:
+                stats["skipped"]["not_sampled"] += 1
+                continue
+            yield doc
+        return
+    yield from _iter_jsonl_all(paths, text_key, title_key, id_key, max_docs, stats, kw, batch, name, threads)
+
+
+def _iter_jsonl_all(paths, text_key, title_key, id_key, max_docs, stats, kw, batch, name, threads):
     t0 = time.time()
     progress = {"next": 500_000}
 
@@ -1117,6 +1235,14 @@ def _jsonl_batch(pending, path, text_key, title_key, id_key, stats, kw):
         if not isinstance(record, dict) or not isinstance(record.get(text_key), str):
             stats["skipped"]["missing_text"] += 1
             continue
+        bad = 0
+        for key in (text_key, title_key, id_key):  # a lone "\ud83d" escape would stop the build at the first encode
+            value = record.get(key)
+            if isinstance(value, str) and _SURROGATE_RE.search(value):
+                record[key], n = _SURROGATE_RE.subn("�", value)
+                bad += n
+        if bad:
+            record["\0bad_unicode"] = bad  # counted with the cleaning steps once the record is checked
         records.append((record_no, record))
     if kw is not None and kw.include_patterns and records:
         import pyarrow as pa
@@ -1135,7 +1261,10 @@ def _jsonl_batch(pending, path, text_key, title_key, id_key, stats, kw):
     for record_no, record in records:
         stats["accepted_raw"] = stats.get("accepted_raw", 0) + 1
         doc_id = str(record.get(id_key) or f"{os.path.basename(path)}:{record_no}")
-        yield doc_id, str(record.get(title_key) or ""), record[text_key], {"path": path}
+        meta = {"path": path}
+        if record.get("\0bad_unicode"):
+            meta["bad_unicode"] = record["\0bad_unicode"]
+        yield doc_id, str(record.get(title_key) or ""), record[text_key], meta
 
 
 # ---------------------------------------------------------------------------
@@ -1175,10 +1304,33 @@ class ShingleHasher:
     Python work per word). A word is a run of letters, digits, _ or non-ASCII
     bytes; its hash is a polynomial over its bytes, taken from prefix sums:
     hash(s..e) = (S[e] - S[s]) * P^-s with S[i] = sum_k<i (b_k + 1) P^k, all
-    modulo 2^64. Deterministic in every process (no salted Python hash)."""
+    modulo 2^64. Deterministic in every process (no salted Python hash).
+
+    A word's hash does not depend on where it starts, so long texts are hashed
+    in windows of WINDOW bytes cut between words, with identical results: the
+    working memory (about 37x the window) and the cached power tables stay
+    bounded for any document size, whole books included."""
+
+    WINDOW = 1 << 22   # 4 MB of UTF-8
+    BLOCK = 1 << 20    # shingles / signature values handled at a time
 
     def word_hashes(self, text):
         b = np.frombuffer(text.lower().encode("utf-8"), dtype=np.uint8)
+        if len(b) <= self.WINDOW:
+            return self._window_hashes(b)
+        out, start = [], 0
+        while start < len(b):
+            end = min(start + self.WINDOW, len(b))
+            if end < len(b):
+                gaps = np.flatnonzero(~_WORD_BYTE[b[start:end]])
+                if len(gaps):  # end the window just after its last non-word byte, so no word is cut
+                    end = start + int(gaps[-1]) + 1
+            out.append(self._window_hashes(b[start:end]))
+            start = end
+        return np.concatenate(out)
+
+    @staticmethod
+    def _window_hashes(b):
         if len(b) == 0:
             return np.zeros(0, dtype=np.uint64)
         edges = np.diff(np.concatenate(([False], _WORD_BYTE[b], [False])).astype(np.int8))
@@ -1198,11 +1350,15 @@ class ShingleHasher:
         if len(words) < n:
             return _mix64(np.asarray([int(np.bitwise_xor.reduce(words))], dtype=np.uint64))
         m = len(words) - n + 1
+        out = np.empty(m, dtype=np.uint64)
         with np.errstate(over="ignore"):
-            h = np.zeros(m, dtype=np.uint64)
-            for j in range(n):
-                h = h * _P + words[j:j + m]
-        return _mix64(h)
+            for s in range(0, m, self.BLOCK):
+                e = min(s + self.BLOCK, m)
+                h = np.zeros(e - s, dtype=np.uint64)
+                for j in range(n):
+                    h = h * _P + words[s + j:e + j]
+                out[s:e] = _mix64(h)
+        return out
 
 
 class MinHasher:
@@ -1228,8 +1384,9 @@ class MinHasher:
         sig = np.full(k, self.EMPTY, dtype=np.uint64)
         if len(shingles) == 0:
             return sig.astype(np.uint32)
-        h = _mix64(shingles ^ self.salt)
-        np.minimum.at(sig, (h >> self.shift).astype(np.intp), h & np.uint64(0xFFFFFFFF))
+        for s in range(0, len(shingles), ShingleHasher.BLOCK):  # in blocks: bounded temporaries, same minimum
+            h = _mix64(shingles[s:s + ShingleHasher.BLOCK] ^ self.salt)
+            np.minimum.at(sig, (h >> self.shift).astype(np.intp), h & np.uint64(0xFFFFFFFF))
         empty = np.nonzero(sig == self.EMPTY)[0]
         if len(empty):
             full = np.nonzero(sig != self.EMPTY)[0]
@@ -1342,8 +1499,7 @@ def _examine(title, text, use_kw):
             reason = why
     key, line_keys = None, []
     if not reason:
-        if cfg["exact_dedup"] == "skip":
-            key = normalised_hash(text)
+        key = normalised_hash(text)  # the exact-duplicate key, also kept in docs.tsv (see --keep-split-from)
         seen = set()
         for idx, line in enumerate(text.split("\n") if cfg["boilerplate"] != "off" else ()):
             stripped = line.strip()
@@ -1375,9 +1531,9 @@ class _Pool:
             print(f"  (using {self.workers} worker processes)", flush=True)
         return self.pool
 
-    def close(self):
+    def close(self, cancel=False):
         if self.pool is not None:
-            self.pool.shutdown()
+            self.pool.shutdown(cancel_futures=cancel)
             self.pool = None
 
 
@@ -1442,7 +1598,7 @@ def _pass2_doc(source, text):
             kept_lines.append(ln)
         text = _BLANK_RUN_RE.sub("\n\n", "\n".join(kept_lines)).strip()
     sig = None
-    if p["near"] and len(text) >= p["min_chars"]:
+    if p["near"] and text and len(text) >= p["min_chars"]:
         sig = p["minhasher"].signature(p["hasher"].shingles(text, 5))
     return text, removed, sig
 
@@ -1521,7 +1677,8 @@ def parse_args(argv=None):
     g.add_argument("--score-column", default="int_score", help="FineWeb-Edu quality column")
     g.add_argument("--min-score", type=float, help="keep Parquet rows with score-column >= this")
     g.add_argument("--sample-fraction", type=float, default=1.0,
-                   help="deterministic hash sample of streamed web records (first-mode only)")
+                   help="deterministic hash sample of streamed records: Wikipedia and Parquet (first-mode only) and "
+                        "JSONL; Markdown/text folders are always read in full")
     g = p.add_argument_group("Keyword filter (case-insensitive, whole word, * = any ending)")
     g.add_argument("--include-keywords", help="file (one term per line) or comma-separated terms")
     g.add_argument("--exclude-keywords", help="file or comma-separated terms; any match skips the record")
@@ -1581,16 +1738,32 @@ def parse_args(argv=None):
     return args
 
 
+def text_root_folders(root):
+    """(sources, skipped) for --text-root: sub-folders that become named sources,
+    and [(folder name, reason)] for the others that are not skipped by design
+    (_-prefixed, hidden, wikipedia, web, images)."""
+    sources, skipped = [], []
+    for name in sorted(os.listdir(root)):
+        folder = os.path.join(root, name)
+        if not os.path.isdir(folder) or name.startswith((".", "_")) or name.lower() in ("wikipedia", "web", "images"):
+            continue
+        if re.fullmatch(SOURCE_NAME_RE, name):
+            sources.append((name, folder))
+        else:
+            skipped.append((name, "a source name must start with a letter and use only letters, digits, _ or - "
+                                  "(at most 32 characters); rename the folder to include it"))
+    return sources, skipped
+
+
 def _validate(args, parser):
     if args.text_root:
         if not os.path.isdir(args.text_root):
             parser.error(f"--text-root not found: {args.text_root}")
-        for name in sorted(os.listdir(args.text_root)):
-            folder = os.path.join(args.text_root, name)
-            if (os.path.isdir(folder) and not name.startswith((".", "_"))
-                    and name.lower() not in ("wikipedia", "web", "images")
-                    and re.fullmatch(SOURCE_NAME_RE, name)):
-                args.md_dir.append(f"{name}={folder}")
+        found, skipped = text_root_folders(args.text_root)
+        for name, folder in found:
+            args.md_dir.append(f"{name}={folder}")
+        for name, why in skipped:
+            print(f"WARNING: --text-root sub-folder {name!r} is not read: {why}.", flush=True)
         args.md_recursive = True
     if not (args.md_dir or args.wiki_dir or args.parquet or args.jsonl):
         parser.error("give at least one source: --md-dir, --wiki-dir, --parquet or --jsonl")
@@ -1633,8 +1806,23 @@ def _validate(args, parser):
         parser.error("--superbpe-fraction must be between 0 and 0.5")
     if not 2 <= args.superbpe_max_words <= 8:
         parser.error("--superbpe-max-words must be between 2 and 8")
-    if args.keep_split_from and not os.path.isfile(os.path.join(args.keep_split_from, "docs.tsv")):
-        parser.error(f"--keep-split-from: no docs.tsv in {args.keep_split_from}")
+    if args.keep_split_from:
+        # manifest.json is written after docs.tsv, so together they mean the earlier build finished
+        for need in ("docs.tsv", "manifest.json"):
+            if not os.path.isfile(os.path.join(args.keep_split_from, need)):
+                parser.error(f"--keep-split-from: no {need} in {args.keep_split_from} (a finished dataset is needed)")
+        ledger = os.path.join(args.keep_split_from, "docs.tsv")
+        with open(ledger, "rb") as handle:
+            size = handle.seek(0, os.SEEK_END)
+            if size:
+                handle.seek(size - 1)
+            if not size or handle.read(1) != b"\n":
+                parser.error(f"--keep-split-from: {ledger} is cut short (the build that wrote it was stopped); "
+                             "rebuild that dataset or choose another")
+    try:
+        parse_tokenizer_weights(args.tokenizer_weights)
+    except ValueError as exc:
+        parser.error(str(exc))
 
 
 def prepare(argv=None):
@@ -1650,6 +1838,8 @@ def prepare(argv=None):
             shutil.rmtree(work, ignore_errors=True)
             print(f"Build stopped; removed the work spool {work}. Rerun the same command to rebuild.")
         raise
+    finally:
+        _release_lock(state.get("lock"))
 
 
 def _prepare(args, state=None):
@@ -1657,43 +1847,12 @@ def _prepare(args, state=None):
     t_start = time.time()
     _lower_priority()
     out = os.path.abspath(args.out)
-    if os.path.exists(out) and os.listdir(out) and _is_incomplete_build(out):
-        print(f"Removing an incomplete earlier build in {out} (no manifest.json; only data_prep outputs).")
-        shutil.rmtree(out)
-    if os.path.exists(out) and os.listdir(out):
-        if not args.overwrite:
-            raise SystemExit(f"{out} already exists and is not empty. Choose a new --out or pass --overwrite "
-                             "(the old folder is renamed, not deleted).")
-        backup = f"{out}.bak-{datetime.datetime.now():%Y%m%d-%H%M%S}"
-        os.replace(out, backup)
-        print(f"Existing dataset moved to {backup}")
-    os.makedirs(out, exist_ok=True)
-    work = os.path.join(out, "_work")
-    os.makedirs(work, exist_ok=True)
-    state["work"] = work
-    print(f"Preparing dataset in {out}")
 
+    # Everything that can be checked without reading the data is checked first, before --out is touched:
+    # a mistake then costs seconds, not hours, and never moves an existing dataset away.
     include = read_terms(args.include_keywords)
     exclude = read_terms(args.exclude_keywords)
     kw = KeywordFilter(include, exclude, args.keyword_min_hits, args.keyword_min_distinct, args.title_weight)
-    if kw.active:
-        print(f"Keyword filter: {len(include)} include terms, {len(exclude)} exclude terms, "
-              f"min hits {args.keyword_min_hits}, min distinct {args.keyword_min_distinct}, "
-              f"sources: {args.keyword_sources}")
-
-    # ------------------------------------------------------------------
-    # Pass 1: read, clean, filter, exact dedup -> spool1
-    # ------------------------------------------------------------------
-    sources = {}
-    ledger = []
-    exact_seen = {}
-    duplicates = []
-    line_counts = collections.defaultdict(collections.Counter)
-    line_examples = {}
-    spool1 = os.path.join(work, "spool1.jsonl")
-    keyword_totals = collections.defaultdict(collections.Counter)
-    notes = []
-
     text_sources = parse_text_sources(args.md_dir)
     spec = args.keyword_sources.strip().lower()
     wanted = None if spec in ("all", "web") else {s.strip() for s in spec.split(",") if s.strip()}
@@ -1721,6 +1880,56 @@ def _prepare(args, state=None):
     if wanted is not None and wanted - {n.lower() for n in names}:
         raise SystemExit(f"--keyword-sources: unknown source(s) {sorted(wanted - {n.lower() for n in names})}; "
                          f"the sources are {names} (or use 'web' or 'all').")
+    try:
+        parse_tokenizer_weights(args.tokenizer_weights, names)
+    except ValueError as exc:
+        raise SystemExit(str(exc))
+    # a reused tokenizer is loaded now: it may live in --out, which is renamed below with --overwrite
+    reused_tok = load_tokenizer_from_any(args.tokenizer_from) if args.tokenizer_from else None
+
+    lock = os.path.join(out, LOCK_NAME)
+    if os.path.isfile(lock) and _lock_owner_alive(lock):
+        raise SystemExit(f"{out} is being built by another data_prep.py run that is still going (see {lock}). "
+                         "Wait for it to finish, or stop it first.")
+    if os.path.exists(out) and os.listdir(out) and _is_incomplete_build(out):
+        print(f"Removing an incomplete earlier build in {out} (no manifest.json; only data_prep outputs).")
+        shutil.rmtree(out)
+    if os.path.exists(out) and os.listdir(out):
+        if not args.overwrite:
+            raise SystemExit(f"{out} already exists and is not empty. Choose a new --out or pass --overwrite "
+                             "(the old folder is renamed, not deleted).")
+        backup = f"{out}.bak-{datetime.datetime.now():%Y%m%d-%H%M%S}"
+        os.replace(out, backup)
+        print(f"Existing dataset moved to {backup}")
+        # --keep-split-from / --tokenizer-from naming the old folder now read it from its new place
+        args.keep_split_from = _moved_path(args.keep_split_from, out, backup)
+        args.tokenizer_from = _moved_path(args.tokenizer_from, out, backup)
+    os.makedirs(out, exist_ok=True)
+    state["lock"] = _acquire_lock(lock)
+    work = os.path.join(out, "_work")
+    os.makedirs(work, exist_ok=True)
+    state["work"] = work
+    print(f"Preparing dataset in {out}")
+    if kw.active:
+        print(f"Keyword filter: {len(include)} include terms, {len(exclude)} exclude terms, "
+              f"min hits {args.keyword_min_hits}, min distinct {args.keyword_min_distinct}, "
+              f"sources: {args.keyword_sources}")
+
+    # ------------------------------------------------------------------
+    # Pass 1: read, clean, filter, exact dedup -> spool1
+    # ------------------------------------------------------------------
+    sources = {}
+    ledger = []
+    exact_seen = {}
+    duplicates = []
+    line_counts = collections.defaultdict(collections.Counter)
+    line_examples = {}
+    spool1 = os.path.join(work, "spool1.jsonl")
+    keyword_totals = collections.defaultdict(collections.Counter)
+    notes = []
+    if args.text_root:
+        for name, why in text_root_folders(args.text_root)[1]:
+            notes.append(f"--text-root sub-folder `{name}` was not read: {why}.")
 
     workers = _Pool(args.workers, _init_worker, (kw, {
         "language": args.language, "max_replacement_ratio": args.max_replacement_ratio,
@@ -1766,21 +1975,33 @@ def _prepare(args, state=None):
                 sources[name]["paths"] = args.jsonl
                 max_docs = args.jsonl_max_docs
                 stream = iter_jsonl(paths, args.text_column, args.title_column, args.id_column, max_docs, stats,
-                                    use_kw, name=name, threads=args.threads)
+                                    use_kw, name=name, threads=args.threads, sample_fraction=args.sample_fraction,
+                                    seed=args.seed)
 
             sources[name]["max_docs"] = max_docs
             kept = 0
             ranked = sources[name].get("select") == "top"
+            # A document limit in stream order: the worker processes read ahead of the checked documents, by an
+            # amount that depends on --workers. Documents after the one that reached the limit are not counted,
+            # and the reader's counts are those it had when it read that document, so the report is the same for
+            # any number of workers. The full check's skip reasons are kept apart until then.
+            limited = bool(max_docs) and not ranked
+            if limited:
+                stream = _with_reader_state(stream, stats)
+            checked = collections.Counter() if limited else stats["skipped"]
+            stop_at = None
             flag = use_kw is not None
             for (doc_id, title, _raw, meta), found in _ordered(stream, lambda it: (it[1], it[2], flag),
                                                                _examine_chunk, workers,
                                                                size_of=lambda it: len(it[2])):
+                if limited and kept >= max_docs:
+                    continue
                 reason, text, hits, terms, key, line_keys, cleaning, raw_chars = found
                 stats["cleaning"].update(cleaning)
-                if max_docs and kept >= max_docs and not ranked:
-                    stats["skipped"]["over_max_docs"] += 1
-                    continue
-                if not reason and key is not None:
+                if meta.get("bad_unicode"):  # lone UTF-16 surrogates in a JSON record, replaced by U+FFFD
+                    stats["cleaning"]["decode_errors_docs"] += 1
+                    stats["cleaning"]["decode_errors_chars"] += meta["bad_unicode"]
+                if not reason and args.exact_dedup == "skip":
                     first = exact_seen.get(key)
                     if first is not None:
                         reason = "exact_duplicate"
@@ -1788,7 +2009,7 @@ def _prepare(args, state=None):
                     else:
                         exact_seen[key] = (name, doc_id, title)
                 if reason:
-                    stats["skipped"][reason] += 1
+                    checked[reason] += 1
                     if kind == "markdown" or stats["ledger_rows"] < 2000:
                         stats["ledger_rows"] += 1
                         ledger.append(_ledger_row(name, doc_id, title, "skipped", reason, raw_chars, 0, hits))
@@ -1796,6 +2017,8 @@ def _prepare(args, state=None):
                 keyword_totals[name].update(terms)
                 kept += 1
                 stats["accepted"] += 1
+                if limited and kept >= max_docs:
+                    stop_at = meta["_reader"]
                 counts, lines = line_counts[name], None
                 for k, idx in line_keys:
                     counts[k] += 1
@@ -1810,8 +2033,13 @@ def _prepare(args, state=None):
                         floor += 1
                     line_counts[name] = counts
                 json.dump({"s": name, "id": doc_id, "t": title, "x": text, "h": hits,
-                           "d": len(terms), "r": meta.get("rank")}, spool, ensure_ascii=False)
+                           "d": len(terms), "r": meta.get("rank"), "k": key}, spool, ensure_ascii=False)
                 spool.write("\n")
+            if limited:
+                if stop_at is not None:
+                    stats["scanned"], stats["skipped"] = stop_at[0], collections.Counter(stop_at[1])
+                    stats["stopped_early"] = True
+                stats["skipped"].update(checked)
             print(f"[{name}] scanned {stats['scanned']:,} | kept {stats['accepted']:,} | skipped "
                   f"{sum(stats['skipped'].values()):,} {dict(stats['skipped'].most_common())} "
                   f"({time.time() - t0:,.0f} s)", flush=True)
@@ -1835,7 +2063,7 @@ def _prepare(args, state=None):
         notes.append(f"Near-duplicate detection was skipped: {total_docs:,} documents exceed --near-dup-max-docs "
                      f"{args.near_dup_max_docs:,}.")
     signatures = np.zeros((total_docs, 128), dtype=np.uint32) if near_enabled else None
-    docs = []  # compact per-doc metadata: (source, id, title, chars, hits, distinct)
+    docs = []  # compact per-doc metadata: [source, id, title, chars, hits, distinct, rank, content hash]
     spool2 = os.path.join(work, "spool2.jsonl")
     print(f"\nPass 2: boilerplate ({args.boilerplate}) and near-duplicate signatures "
           f"({'on' if near_enabled else 'off'}) over {total_docs:,} documents ...", flush=True)
@@ -1848,7 +2076,7 @@ def _prepare(args, state=None):
                                                   _pass2_chunk, pass2, size_of=lambda r: len(r["x"])):
             for k in removed:
                 removed_lines[(rec["s"], k)] += 1
-            if len(text) < args.min_chars:
+            if not text or len(text) < args.min_chars:  # empty: --min-chars 0 must not keep an emptied document
                 sources[rec["s"]]["stats"]["skipped"]["too_short_after_boilerplate"] += 1
                 sources[rec["s"]]["stats"]["accepted"] -= 1
                 ledger.append(_ledger_row(rec["s"], rec["id"], rec["t"], "skipped",
@@ -1857,12 +2085,15 @@ def _prepare(args, state=None):
             idx = len(docs)
             if near_enabled:
                 signatures[idx] = sig
-            docs.append([rec["s"], rec["id"], rec["t"], len(text), rec["h"], rec["d"], rec.get("r")])
+            docs.append([rec["s"], rec["id"], rec["t"], len(text), rec["h"], rec["d"], rec.get("r"),
+                         int(rec["k"], 16) if rec.get("k") else None])
             rec["x"] = text
             json.dump(rec, dst, ensure_ascii=False)
             dst.write("\n")
     pass2.close()
     del boiler
+    if not args.keep_work:  # spool2 holds everything from here on: free the disk space of spool1 now
+        _remove_work_file(spool1)
     if near_enabled:
         signatures = signatures[:len(docs)]
     print(f"Pass 2 done ({time.time() - t0:,.0f} s)", flush=True)
@@ -1919,8 +2150,35 @@ def _prepare(args, state=None):
     cross_source = {r for r, m in clusters.items() if len({docs[i][0] for i in m}) > 1}
     split_of = {}
     forced_train = collections.Counter()
-    previous = _previous_split(args.keep_split_from) if args.keep_split_from else {}
+    by_id, by_hash = _previous_split(args.keep_split_from) if args.keep_split_from else ({}, {})
+    previous = bool(by_id or by_hash)
     kept_split = collections.Counter()
+    settled = {}  # cluster root -> earlier split, decided once for all sources
+    if previous:
+        # --keep-split-from: a document the earlier model trained on must never become validation (its loss there
+        # would look too good); earlier validation documents stay validation. A document counts as seen before
+        # when its id or its text (content hash: moved, renamed or re-numbered files) is in the earlier docs.tsv,
+        # and so does every copy that deduplication removed in its favour: the exact duplicates skipped against
+        # it and the dropped members of its near-duplicate cluster (the earlier model may have trained on the
+        # copy that is now dropped). The whole cluster then follows, in every source.
+        aliases = collections.defaultdict(list)  # (source, id) of a kept document -> exact duplicates of it
+        for kind_, s, d, _t, first_s, first_d, _ft, _j in duplicates:
+            if kind_ == "exact":
+                aliases[(first_s, first_d)].append((s, d))
+
+        def earlier(i):
+            found = {by_id.get(_split_key(docs[i][0], docs[i][1]))}
+            if docs[i][7] is not None:
+                found.add(by_hash.get(docs[i][7]))
+            found.update(by_id.get(_split_key(s, d)) for s, d in aliases.get((docs[i][0], docs[i][1]), ()))
+            return found
+
+        for r, m in members.items():
+            before = set().union(*(earlier(i) for i in m))
+            if "train" in before:
+                settled[r] = "train"
+            elif "val" in before:
+                settled[r] = "val"
     for name in sources:
         idxs = [i for i in range(len(docs)) if docs[i][0] == name and i not in dropped]
         groups = collections.defaultdict(list)  # cluster root -> members (labels alone could collide)
@@ -1930,13 +2188,10 @@ def _prepare(args, state=None):
         budget = min(args.val_fraction * total_chars, args.val_max_chars)
         order = sorted(groups, key=lambda g: stable_unit(args.seed, "split", group_of[g]))
         val_chars = 0
-        if previous:
-            # --keep-split-from: a document the earlier model trained on must never become validation (its loss
-            # there would look too good); earlier validation documents stay validation. Only new documents are split.
+        if previous:  # only new documents are split (see above)
             fresh = []
             for g in order:
-                before = {previous.get((docs[i][0], str(docs[i][1]))) for i in groups[g]}
-                target = "train" if "train" in before else ("val" if "val" in before else None)
+                target = settled.get(g)
                 if target is None:
                     fresh.append(g)
                     continue
@@ -1970,9 +2225,9 @@ def _prepare(args, state=None):
     if nothing_kept and not args.scan_only:
         notes.append("No document passed the filters, so nothing was tokenized.")
     if args.scan_only or nothing_kept:
+        _write_ledger(out, ledger, docs, split_of, group_of, dropped, {})
         _write_report(out, args, sources, ledger, duplicates, removed_lines, line_examples, keyword_totals,
                       None, {}, forced_train, [], None, t_start, scan_only=args.scan_only, notes=notes)
-        _write_ledger(out, ledger, docs, split_of, group_of, dropped, {})
         _cleanup(work, args.keep_work)
         if nothing_kept and not args.scan_only:
             raise SystemExit(f"No document passed the filters; see {os.path.join(out, 'report.md')} and docs.tsv. "
@@ -1984,8 +2239,8 @@ def _prepare(args, state=None):
     # Tokenizer
     # ------------------------------------------------------------------
     train_chars_total = sum(s.get("train_chars", 0) for s in sources.values())
-    if args.tokenizer_from:
-        tok = load_tokenizer_from_any(args.tokenizer_from)
+    if reused_tok is not None:
+        tok = reused_tok
         print(f"\nReusing tokenizer from {args.tokenizer_from} ({tok.encode_mode} mode, {tok.vocab_size:,} pieces)")
         tokenizer_info = {"trained": False, "from": os.path.abspath(args.tokenizer_from)}
     else:
@@ -2011,29 +2266,48 @@ def _prepare(args, state=None):
             writers[key] = open(os.path.join(out, f"{split}.{source}.bin"), "wb")
         return writers[key]
 
+    head = [tok.bos_id] if tok.bos_id >= 0 else []
+    if tok.eos_id >= 0:
+        tail = [tok.eos_id]
+    else:
+        tail = tok.encode("\n\n") if tok.encode_mode == "plain" else []  # v3 convention: blank lines between docs
+
+    def write_doc(i, pieces):
+        """BOS, the tokens of each part, EOS; written as it goes, so a whole book
+        is never one Python list in memory (about 36 bytes per token)."""
+        split, source = split_of[i], docs[i][0]
+        handle, ids, n = writer(split, source), list(head), 0
+        for part in pieces:
+            ids.extend(part)
+            if len(ids) >= 1 << 20:
+                handle.write(np.asarray(ids, dtype=dtype).tobytes())
+                n, ids = n + len(ids), []
+        ids.extend(tail)
+        handle.write(np.asarray(ids, dtype=dtype).tobytes())
+        n += len(ids)
+        counts[(split, source)] += n
+        doc_counts[(split, source)] += 1
+        doc_tokens[i] = n
+        lengths[source].append(n)
+        chars_by[(split, source)] += docs[i][3]
+
     def flush(batch):
-        texts = [part for _, parts in batch for part in parts]
-        encoded = tok.encode_batch(texts, threads=args.threads)
+        encoded = tok.encode_batch([part for _, parts in batch for part in parts], threads=args.threads)
         pos = 0
         for i, parts in batch:
-            split, source = split_of[i], docs[i][0]
-            ids = []
-            for j in range(len(parts)):
-                ids.extend(encoded[pos + j])
+            write_doc(i, encoded[pos:pos + len(parts)])
             pos += len(parts)
-            if tok.bos_id >= 0:
-                ids.insert(0, tok.bos_id)
-            if tok.eos_id >= 0:
-                ids.append(tok.eos_id)
-            elif tok.encode_mode == "plain":
-                ids.extend(tok.encode("\n\n"))  # v3 convention: documents joined by blank lines
-            arr = np.asarray(ids, dtype=dtype)
-            writer(split, source).write(arr.tobytes())
-            counts[(split, source)] += len(arr)
-            doc_counts[(split, source)] += 1
-            doc_tokens[i] = len(arr)
-            lengths[source].append(len(arr))
-            chars_by[(split, source)] += docs[i][3]
+
+    def encoded_in_slices(parts, limit=8_000_000):
+        """The parts' tokens, encoded a few million characters at a time."""
+        k = 0
+        while k < len(parts):
+            j, size = k, 0
+            while j < len(parts) and (j == k or size + len(parts[j]) <= limit):
+                size += len(parts[j])
+                j += 1
+            yield from tok.encode_batch(parts[k:j], threads=args.threads)
+            k = j
 
     try:
         batch, batch_chars = [], 0
@@ -2046,6 +2320,12 @@ def _prepare(args, state=None):
                 if len(parts) > 1:
                     sources[rec["s"]]["stats"]["cleaning"]["oversized_docs_split"] += 1
                     sources[rec["s"]]["stats"]["cleaning"]["oversized_parts"] += len(parts)
+                if len(rec["x"]) > 8_000_000:  # a whole book: encoded and written part by part, in file order
+                    if batch:
+                        flush(batch)
+                        batch, batch_chars = [], 0
+                    write_doc(i, encoded_in_slices(parts))
+                    continue
                 batch.append((i, parts))
                 batch_chars += len(rec["x"])
                 if batch_chars > 8_000_000:
@@ -2057,19 +2337,6 @@ def _prepare(args, state=None):
         for handle in writers.values():
             handle.close()
     print(f"Pass 3 done ({time.time() - t0:,.0f} s)", flush=True)
-
-    # ------------------------------------------------------------------
-    # Leakage audit (sampled word 13-grams, train vs val)
-    # ------------------------------------------------------------------
-    leakage = []
-    if args.leakage_check == "on":
-        try:  # an informational check: its failure must not throw away a finished dataset
-            leakage = _leakage_audit(spool2, docs, split_of, dropped, workers=args.workers,
-                                     warmup=args.worker_warmup)
-        except (MemoryError, OSError, RuntimeError) as exc:
-            print(f"Leakage audit failed ({type(exc).__name__}: {exc}); the dataset is written without it.",
-                  flush=True)
-            notes.append(f"The leakage audit failed ({type(exc).__name__}) and was skipped.")
 
     # ------------------------------------------------------------------
     # Manifest
@@ -2116,15 +2383,33 @@ def _prepare(args, state=None):
         "prep_args": {k: v for k, v in vars(args).items()},
         "command": " ".join(sys.argv),
     }
+    # docs.tsv first, then manifest.json, each written whole and renamed into place: a dataset with a manifest is
+    # complete (never deleted as an interrupted build) and its docs.tsv is never cut short (--keep-split-from)
+    _write_ledger(out, ledger, docs, split_of, group_of, dropped, doc_tokens)
     tmp = os.path.join(out, "manifest.json.tmp")
     with open(tmp, "w", encoding="utf-8") as handle:
         json.dump(manifest, handle, indent=2, ensure_ascii=False)
     os.replace(tmp, os.path.join(out, "manifest.json"))
 
+    # ------------------------------------------------------------------
+    # Leakage audit (sampled word 13-grams, train vs val), after the dataset is complete
+    # ------------------------------------------------------------------
+    leakage = []
+    if args.leakage_check == "on":
+        try:  # an informational check: its failure or a Ctrl+C must not throw away a finished dataset
+            leakage = _leakage_audit(spool2, docs, split_of, dropped, workers=args.workers,
+                                     warmup=args.worker_warmup)
+        except SystemExit:
+            raise
+        except BaseException as exc:  # noqa: BLE001 - KeyboardInterrupt included: it only skips the audit
+            what = "was interrupted" if isinstance(exc, KeyboardInterrupt) else f"failed ({type(exc).__name__})"
+            print(f"Leakage audit {what}: {exc}; the dataset is complete, the report is written without it.",
+                  flush=True)
+            notes.append(f"The leakage audit {what} and was skipped.")
+
     tok_stats = _tokenizer_stats(tok, docs, split_of, doc_tokens)
     _write_report(out, args, sources, ledger, duplicates, removed_lines, line_examples, keyword_totals,
                   manifest, tok_stats, forced_train, leakage, tok, t_start, notes=notes)
-    _write_ledger(out, ledger, docs, split_of, group_of, dropped, doc_tokens)
     _cleanup(work, args.keep_work)
     t = manifest["totals"]
     print(f"\nDataset ready: {out}\n  train {t['train_tokens']:,} tokens in {t['train_docs']:,} docs | "
@@ -2133,23 +2418,150 @@ def _prepare(args, state=None):
     return out
 
 
+LOCK_NAME = "_build.lock"
 _OUTPUT_NAMES = {"_work", "tokenizer.model", "report.md", "docs.tsv", "duplicates.tsv", "boilerplate.tsv",
-                 "keyword_hits.tsv", "leakage.tsv", "manifest.json.tmp"}
+                 "keyword_hits.tsv", "leakage.tsv", "manifest.json.tmp", "docs.tsv.tmp", "report.md.tmp", LOCK_NAME}
+
+
+def _lock_owner_alive(lock):
+    """True if the build that wrote this lock file is still running (unknown = running,
+    so a live build is never deleted; a lock whose process has ended is stale)."""
+    try:
+        with open(lock, encoding="utf-8") as handle:
+            info = json.load(handle)
+        pid = int(info["pid"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return False
+    if pid == os.getpid():
+        return False  # left by an earlier build in this process
+    try:
+        import psutil
+    except ImportError:
+        psutil = None
+    if psutil is not None:
+        try:
+            proc, started = psutil.Process(pid), info.get("started")
+            return started is None or abs(proc.create_time() - float(started)) < 2  # not a reused process id
+        except psutil.NoSuchProcess:
+            return False
+        except Exception:  # noqa: BLE001 - access denied and the like: the process exists
+            return True
+    if sys.platform == "win32":
+        import ctypes
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.OpenProcess.restype = ctypes.c_void_p
+        kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+        handle = kernel32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+        if not handle:
+            return ctypes.get_last_error() == 5  # access denied: it exists
+        try:
+            code = ctypes.c_ulong()
+            kernel32.GetExitCodeProcess.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_ulong)]
+            return not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)) or code.value == 259  # STILL_ACTIVE
+        finally:
+            kernel32.CloseHandle(handle)
+    try:
+        os.kill(pid, 0)  # signal 0 only checks (on POSIX; never call this on Windows, where it kills)
+    except ProcessLookupError:
+        return False
+    except OSError:
+        return True
+    return True
+
+
+def _acquire_lock(lock):
+    """Mark --out as being built by this process (a second run then refuses
+    instead of deleting a build in progress); removed when the build ends."""
+    started = None
+    try:
+        import psutil
+        started = psutil.Process().create_time()
+    except Exception:  # noqa: BLE001 - without psutil only the process id is checked
+        pass
+    for attempt in (1, 2):
+        try:
+            fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            break
+        except FileExistsError:
+            if attempt == 2 or _lock_owner_alive(lock):
+                raise SystemExit(f"{os.path.dirname(lock)} is being built by another data_prep.py run "
+                                 f"(see {lock}). Wait for it to finish, or stop it first.")
+            os.remove(lock)  # stale: its build ended without removing it
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        json.dump({"pid": os.getpid(), "started": started}, handle)
+    return lock
+
+
+def _release_lock(lock):
+    if not lock:
+        return
+    try:
+        with open(lock, encoding="utf-8") as handle:
+            mine = int(json.load(handle).get("pid", -1)) == os.getpid()
+        if mine:
+            os.remove(lock)
+    except (OSError, ValueError, TypeError, AttributeError):
+        pass
+
+
+def _moved_path(path, old, new):
+    """`path` after the folder `old` was renamed to `new` (unchanged if it is not inside it)."""
+    if not path:
+        return path
+    full = os.path.abspath(path)
+    a, b = os.path.normcase(full), os.path.normcase(old.rstrip("\\/"))
+    if a == b or a.startswith(b + os.sep):
+        return new + full[len(b):]
+    return path
+
+
+def _with_reader_state(stream, stats):
+    """The reader's counts right after each document was read (meta['_reader']),
+    so a source with a document limit can report what was read up to the
+    document that reached it, whatever the worker processes had read ahead."""
+    for doc_id, title, text, meta in stream:
+        meta["_reader"] = (stats["scanned"], dict(stats["skipped"]))
+        yield doc_id, title, text, meta
+
+
+def _tsv_cell(value):
+    """A field of the audit tables: tabs and line breaks (\\r too) would break the rows."""
+    return str(value).replace("\t", " ").replace("\r", " ").replace("\n", " ")
+
+
+def _split_key(source, doc_id):
+    """How --keep-split-from matches a document by name: its id as docs.tsv
+    stores it, with / and \\ alike (ids of nested files hold the path separator
+    of the system that built the dataset: Windows now, the Mac later)."""
+    return source, _tsv_cell(doc_id).replace("\\", "/")
 
 
 def _previous_split(dataset_dir):
-    """{(source, doc_id): 'train' | 'val'} from an earlier dataset's docs.tsv."""
+    """({(source, doc_id): split}, {content hash: split}) from an earlier
+    dataset's docs.tsv, split being 'train' or 'val' ('train' wins when two
+    rows disagree). Datasets built before the content_hash column existed give
+    an empty hash table."""
     path = os.path.join(dataset_dir, "docs.tsv")
     if not os.path.isfile(path):
         raise SystemExit(f"--keep-split-from: {path} not found (the earlier dataset folder is needed).")
-    out = {}
-    with open(path, encoding="utf-8") as handle:
+    by_id, by_hash = {}, {}
+    with open(path, encoding="utf-8", newline="\n") as handle:  # rows end at \n only (older files kept \r in titles)
         head = handle.readline().rstrip("\n").split("\t")
         for line in handle:
             row = dict(zip(head, line.rstrip("\n").split("\t")))
-            if row.get("status") in ("train", "val"):
-                out[(row["source"], row["doc_id"])] = row["status"]
-    return out
+            status = row.get("status")
+            if status not in ("train", "val"):
+                continue
+            key = _split_key(row["source"], row["doc_id"])
+            if by_id.get(key) != "train":
+                by_id[key] = status
+            try:
+                h = int(row.get("content_hash") or "", 16)
+            except ValueError:
+                continue
+            if by_hash.get(h) != "train":
+                by_hash[h] = status
+    return by_id, by_hash
 
 
 def _is_incomplete_build(folder):
@@ -2161,22 +2573,42 @@ def _is_incomplete_build(folder):
         e in _OUTPUT_NAMES or re.fullmatch(r"(train|val)\.[A-Za-z][A-Za-z0-9_-]*\.bin", e) for e in entries)
 
 
+def parse_tokenizer_weights(spec, names=None):
+    """--tokenizer-weights "books=3,articles=3" -> {source: weight}. With the
+    source names given, each name must be one of them (ignoring case, as source
+    names are everywhere else) and maps to its exact spelling. ValueError with a
+    plain message otherwise; checked before reading starts, not after hours."""
+    weights = {}
+    for item in (spec or "").split(","):
+        if not item.strip():
+            continue
+        name, sep, value = item.partition("=")
+        name = name.strip()
+        try:
+            weight = float(value) if sep and name else float("nan")
+        except ValueError:
+            weight = float("nan")
+        if not (math.isfinite(weight) and weight >= 0):
+            raise ValueError(f"--tokenizer-weights: {item.strip()!r} is not name=number (a number >= 0)")
+        if names is not None:
+            match = [n for n in names if n.lower() == name.lower()]
+            if not match:
+                raise ValueError(f"--tokenizer-weights: unknown source {name!r}; sources are {sorted(names)}")
+            name = match[0]
+        weights[name] = weight
+    return weights
+
+
 def _train_tokenizer(spool2, docs, split_of, sources, vocab, args, work):
     import sentencepiece as spm
     # Default: every training document has the same inclusion probability, so
     # each source contributes in proportion to its size. --tokenizer-weights
     # multiplies a source's share (total sample size stays near the budget).
     weights = {n: 1.0 for n in sources}
-    for item in (args.tokenizer_weights or "").split(","):
-        if not item.strip():
-            continue
-        name, _, value = item.partition("=")
-        if name.strip() not in sources:
-            raise SystemExit(f"--tokenizer-weights: unknown source {name.strip()!r}; sources are {sorted(sources)}")
-        try:
-            weights[name.strip()] = float(value)
-        except ValueError:
-            raise SystemExit(f"--tokenizer-weights: {item!r} is not name=number")
+    try:
+        weights.update(parse_tokenizer_weights(args.tokenizer_weights, list(sources)))
+    except ValueError as exc:
+        raise SystemExit(str(exc))
     mass = max(sum(weights[n] * s.get("train_chars", 0) for n, s in sources.items()), 1)
     keep_prob = {n: min(1.0, args.tokenizer_sample_chars * weights[n] / mass) for n in sources}
     corpus = os.path.join(work, "tokenizer_corpus.txt")
@@ -2242,7 +2674,19 @@ def _train_tokenizer(spool2, docs, split_of, sources, vocab, args, work):
               f"{'held-out ' if sb['held_out'] else ''}lines of the tokenizer text; e.g. "
               + ", ".join(repr(t) for t in sb["examples"][:8]))
     print(f"Tokenizer trained in {time.time() - t0:,.0f} s ({tok.vocab_size:,} pieces)")
+    if not args.keep_work:  # not needed any more: free its disk space before pass 3 writes the token files
+        _remove_work_file(corpus)
     return tok, info
+
+
+def _remove_work_file(path):
+    try:
+        size = os.path.getsize(path)
+        os.remove(path)
+        if size >= 100 << 20:
+            print(f"  removed {os.path.basename(path)} ({size / 1e9:,.1f} GB freed)", flush=True)
+    except OSError:
+        pass
 
 
 def _piece_words(piece):
@@ -2312,7 +2756,7 @@ def superbpe_extend(proto, corpus, extra, max_words=4, sample_tokens=20_000_000,
     if batch:
         flush()
     seq = np.concatenate(chunks) if chunks else np.zeros(0, dtype=np.int32)
-    del chunks
+    chunks.clear()  # the stage-1 token arrays: only seq is needed now
     stage1_tokens = int(np.count_nonzero(seq != sep))
     held_out = bool(checks)
     if not checks:  # a tiny corpus: measure on (part of) the learning text instead
@@ -2472,16 +2916,20 @@ def _leakage_audit(spool2, docs, split_of, dropped, n=13, keep_mod=16, workers=1
                     yield i, json.loads(line)["x"]
 
     pool = _Pool(workers, _init_audit, (n, keep_mod), warmup)
-    val = [(i, sh) for (i, _), sh in _ordered(texts("val"), lambda it: it[1], _audit_chunk, pool, chunk=32,
-                                              size_of=lambda it: len(it[1]))]
-    pool.close()
+    try:
+        val = [(i, sh) for (i, _), sh in _ordered(texts("val"), lambda it: it[1], _audit_chunk, pool, chunk=32,
+                                                  size_of=lambda it: len(it[1]))]
+    finally:  # on an error or Ctrl+C the queued work is cancelled, so the build can finish without it
+        pool.close(cancel=True)
     val_set = np.unique(np.concatenate([sh for _, sh in val])) if val else np.zeros(0, dtype=np.uint64)
     found = []
     if len(val_set):
         pool = _Pool(workers, _init_audit_match, (n, keep_mod, val_set), warmup)
-        found = [sh for _, sh in _ordered(texts("train"), lambda it: it[1], _audit_match_chunk, pool, chunk=32,
-                                          size_of=lambda it: len(it[1])) if len(sh)]
-        pool.close()
+        try:
+            found = [sh for _, sh in _ordered(texts("train"), lambda it: it[1], _audit_match_chunk, pool,
+                                              chunk=32, size_of=lambda it: len(it[1])) if len(sh)]
+        finally:
+            pool.close(cancel=True)
     in_train = np.unique(np.concatenate(found)) if found else np.zeros(0, dtype=np.uint64)
     rows = []
     for i, sh in val:
@@ -2504,21 +2952,30 @@ def _cleanup(work, keep):
     shutil.rmtree(work, ignore_errors=True)
 
 
+LEDGER_COLUMNS = ("source", "doc_id", "title", "status", "reason", "chars", "tokens", "keyword_hits", "group",
+                  "content_hash")
+
+
 def _write_ledger(out, ledger, docs, split_of, group_of, dropped, doc_tokens):
+    """docs.tsv, written whole and then renamed into place (a stopped build never
+    leaves a cut-short file). content_hash identifies a kept document's text for
+    a later --keep-split-from (older files have no such column)."""
     path = os.path.join(out, "docs.tsv")
-    with open(path, "w", encoding="utf-8", newline="\n") as handle:
-        handle.write("source\tdoc_id\ttitle\tstatus\treason\tchars\ttokens\tkeyword_hits\tgroup\n")
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8", newline="\n") as handle:
+        handle.write("\t".join(LEDGER_COLUMNS) + "\n")
         # sorted: readers add some rows ahead of the checked documents, by an amount that depends on --workers
         rows = sorted(ledger, key=lambda r: (r["source"], str(r["doc_id"]), r["reason"]))
         for i, d in enumerate(docs):
             if i in dropped:
                 continue
-            rows.append(_ledger_row(d[0], d[1], d[2], split_of.get(i, "?"), "", d[3], doc_tokens.get(i, 0),
-                                    d[4], group_of.get(i, "")))
+            row = _ledger_row(d[0], d[1], d[2], split_of.get(i, "?"), "", d[3], doc_tokens.get(i, 0),
+                              d[4], group_of.get(i, ""))
+            row["content_hash"] = f"{d[7]:032x}" if d[7] is not None else ""
+            rows.append(row)
         for r in rows:
-            handle.write("\t".join(str(r[k]).replace("\t", " ").replace("\n", " ") for k in
-                                   ("source", "doc_id", "title", "status", "reason", "chars", "tokens",
-                                    "keyword_hits", "group")) + "\n")
+            handle.write("\t".join(_tsv_cell(r.get(k, "")) for k in LEDGER_COLUMNS) + "\n")
+    os.replace(tmp, path)
 
 
 def _write_report(out, args, sources, ledger, duplicates, removed_lines, line_examples, keyword_totals,
@@ -2578,7 +3035,7 @@ def _write_report(out, args, sources, ledger, duplicates, removed_lines, line_ex
             handle.write("source\tterm\thits_in_kept_docs\n")
             for name, counter in keyword_totals.items():
                 for term, count in counter.most_common():
-                    handle.write(f"{name}\t{term}\t{count}\n")
+                    handle.write(f"{name}\t{_tsv_cell(term)}\t{count}\n")
     L.append("\n## Duplicates\n")
     exact = [d for d in duplicates if d[0] == "exact"]
     near = [d for d in duplicates if d[0] == "near"]
@@ -2590,7 +3047,7 @@ def _write_report(out, args, sources, ledger, duplicates, removed_lines, line_ex
     with open(os.path.join(out, "duplicates.tsv"), "w", encoding="utf-8", newline="\n") as handle:
         handle.write("kind\tsource\tdoc_id\ttitle\tduplicate_of_source\tduplicate_of_id\tduplicate_of_title\tjaccard\n")
         for d in duplicates:
-            handle.write("\t".join(str(x).replace("\t", " ") for x in d[:7]) + f"\t{d[7]:.3f}\n")
+            handle.write("\t".join(_tsv_cell(x) for x in d[:7]) + f"\t{d[7]:.3f}\n")
     L.append("\n## Boilerplate lines\n")
     total_removed = sum(removed_lines.values())
     L.append("Headings (Markdown # lines and short ALL-CAPS lines) are never counted as boilerplate. ")
@@ -2601,7 +3058,7 @@ def _write_report(out, args, sources, ledger, duplicates, removed_lines, line_ex
     with open(os.path.join(out, "boilerplate.tsv"), "w", encoding="utf-8", newline="\n") as handle:
         handle.write("source\toccurrences\tline\n")
         for (name, k), c in removed_lines.most_common():
-            handle.write(f"{name}\t{c}\t{line_examples.get(k, '?')}\n")
+            handle.write(f"{name}\t{c}\t{_tsv_cell(line_examples.get(k, '?'))}\n")
     for (name, k), c in removed_lines.most_common(15):
         L.append(f"- {name} x{c}: `{line_examples.get(k, '?')[:110]}`")
     if manifest and tok is not None:
@@ -2639,15 +3096,17 @@ def _write_report(out, args, sources, ledger, duplicates, removed_lines, line_ex
         with open(os.path.join(out, "leakage.tsv"), "w", encoding="utf-8", newline="\n") as handle:
             handle.write("overlap\tsource\tdoc_id\ttitle\tsampled_13grams\n")
             for r in leakage:
-                handle.write(f"{r[0]:.4f}\t{r[1]}\t{r[2]}\t{str(r[3]).replace(chr(9), ' ')}\t{r[4]}\n")
+                handle.write(f"{r[0]:.4f}\t{r[1]}\t{_tsv_cell(r[2])}\t{_tsv_cell(r[3])}\t{r[4]}\n")
     L.append("\n## Files\n")
     L.append("- `docs.tsv`: every kept document (split, tokens, group), every skipped Markdown file and "
              "up to 2,000 web records per source that were skipped after full-text inspection, with the "
              "reason. Web records rejected by the vectorised keyword prefilter are counted in the table above.")
     L.append("- `duplicates.tsv`, `boilerplate.tsv`, `keyword_hits.tsv`, `leakage.tsv`: audit tables.")
     L.append("- `train.<source>.bin` / `val.<source>.bin`: token IDs (see manifest.json for dtype and SHA-256).")
-    with open(os.path.join(out, "report.md"), "w", encoding="utf-8", newline="\n") as handle:
+    tmp = os.path.join(out, "report.md.tmp")  # report.md marks a finished scan-only run: written whole
+    with open(tmp, "w", encoding="utf-8", newline="\n") as handle:
         handle.write("\n".join(L) + "\n")
+    os.replace(tmp, os.path.join(out, "report.md"))
 
 
 def main(argv=None):

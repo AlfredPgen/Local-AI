@@ -8,9 +8,11 @@ import glob
 import hashlib
 import io
 import json
+import math
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -27,6 +29,44 @@ import data_prep  # noqa: E402
 import tiny_gpt  # noqa: E402
 
 PY = sys.executable
+PATCHED_RUN = r'''
+import signal
+import sys
+
+import torch
+
+sys.path.insert(0, sys.argv[1])
+import tiny_gpt  # noqa: E402
+
+mode, n = sys.argv[2], int(sys.argv[3])
+calls = {"next": 0, "clip": 0}
+real_next, real_clip = tiny_gpt.TokenBatcher.next, torch.nn.utils.clip_grad_norm_
+
+
+def next_batch(self):
+    out = real_next(self)  # drawn first: a retry must rewind the sampler
+    calls["next"] += 1
+    if mode == "interrupt" and calls["next"] == n:
+        raise KeyboardInterrupt
+    if mode == "oom" and calls["next"] <= n:
+        raise RuntimeError("CUDA out of memory (simulated)")
+    return out
+
+
+def clip(*a, **k):
+    calls["clip"] += 1
+    if mode == "sigint" and calls["clip"] == n:
+        signal.raise_signal(signal.SIGINT)
+    return real_clip(*a, **k)
+
+
+tiny_gpt.TokenBatcher.next = next_batch
+# a fixed memory budget: the real one is 40% of free RAM, and on a busy machine the planner would switch
+# on memory savings in some runs and not in others
+tiny_gpt.device_memory_budget = lambda device: (8 * 2 ** 30, "8.0 GiB (test)")
+torch.nn.utils.clip_grad_norm_ = clip
+tiny_gpt.main(sys.argv[4:])
+'''
 BIO = ("Genetic drift changes allele frequencies in small populations. Natural selection acts on phenotypes, "
        "and heritability measures additive genetic variance. Proteins are built from amino acids; DNA is "
        "transcribed into RNA. Genome-wide association studies test variants for disease.")
@@ -1084,6 +1124,187 @@ class TestPipeline(unittest.TestCase):
         self.assertIn("optimizer: Muon + AdamW state for 20 tensors", out_v)
         self.assertNotIn("panel failed", out_v)
 
+    # ---------------- interrupted steps, first-step out-of-memory, resume refusals ----------------
+    def patched_run(self, mode, n, args):
+        """tiny_gpt.main(args) in a child process with a fixed memory budget and one fault injected:
+        'interrupt' raises KeyboardInterrupt in the n-th batch read (inside a step), 'sigint' sends SIGINT
+        inside the n-th optimizer update, 'oom' makes the first n batch reads raise a CUDA out-of-memory
+        error ('none': no fault)."""
+        script = os.path.join(self.tmp, "patched_run.py")
+        with open(script, "w", encoding="utf-8") as f:
+            f.write(PATCHED_RUN)
+        return run([script, HERE, mode, str(n)] + args)
+
+    def resume_args(self, name):
+        return ["--name", name, "--out-dir", self.runs, "--log-file", os.path.join(self.runs, "log.txt"),
+                "--device", "cpu", "--resume", "--eval-every", "8", "--eval-tokens", "2048", "--sample-tokens", "8",
+                "--no-probes"]
+
+    def test_interrupted_step_resumes_exactly(self):
+        """Ctrl+C inside a step (grad-accum 2, between evaluations) rewinds the sampler, dropout RNG and loss
+        sums; Ctrl+C inside the optimizer update is held until the step is complete; both resume exactly.
+        --resume refuses a newer fallback training state and carries on past an unreadable best file."""
+        base = list(self.common[1:])
+        base[base.index("--batch-size") + 1], base[base.index("--grad-accum") + 1] = "4", "2"
+        base += ["--steps", "16", "--no-probes"]
+
+        def at16(text):
+            return re.findall(r"step +16/16 \| train ([\d.]+) \| val ([\d.]+)", text)
+
+        code, out = self.patched_run("none", 0, base + ["--name", "K0"])
+        self.assertEqual(code, 0, out)
+        self.assertTrue(at16(out))
+        # 1. KeyboardInterrupt in the second micro-batch of step 12 (batch read 24): step 11 is saved
+        code, out_k = self.patched_run("interrupt", 24, base + ["--name", "K1"])
+        self.assertEqual(code, 0, out_k)
+        self.assertIn("Paused after step 11 ", out_k)
+        ck = os.path.join(self.runs, "K1.pt")
+        # a fallback training state newer than K1.pt (saved while K1.pt was locked): --resume refuses
+        late = os.path.join(self.runs, "K1.123456.pt")
+        shutil.copy(ck, late)
+        os.utime(late, (os.path.getmtime(ck) + 60,) * 2)
+        code, out_f = self.patched_run("none", 0, self.resume_args("K1"))
+        self.assertNotEqual(code, 0)
+        self.assertIn("is a newer training state", out_f)
+        os.remove(late)
+        # an unreadable best file is noted, not fatal
+        with open(os.path.join(self.runs, "K1_best.pt"), "wb") as f:
+            f.write(b"not a checkpoint")
+        code, out_r = self.patched_run("none", 0, self.resume_args("K1"))
+        self.assertEqual(code, 0, out_r)
+        self.assertIn("could not read", out_r)
+        self.assertEqual(at16(out), at16(out_r), "a run interrupted inside a step must resume exactly")
+        # 2. SIGINT inside the optimizer update of step 10: held, so step 10 completes and is saved as done
+        if not hasattr(signal, "raise_signal"):
+            return
+        code, out_s = self.patched_run("sigint", 10, base + ["--name", "K2"])
+        self.assertEqual(code, 0, out_s)
+        self.assertIn("Paused after step 10 ", out_s)
+        self.assertEqual(torch.load(os.path.join(self.runs, "K2.pt"), map_location="cpu",
+                                    weights_only=True)["step"], 10)
+        code, out_r = self.patched_run("none", 0, self.resume_args("K2"))
+        self.assertEqual(code, 0, out_r)
+        self.assertEqual(at16(out), at16(out_r), "a run interrupted inside the update must resume exactly")
+        self.assertFalse(glob.glob(os.path.join(self.runs, "K*.train.lock")), "the run lock must be released")
+
+    def test_first_step_out_of_memory_escalation(self):
+        """A first-step out-of-memory error switches on the cheapest saving first (loss in pieces, micro-batch
+        down to 4, then activation checkpointing), retries on the same windows, never switches on a saving the
+        command line turned off, and experiments.csv records the settings actually used."""
+        import csv
+        base = list(self.common[1:]) + ["--steps", "8", "--no-probes"]
+
+        def at8(text):
+            return re.findall(r"step +8/8 \| train ([\d.]+) \| val ([\d.]+)", text)
+
+        code, out = self.patched_run("oom", 3, base + ["--name", "O1"])
+        self.assertEqual(code, 0, out)
+        order = [out.find(s) for s in ("retrying with the loss computed", "retrying with micro-batch 4 x 2",
+                                       "retrying with activation checkpointing")]
+        self.assertTrue(all(i >= 0 for i in order) and order == sorted(order), out)
+        with open(os.path.join(self.runs, "experiments.csv"), encoding="utf-8-sig", newline="") as handle:
+            row = [r for r in csv.DictReader(handle) if r["name"] == "O1" and r["event"] == "training run"][-1]
+        self.assertEqual((row["activation_checkpointing"], row["loss_chunk_tokens"], row["micro_batch"]),
+                         ("on", str(tiny_gpt.LOSS_CHUNK_TOKENS), "4"))
+        # one retry trains on the same windows as a run that had the loss in pieces from the start
+        code, out_1 = self.patched_run("oom", 1, base + ["--name", "O2"])
+        self.assertEqual(code, 0, out_1)
+        code, out_2 = self.patched_run("none", 0, base + ["--name", "O3", "--loss-chunk-tokens",
+                                                           str(tiny_gpt.LOSS_CHUNK_TOKENS)])
+        self.assertEqual(code, 0, out_2)
+        self.assertTrue(at8(out_1))
+        self.assertEqual(at8(out_1), at8(out_2), out_1 + out_2)
+        # savings turned off on the command line stay off: nothing is left at micro-batch 1
+        forced = list(base)
+        forced[forced.index("--batch-size") + 1] = "2"
+        code, out_x = self.patched_run("oom", 1000, forced + ["--name", "O4", "--loss-chunk-tokens", "0",
+                                                              "--activation-checkpointing", "off"])
+        self.assertNotEqual(code, 0)
+        self.assertIn("--loss-chunk-tokens 0 and --activation-checkpointing off", out_x)
+        self.assertNotIn("retrying with the loss computed", out_x)
+        # --init-from a training state without --steps: the planned steps come after its step
+        code, out_p = self.patched_run("none", 0, list(self.common[1:]) + [
+            "--name", "O5", "--no-probes", "--stop-after-steps", "1", "--init-from", os.path.join(self.runs, "O3.pt")])
+        self.assertEqual(code, 0, out_p)
+        self.assertIn("the schedule continues at the --init-from checkpoint's step 8", out_p)
+        self.assertEqual(torch.load(os.path.join(self.runs, "O5.pt"), map_location="cpu", weights_only=True)["step"], 9)
+
+    def test_keep_split_from_and_build_lock_refusals(self):
+        """--keep-split-from needs a finished earlier build (manifest.json, a docs.tsv ending in a newline);
+        a live _build.lock in --out refuses the build; a stale one is replaced."""
+        src = os.path.join(self.tmp, "cut_dataset")
+        os.makedirs(src, exist_ok=True)
+        with open(os.path.join(self.ds, "docs.tsv"), "rb") as f:
+            ledger = f.read()
+        with open(os.path.join(src, "docs.tsv"), "wb") as f:
+            f.write(ledger.rstrip(b"\n"))
+        argv = ["--out", os.path.join(self.tmp, "never_built"), "--md-dir", self.corpus.notes, "--keep-split-from", src]
+        with open(os.devnull, "w") as devnull, unittest.mock.patch("sys.stderr", devnull):
+            with self.assertRaises(SystemExit):  # no manifest.json
+                data_prep.prepare(argv)
+            shutil.copy(os.path.join(self.ds, "manifest.json"), src)
+            with self.assertRaises(SystemExit):  # docs.tsv cut short
+                data_prep.prepare(argv)
+        self.assertFalse(os.path.exists(os.path.join(self.tmp, "never_built")))
+        out = os.path.join(self.tmp, "locked_out")
+        os.makedirs(out)
+        lock = os.path.join(out, data_prep.LOCK_NAME)
+        with open(lock, "w", encoding="utf-8") as f:
+            json.dump({"pid": os.getppid(), "started": None}, f)  # a live process that is not this one
+        with redirect_stdout(io.StringIO()), self.assertRaises(SystemExit) as ctx:
+            data_prep.prepare(["--out", out, "--md-dir", self.corpus.notes, "--vocab-size", "600"])
+        self.assertIn("being built by another", str(ctx.exception.code))
+        self.assertTrue(os.path.isfile(lock), "another build's lock is never removed")
+        dead = subprocess.run([PY, "-c", "import os; print(os.getpid())"], capture_output=True, text=True)
+        with open(lock, "w", encoding="utf-8") as f:
+            json.dump({"pid": int(dead.stdout), "started": None}, f)
+        self.assertFalse(data_prep._lock_owner_alive(lock))
+        self.assertEqual(data_prep._acquire_lock(lock), lock)
+        data_prep._release_lock(lock)
+        self.assertFalse(os.path.exists(lock))
+
+    def test_compare_models_leaves_out_documents_the_other_model_trained_on(self):
+        import compare_models
+        layout = {}
+        docs = compare_models.validation_documents(self.ds, 4, 2000, layout)
+        self.assertTrue(docs)
+        fingerprint = data_prep.read_manifest(self.ds)["fingerprint"]
+        with open(os.path.join(self.ds, "docs.tsv"), encoding="utf-8", newline="\n") as f:
+            lines = f.read().split("\n")
+        head = lines[0].split("\t")
+        status, doc_id = head.index("status"), head.index("doc_id")
+        self.assertIn("content_hash", head)
+
+        def other(name, rename):
+            folder = os.path.join(self.tmp, name)
+            os.makedirs(folder, exist_ok=True)
+            rows = [lines[0]]
+            for line in lines[1:]:
+                cells = line.split("\t")
+                if len(cells) == len(head):
+                    if cells[status] == "val":
+                        cells[status] = "train"
+                    if rename:  # moved or renamed files: matched by their text
+                        cells[doc_id] = "moved/" + cells[doc_id]
+                rows.append("\t".join(cells))
+            with open(os.path.join(folder, "docs.tsv"), "w", encoding="utf-8", newline="\n") as f:
+                f.write("\n".join(rows))
+            return folder
+
+        with redirect_stdout(io.StringIO()):
+            for rename in (False, True):
+                folder = other(f"other_ds_{rename}", rename)
+                drop, unchecked, unknown = compare_models.training_overlap(
+                    docs, self.ds, layout, {"A": {"path": self.ds, "fingerprint": fingerprint},
+                                            "B": {"path": folder, "fingerprint": "different"}})
+                self.assertEqual(drop, set(range(len(docs))), f"rename={rename}")
+                self.assertEqual((unchecked, unknown), ({}, {}))
+            drop, unchecked, unknown = compare_models.training_overlap(
+                docs, self.ds, layout, {"B": {"path": os.path.join(self.tmp, "missing_ds"), "fingerprint": "x"},
+                                        "C": {}})
+        self.assertEqual(drop, set())
+        self.assertEqual((list(unchecked), list(unknown)), (["B"], ["C"]))
+
     @unittest.skipUnless(os.path.isfile(os.path.join(HERE, "tiny_gpt_bpe_best.pt")), "no v3 checkpoint here")
     def test_legacy_v3_checkpoint_read_only(self):
         path = os.path.join(HERE, "tiny_gpt_bpe_best.pt")
@@ -1096,6 +1317,440 @@ class TestPipeline(unittest.TestCase):
                                  generator=torch.Generator().manual_seed(0))
         self.assertTrue(text.startswith("Genetic drift"))
         self.assertEqual(before, hashlib.sha256(open(path, "rb").read()).hexdigest())
+
+
+class CharTok:
+    """A tiny stand-in tokenizer for model-level tests."""
+    bos_id, eos_id = 0, -1
+
+    def encode(self, text):
+        return [1 + ord(c) % 40 for c in text]
+
+    def decode(self, ids):
+        return "".join(chr(64 + i % 60) for i in ids)
+
+
+class TestFixes(unittest.TestCase):
+    """Fast unit-level regression tests for the 2026-10 audit fixes (no dataset needed)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.mkdtemp(prefix="tiny_gpt_fixes_")
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def small_model(self, seed=0, vocab=50):
+        torch.manual_seed(seed)
+        cfg = tiny_gpt.ModelConfig(vocab_size=vocab, ctx=16, d_model=32, n_layers=2, n_heads=4, n_kv_heads=2)
+        return tiny_gpt.TinyGPT(cfg).eval()
+
+    # ---------------- tiny_gpt ----------------
+    def test_split_batch_keeps_the_planned_tokens(self):
+        self.assertEqual(tiny_gpt.split_batch(64, 8), (8, 8))
+        self.assertEqual(tiny_gpt.split_batch(61, 32), (30, 2))
+        for largest in (1, 2, 3, 5, 8, 16, 32):
+            for target in range(largest, 400):  # the caller's largest micro-batch never exceeds the target
+                m, a = tiny_gpt.split_batch(target, largest)
+                self.assertTrue((largest + 1) // 2 <= m <= largest, (target, largest, m))
+                self.assertLessEqual(m * a, target, (target, largest))
+                self.assertGreaterEqual(m * a, largest * (target // largest), "never worse than the largest")
+                if target >= 8 * largest:
+                    self.assertGreaterEqual(m * a, 0.95 * target, (target, largest))
+        cfg = tiny_gpt.ModelConfig(vocab_size=100, ctx=16, d_model=32, n_layers=2, n_heads=4, n_kv_heads=2)
+        self.assertEqual(tiny_gpt.choose_memory_plan(cfg, 48, 2 ** 34, False, micro=2)[:2], (2, 1),
+                         "an explicit micro-batch rounds the accumulation down")
+
+    def test_generate_last_position_matches_full_logits(self):
+        model = self.small_model()
+
+        class Full(torch.nn.Module):  # not a TinyGPT: generate() takes the full-logits path
+            def __init__(self, inner):
+                super().__init__()
+                self.inner, self.ctx = inner, inner.ctx
+
+            def forward(self, x):
+                return self.inner(x)
+
+        tok = CharTok()
+        a = tiny_gpt.generate(model, tok, "Genetic drift", 20, torch.device("cpu"), temperature=0)
+        b = tiny_gpt.generate(Full(model), tok, "Genetic drift", 20, torch.device("cpu"), temperature=0)
+        self.assertEqual(a, b)
+        model.train()
+        grad_modes = []
+        hook = model.register_forward_hook(lambda *_: grad_modes.append(torch.is_grad_enabled()))
+        with torch.enable_grad():
+            tiny_gpt.generate(model, tok, "x", 3, torch.device("cpu"), temperature=0)
+        hook.remove()
+        self.assertEqual(grad_modes, [False] * 3, "sampling builds no autograd graph")
+        self.assertTrue(model.training, "generate() restores training mode")
+
+    def test_defer_interrupt_holds_ctrl_c_until_the_update_is_done(self):
+        if not hasattr(signal, "raise_signal") or signal.getsignal(signal.SIGINT) is not signal.default_int_handler:
+            self.skipTest("needs Python's own Ctrl+C handler")
+        held, done = tiny_gpt.DeferInterrupt(), []
+        with held:
+            signal.raise_signal(signal.SIGINT)
+            done.append(1)  # still runs: the interrupt is held
+        self.assertEqual(done, [1])
+        self.assertIs(signal.getsignal(signal.SIGINT), signal.default_int_handler)
+        with self.assertRaises(KeyboardInterrupt):
+            held.deliver()
+        held.deliver()  # delivered once only
+
+    def test_atomic_save_reports_the_fallback_path(self):
+        path = os.path.join(self.tmp, "x.pt")
+        self.assertEqual(tiny_gpt.atomic_save({"a": torch.ones(2)}, path), path)
+        real, calls = os.replace, []
+
+        def locked(src, dst):
+            calls.append(dst)
+            if dst == path:
+                raise PermissionError("in use")
+            return real(src, dst)
+
+        with unittest.mock.patch("os.replace", side_effect=locked), unittest.mock.patch("time.sleep"), \
+                redirect_stdout(io.StringIO()) as buf:
+            written = tiny_gpt.atomic_save({"a": torch.zeros(2)}, path)
+        self.assertNotEqual(written, path)
+        self.assertRegex(os.path.basename(written), r"^x\.\d{6}\.pt$")
+        self.assertIn("locked", buf.getvalue())
+        self.assertTrue(torch.equal(torch.load(written, weights_only=True)["a"], torch.zeros(2)))
+        self.assertTrue(torch.equal(torch.load(path, weights_only=True)["a"], torch.ones(2)), "old file intact")
+        self.assertFalse(glob.glob(path + ".tmp-*"), "no temporary file left")
+        os.utime(written, (os.path.getmtime(path) + 60,) * 2)
+        self.assertEqual(tiny_gpt.newer_fallbacks(path), [written])
+
+    def test_train_lock_refuses_a_second_trainer(self):
+        import argparse
+        args = argparse.Namespace(out_dir=os.path.join(self.tmp, "runs_lock"), name="R")
+        lock = tiny_gpt.acquire_run_lock(args)
+        self.assertTrue(os.path.isfile(lock))
+        self.assertEqual(tiny_gpt.acquire_run_lock(args), lock, "a lock left by this process is stale")
+        with open(lock, "w", encoding="utf-8") as f:
+            json.dump({"pid": os.getppid(), "started": None}, f)
+        with self.assertRaises(SystemExit) as ctx:
+            tiny_gpt.acquire_run_lock(args)
+        self.assertIn("being trained by another process", str(ctx.exception.code))
+        os.remove(lock)
+
+    def test_score_probes_template_wraps_after_shuffling(self):
+        model, tok, cpu = self.small_model(), CharTok(), torch.device("cpu")
+        probes = [{"prompt": "Genes are made of long chains", "answer": "DNA", "distractors": ["fat", "salt"],
+                   "category": "genetics", "difficulty": "easy"},
+                  {"prompt": "Cells divide by a process called", "answer": "mitosis", "distractors": ["osmosis"],
+                   "category": "cells", "difficulty": "easy"}]
+        template = "### Question\n{prompt}\n### Answer\n"
+        _, got = tiny_gpt.score_probes(model, tok, probes, cpu, None, floor=True, template=template)
+        wrap = lambda text: [dict(p, prompt=template.format(prompt=text(p))) for p in probes]  # noqa: E731
+        _, plain = tiny_gpt.score_probes(model, tok, wrap(lambda p: p["prompt"]), cpu, None, floor=False)
+        self.assertEqual([r["prompt"] for r in got], [p["prompt"] for p in probes], "results keep the prompt")
+        for a, b in zip(got, plain):
+            self.assertAlmostEqual(a["correct_score"], b["correct_score"], places=5)
+        floors = [0.0] * len(probes)
+        for v in range(1, tiny_gpt.FLOOR_SHUFFLES + 1):  # only the question's words shuffled, template intact
+            _, rows = tiny_gpt.score_probes(model, tok, wrap(lambda p: tiny_gpt.shuffled_prompt(p["prompt"], v)),
+                                            cpu, None, floor=False)
+            for i, r in enumerate(rows):
+                floors[i] += r["correct"] / tiny_gpt.FLOOR_SHUFFLES
+        for r, f in zip(got, floors):
+            self.assertAlmostEqual(r["floor_correct"], f)
+
+    # ---------------- data_prep ----------------
+    def test_keyword_prefilter_with_self_overlapping_phrases(self):
+        import pyarrow as pa
+        import pyarrow.compute as pc
+        kw = data_prep.KeywordFilter(["Gallus gallus", "Johnson & Johnson", "Loa loa", "genetic*"], [],
+                                     min_hits=1, min_distinct=1)
+
+        def re2(text):
+            return sum(int(pc.count_substring_regex(pa.array([text]), pattern=p, ignore_case=True)[0].as_py())
+                       for p in kw.include_patterns)
+
+        for text, exact in (("Gallus gallus gallus is the red junglefowl.", None),
+                            ("gallus " * 5, None), ("Johnson & Johnson makes genetic tests.", None),
+                            ("Loa loa loa loa", None),
+                            ("Boris Johnson spoke. Later Johnson spoke again, and Johnson left.", 0)):
+            python = kw.evaluate("", text)[2]
+            self.assertGreaterEqual(re2(text), python, text)
+            if exact is not None:
+                self.assertEqual((re2(text), python), (exact, exact), "stray words of a phrase are not hits")
+
+    def test_shingles_are_identical_across_windows(self):
+        text = (BIO + " " + paragraphs(5, 30) + " Ünïcode wörds ") * 3
+        whole = data_prep.ShingleHasher()
+        small = data_prep.ShingleHasher()
+        small.WINDOW, small.BLOCK = 97, 13
+        self.assertTrue(np.array_equal(whole.word_hashes(text), small.word_hashes(text)))
+        self.assertTrue(np.array_equal(whole.shingles(text, 5), small.shingles(text, 5)))
+
+    def test_text_cleaning_and_file_listing(self):
+        import collections
+        stats = collections.Counter()
+        self.assertEqual(data_prep.clean_text("a\u2581b \u2581c", stats), "a_b _c")
+        self.assertEqual((stats["u2581_replaced_docs"], stats["u2581_replaced_chars"]), (1, 2))
+        self.assertEqual(data_prep._SURROGATE_RE.sub("\ufffd", "x\ud83dy"), "x\ufffdy")
+        folder = os.path.join(self.tmp, "Books [2024]")
+        os.makedirs(os.path.join(folder, "sub"))
+        for name in ("Notes.MD", "a.md", "skip.md", os.path.join("sub", "b.md"), "x.pdf", ".hidden.md"):
+            open(os.path.join(folder, name), "w").close()
+        flat = [os.path.basename(p) for p in data_prep.list_text_files(folder, ["*.md"])]
+        self.assertEqual(sorted(flat), ["Notes.MD", "a.md", "skip.md"])
+        deep = data_prep.list_text_files(folder, ["*.md"], recursive=True)
+        self.assertEqual(len(deep), 4)
+        kept = [p for p in deep if not data_prep._excluded(p, os.path.relpath(p, folder), ["skip.md"])]
+        self.assertEqual(len(kept), 3)
+        self.assertEqual(data_prep.parse_tokenizer_weights("MD=3", ["md", "wiki"]), {"md": 3.0})
+        for bad in ("md=x", "books=3", "=2"):
+            with self.assertRaises(ValueError):
+                data_prep.parse_tokenizer_weights(bad, ["md", "wiki"])
+        self.assertEqual(data_prep._split_key("md", "a\\b\tc.md"), data_prep._split_key("md", "a/b c.md"))
+        root = os.path.join(self.tmp, "root")
+        os.makedirs(os.path.join(root, "lecture notes"))
+        os.makedirs(os.path.join(root, "books"))
+        found, skipped = data_prep.text_root_folders(root)
+        self.assertEqual([n for n, _ in found], ["books"])
+        self.assertEqual([n for n, _ in skipped], ["lecture notes"])
+
+    # ---------------- converter ----------------
+    def test_converter_text_helpers(self):
+        import convert_to_markdown as conv
+        greek = "Heritability h² of αβγ traits\n"
+        cases = {"bom16.txt": b"\xff\xfe" + greek.encode("utf-16-le"), "le16.txt": greek.encode("utf-16-le"),
+                 "stray.txt": greek.encode("utf-8") + b"bad \x96 byte\n"}
+        for name, raw in cases.items():
+            path = os.path.join(self.tmp, name)
+            with open(path, "wb") as f:
+                f.write(raw)
+            text = conv.read_text(path)
+            self.assertTrue(text.startswith(greek.rstrip("\n")), (name, text[:40]))
+        self.assertEqual(conv.read_text(os.path.join(self.tmp, "stray.txt")).count("\ufffd"), 1)
+        md = ("Intro<br>text\n| a<br>b | c |\n<!-- Start of picture text -->tick 1 2 3<!-- End of picture text -->\n"
+              "![](C:/x/paper (1)_images/paper (1).pdf-0001-03.png)\nEnd")
+        clean = conv._clean_pdf_markdown(md)
+        self.assertIn("Intro\ntext", clean)
+        self.assertIn("| a b | c |", clean)
+        self.assertNotIn("tick", clean)
+        self.assertNotIn("![", clean)
+        self.assertNotIn("png", clean)
+        linked = conv._clean_pdf_markdown(md, image_dir=os.path.join(self.tmp, "paper (1)_images"))
+        self.assertIn("![](<paper (1)_images/paper (1).pdf-0001-03.png>)", linked)
+        self.assertEqual(conv.sniff_delimiter("trait;h2;se"), ";")
+        self.assertEqual(conv.sniff_delimiter("a,b;c"), ",")
+        self.assertEqual(conv.sniff_delimiter("a\tb,c"), "\t")
+        self.assertEqual(conv._xlsx_number("45366", (True, False), False), "2024-03-15")
+        self.assertEqual(conv._xlsx_number("0.30000000000000004", None, False), "0.3")
+        self.assertEqual(conv._neglog10("0"), math.inf)
+        self.assertAlmostEqual(conv._neglog10("1e-400"), 400)
+        table = conv.md_table([[f"c{i}" for i in range(100)], [str(i) for i in range(100)]], 10, max_cols=30)
+        self.assertEqual(table.splitlines()[0].count("|"), 31)
+        self.assertIn("70 more columns not shown (limit --max-cols 30)", table)
+        import gzip
+        import argparse
+        vcf = os.path.join(self.tmp, "ieu-a-2.vcf.gz")
+        with gzip.open(vcf, "wt") as f:
+            f.write("##fileformat=VCFv4.2\n#CHROM\tPOS\tID\n1\t100\trs1\n")
+        with self.assertRaises(RuntimeError) as ctx:
+            conv.convert_table_or_text(vcf, argparse.Namespace(no_gwas=False, max_rows=200, max_cols=30))
+        self.assertIn("data, not text", str(ctx.exception))
+        semi = os.path.join(self.tmp, "eu.csv")
+        with open(semi, "w", encoding="utf-8") as f:
+            f.write("trait;h2;se\nheight;0,8;0,02\n")
+        text, kind = conv.convert_table_or_text(semi, argparse.Namespace(no_gwas=False, max_rows=200, max_cols=30))
+        self.assertEqual(kind, "table")
+        self.assertIn("| height | 0,8 | 0,02 |", text)
+
+    def test_page_furniture_keeps_acronym_headings(self):
+        import convert_to_markdown as conv
+        romans = ["i", "ii", "iii", "iv", "v", "vi", "vii", "viii"]
+        pages = [f"## MCMC\nBody text {k} about linkage and sampling.\n{r}" for k, r in enumerate(romans)]
+        pages[3] = pages[3].replace("## MCMC", "## LD")
+        kept = "\n".join(conv.strip_page_furniture(pages))
+        self.assertEqual(kept.count("## MCMC"), 7)
+        self.assertIn("## LD", kept)
+        self.assertFalse(re.search(r"^(i|ii|iii|iv|v|vi|vii|viii)$", kept, re.M), "stepping roman numerals go")
+        two = conv.strip_page_furniture(["Page 1 of 2\nFirst page text here.", "Page 2 of 2\nSecond page text."])
+        self.assertNotIn("Page", "\n".join(two))
+
+    # ---------------- downloaders ----------------
+    def test_back_matter_headings(self):
+        import download_pmc
+        drop = ("Funding and competing interests", "Author Contributions Statement", "Acknowledgements",
+                "5. References", "Funding/Support", "Role of the Funder/Sponsor", "Additional file 1",
+                "Supplementary Material for Section 3", "Data availability statement")
+        keep = ("Contributions of rare variants", "Correspondence analysis", "Ethics of germline editing",
+                "Consent and data sharing", "Supplementary data analysis", "Contributions",
+                "Support vector machines", "Declaration of Helsinki", "2. Methods")
+        for heading in drop:
+            self.assertTrue(download_pmc.SKIP_SECTION_RE.search(heading), heading)
+        for heading in keep:
+            self.assertFalse(download_pmc.SKIP_SECTION_RE.search(heading), heading)
+
+    def test_youtube_error_status(self):
+        import youtube_transcripts as yt
+        self.assertEqual(yt.error_status("Video unavailable. This content isn't available, try again later. The "
+                                         "current session has been rate-limited by YouTube"), "blocked")
+        self.assertEqual(yt.error_status("ERROR: Requested format is not available"), "error")
+        self.assertEqual(yt.error_status("Premieres in 3 hours"), "upcoming")
+        self.assertEqual(yt.error_status("Private video. Sign in if you've been granted access"), "unavailable")
+        self.assertEqual(yt.error_status("Sign in to confirm your age"), "unavailable")
+        report = os.path.join(self.tmp, "report.tsv")
+        with open(report, "w", encoding="utf-8") as f:
+            f.write("video_id\tstatus\tsource\n"
+                    "a\tunavailable\tRequested format is not available\n"
+                    "b\tunavailable\tPrivate video\n"
+                    "c\tunavailable\tPremieres in 2 days\n")
+        self.assertEqual(yt.read_status(report), {"a": "error", "b": "unavailable", "c": "error"})
+
+    def test_arxiv_cache_and_main_file(self):
+        import gzip
+        import download_arxiv as ax
+        cache = os.path.join(self.tmp, "arxiv_cache")
+        os.makedirs(cache)
+        path = os.path.join(cache, ax._set_file("q-bio") + ".jsonl.gz")
+        rec = lambda pid, title: json.dumps({"id": pid, "title": title}) + "\n"  # noqa: E731
+        with gzip.open(path, "wt", encoding="utf-8") as f:
+            f.write(rec("1", "v1") + rec("2", "only"))
+        with gzip.open(path, "at", encoding="utf-8") as f:  # an --update appends the revised paper
+            f.write(rec("1", "v2"))
+        self.assertEqual([(r["id"], r["title"]) for r in ax.read_cache(cache, ["q-bio"])], [("2", "only"), ("1", "v2")])
+        with open(path, "ab") as f:  # a gzip member cut off by a crash
+            f.write(gzip.compress(rec("3", "lost").encode() * 50)[:40])
+        with redirect_stdout(io.StringIO()) as buf:
+            got = sorted(r["id"] for r in ax.read_cache(cache, ["q-bio"]))
+        self.assertEqual(got[:2], ["1", "2"], "the records before the damage are used")
+        self.assertIn("damaged", buf.getvalue())
+        section = "\\documentclass[../main.tex]{subfiles}\n\\begin{document}\n" + "Long section text. " * 500 + \
+                  "\n\\end{document}"
+        files = {"main.tex": "\\documentclass{article}\n\\begin{document}\n\\subfile{sections/intro}\n\\end{document}",
+                 "sections/intro.tex": section,
+                 "fig.tex": "\\documentclass{standalone}\n\\begin{document}x\\end{document}",
+                 "notes.tex": "% \\begin{document}\n" + "notes " * 2000}
+        self.assertEqual(ax.main_tex(files), "main.tex")
+
+    # ---------------- viewer ----------------
+    def test_viewer_text_helpers(self):
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        import view_pt
+        fig = plt.figure()
+        for piece in ("$$", "$}$", "$^$", "$x$"):
+            label = view_pt.label_text(piece)
+            fig.text(0.1, 0.5, label)
+            fig.canvas.draw()  # mathtext would raise on these
+        plt.close(fig)
+        home = os.path.expanduser("~")
+        for variant in (home, home.replace("\\", "/"), home.upper(), home.replace("\\", "\\\\")):
+            self.assertEqual(view_pt.scrub(f"cannot open {variant}{os.sep}x.pt"), f"cannot open ~{os.sep}x.pt")
+        out = os.path.join(self.tmp, "dash.png")
+
+        def write(p):
+            with open(p, "wb") as f:
+                f.write(b"png")
+
+        self.assertEqual(view_pt.save_replacing(write, out), out)
+        real = os.replace
+
+        def locked(src, dst):
+            if dst == out:
+                raise PermissionError("in use")
+            return real(src, dst)
+
+        with unittest.mock.patch("os.replace", side_effect=locked), unittest.mock.patch("time.sleep"), \
+                redirect_stdout(io.StringIO()):
+            fallback = view_pt.save_replacing(write, out)
+        self.assertNotEqual(fallback, out)
+        self.assertTrue(os.path.isfile(fallback))
+        self.assertFalse(glob.glob(os.path.join(self.tmp, "dash.tmp-*")))
+
+    def test_viewer_history_from_log_names_the_run(self):
+        import view_pt
+        bar = "=" * 30
+        log = os.path.join(self.tmp, "view_log.txt")
+        with open(log, "w", encoding="utf-8") as f:
+            f.write(f"\n{bar}\nRUN 1\ncheckpoints: C:\\x\\A.pt (best C:\\x\\A_best.pt)\n"
+                    "step     8/24 | train 5.1000 | val 5.2000 @8 | lr 1.0e-03\n"
+                    f"\n{bar}\nRUN 2\ncheckpoints: C:\\x\\B.pt (best C:\\x\\B_best.pt)\n"
+                    "step     8/24 | train 4.0000 | val 4.1000 @8 | lr 1.0e-03\n")
+        hist, label = view_pt.history_from_log(log, "/home/u/x/A_best.pt", None, "tinygpt")
+        self.assertEqual([h["val_loss"] for h in hist], [5.2])
+        self.assertIn("A", label)
+        hist, label = view_pt.history_from_log(log, "C.pt", None, "tinygpt")
+        self.assertEqual(hist, [])
+        self.assertIn("names C.pt", label)
+        hist, _ = view_pt.history_from_log(log, "C.pt", None, None)
+        self.assertEqual([h["val_loss"] for h in hist], [4.1], "an unknown family falls back to the last run")
+        self.assertEqual(view_pt.history_from_log(log, "A.pt", None, "legacy-v3")[0], [])
+
+    def test_viewer_statistics_in_pieces(self):
+        import view_pt
+        model = self.small_model(vocab=60)
+        windows = torch.randint(0, 60, (5, 17), generator=torch.Generator().manual_seed(0))
+        with torch.no_grad():
+            big = view_pt.forward_stats(model, windows, 60, torch.device("cpu"))
+            small = view_pt.forward_stats(model, windows, 60, torch.device("cpu"), token_budget=16, rows=5)
+        self.assertAlmostEqual(big["loss"], small["loss"], places=6)
+        self.assertEqual(big["calibration"]["count"], small["calibration"]["count"])
+        self.assertLess(np.abs(big["mean_prob"] - small["mean_prob"]).max(), 1e-6)
+        with torch.no_grad():
+            ref = -torch.log_softmax(model(windows[:, :-1]).float(), -1).gather(
+                -1, windows[:, 1:, None]).mean().item()
+        self.assertAlmostEqual(big["loss"], ref, places=5)
+        a = view_pt.attention_entropy(model, windows[0], torch.device("cpu"))
+        b = view_pt.attention_entropy(model, windows[0], torch.device("cpu"), budget=1)
+        self.assertLess(np.abs(a - b).max(), 1e-6)
+
+    # ---------------- post-training and orchestration ----------------
+    def test_finetune_length_grouping_and_micro_batch_check(self):
+        import random
+        import finetune
+        items = [(list(range(1, 2 + (i * 7) % 23)), None) for i in range(53)]
+        batches = finetune.length_grouped_batches(items, 4, random.Random(0), group=3)
+        self.assertEqual(len(batches), math.ceil(53 / 4))
+        used = sorted(id(item) for b in batches for item in b)
+        self.assertEqual(used, sorted(id(item) for item in items), "every example used exactly once")
+        data = os.path.join(self.tmp, "sft.jsonl")
+        open(data, "w").close()
+        log = os.path.join(self.tmp, "ft_log.txt")
+        for bad in ("0", "-1", "9"):
+            with open(os.devnull, "w") as devnull, unittest.mock.patch("sys.stderr", devnull), \
+                    redirect_stdout(io.StringIO()), self.assertRaises(SystemExit) as ctx:
+                finetune.main(["sft", "--base", data, "--data", data, "--name", "x", "--batch", "8",
+                               "--micro-batch", bad, "--log-file", log, "--device", "cpu"])
+            self.assertEqual(ctx.exception.code, 2, bad)
+
+    def test_run_pipeline_guards(self):
+        import run_pipeline
+        here = os.path.join(self.tmp, "pipe")
+        dataset = os.path.join(here, "datasets", "bio_all")
+        os.makedirs(dataset)
+        open(os.path.join(dataset, "manifest.json"), "w").close()
+        open(os.path.join(here, "R_best.pt"), "w").close()
+        calls = []
+        with unittest.mock.patch.multiple(run_pipeline, HERE=here, DATASET=dataset, SUPERBPE=True,
+                                          DATA=os.path.join(here, "no_data")), \
+                unittest.mock.patch.object(run_pipeline, "run", side_effect=lambda cmd: calls.append(cmd) or 0), \
+                unittest.mock.patch.object(run_pipeline, "gpu_busy", return_value=False), \
+                redirect_stdout(io.StringIO()):
+            self.assertEqual(run_pipeline.step_continue(1, "R", os.path.join(here, "new_ds")), 0)
+        build = calls[0]
+        self.assertIn("--tokenizer-from", build)
+        self.assertNotIn("--superbpe", build)
+        self.assertNotIn("--tokenizer-weights", build, "no books/articles folders: no weights")
+        with unittest.mock.patch.multiple(run_pipeline, HERE=here, DATASET=dataset), \
+                unittest.mock.patch.object(run_pipeline, "run", side_effect=AssertionError("must not run")), \
+                unittest.mock.patch.object(run_pipeline, "gpu_busy", return_value=True), \
+                redirect_stdout(io.StringIO()):
+            self.assertEqual(run_pipeline.step_plan(1, "R"), 1)
+            with unittest.mock.patch.object(sys, "argv", ["run_pipeline.py", "resume", "--name", "R"]):
+                self.assertEqual(run_pipeline.main(), 1)
+        import calibrate_probes
+        for text, busy in (("3000, 0\n", True), ("100, 25\n", True), ("100, 5\n", False)):
+            fake = subprocess.CompletedProcess([], 0, stdout=text)
+            with unittest.mock.patch.object(calibrate_probes.subprocess, "run", return_value=fake):
+                self.assertEqual(calibrate_probes.gpu_busy(), busy, text)
 
 
 if __name__ == "__main__":

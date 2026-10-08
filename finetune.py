@@ -25,12 +25,15 @@ Examples
     python finetune.py ask --checkpoint tinyGPT_sft.pt "What does genetic drift do to small populations?"
 
 All printed output is appended to log.txt, like tiny_gpt.py. Use --device cpu
-while another training run is using the GPU.
+while another training run is using the GPU (the GPU is refused then; --force
+overrides). Batches hold examples of similar length, so little compute goes into
+padding (--no-length-grouping: plain shuffled batches).
 """
 
 import argparse
 import copy
 import dataclasses
+import gc
 import json
 import math
 import os
@@ -114,9 +117,57 @@ def is_oom(exc):
     return isinstance(exc, RuntimeError) and "out of memory" in str(exc).lower()
 
 
+def free_memory(device):
+    """Hand freed blocks back after an out-of-memory error (call it outside the
+    `except` block: the error's traceback still holds the failed step's tensors)."""
+    gc.collect()
+    if device.type == "cuda":
+        torch.cuda.empty_cache()
+    elif device.type == "mps":
+        torch.mps.empty_cache()
+
+
+def item_length(item):
+    """Padded width an SFT example or DPO pair needs (the longer answer for DPO)."""
+    return len(item[0]) if isinstance(item[0][0], int) else max(len(item[0][0]), len(item[1][0]))
+
+
+def length_grouped_batches(items, batch, rng, group=50):
+    """Batches of similar length, so little compute goes into padding (as Hugging
+    Face's group_by_length): shuffle, sort each mega-batch of `group` x `batch`
+    examples by length, cut it into batches, then shuffle the batch order. There
+    are as many batches as with plain slicing."""
+    items = list(items)
+    rng.shuffle(items)
+    out = []
+    for i in range(0, len(items), group * batch):
+        mega = sorted(items[i:i + group * batch], key=item_length)
+        out += pieces(mega, batch)
+    rng.shuffle(out)
+    return out
+
+
+def gpu_busy():
+    try:
+        import run_pipeline
+        return run_pipeline.gpu_busy()
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def check_gpu_free(device, args):
+    if device.type == "cuda" and not args.force and gpu_busy():
+        raise SystemExit("The GPU is busy (another training run?). Two GPU jobs at once can crash the graphics "
+                         "driver; use --device cpu, wait for the other job, or pass --force.")
+
+
 def save(model, tok, cfg, base_obj, path, info, history):
     """The fine-tune curve lives in finetune['history']; metrics stay the base
-    model's pre-training history, so dashboards label every curve correctly."""
+    model's pre-training history, so dashboards label every curve correctly.
+    The base model's last evaluation (validation loss, fact benchmark,
+    calibration) is kept as base_last_eval, not last_eval: it was measured on
+    the base weights, so the viewer scores this checkpoint itself. Returns the
+    path written (atomic_save falls back to another name if the file is locked)."""
     base_metrics = base_obj.get("metrics") or {}
     payload = {
         "format": tiny_gpt.CHECKPOINT_FORMAT, "format_version": tiny_gpt.FORMAT_VERSION,
@@ -126,16 +177,21 @@ def save(model, tok, cfg, base_obj, path, info, history):
         "step": base_obj.get("step"), "train_config": base_obj.get("train_config"),
         "finetune": {**info, "history": history},
         "metrics": {"history": base_metrics.get("history", []), "best_val": base_metrics.get("best_val"),
-                    "best_step": base_metrics.get("best_step"), "last_eval": base_metrics.get("last_eval")},
+                    "best_step": base_metrics.get("best_step"), "last_eval": None,
+                    "base_last_eval": base_metrics.get("last_eval") or base_metrics.get("base_last_eval")},
     }
-    tiny_gpt.atomic_save(payload, path)
+    return tiny_gpt.atomic_save(payload, path)
 
 
 def train(args):
     device = tiny_gpt.select_device(args.device)
+    check_gpu_free(device, args)
     amp_dtype, amp_name, need_scaler = tiny_gpt.choose_precision(device, args.precision)
     scaler = torch.amp.GradScaler(device.type) if need_scaler else None  # fp16 needs loss scaling
     model, tok, cfg, base_obj = tiny_gpt.load_for_inference(args.base, device, args.trust_checkpoint)
+    # keep only what save() needs: the raw weights (and any optimizer state) would sit in RAM until the end
+    base_obj = {k: base_obj.get(k) for k in ("dataset", "step", "train_config", "metrics")}
+    gc.collect()
     model.set_attention_impl(tiny_gpt.choose_attention(device, cfg, amp_dtype, "auto")[0])
     out_path = os.path.join(args.out_dir, args.name + ".pt")
     if os.path.exists(out_path) and not args.overwrite:
@@ -183,6 +239,7 @@ def train(args):
                 i = 0
                 while i < len(items):
                     chunk = items[i:i + mem["micro"]]
+                    oom = False
                     try:
                         xc, yc = batch_tensors([c for c, *_ in chunk], device)
                         xr, yr = batch_tensors([r for _, r, *_ in chunk], device)
@@ -191,15 +248,17 @@ def train(args):
                     except RuntimeError as exc:
                         if not is_oom(exc) or mem["micro"] == 1:
                             raise
+                        oom = True
+                    if oom:  # outside the except block, so the failed piece's tensors can be freed
+                        xc = yc = xr = yr = None
                         mem["micro"] //= 2
-                        if device.type == "cuda":
-                            torch.cuda.empty_cache()
+                        free_memory(device)
                         continue
                     items[i:i + len(chunk)] = [(c, r, a, b) for (c, r, *_), a, b in zip(chunk, rc, rr)]
                     i += len(chunk)
         del reference
-        if device.type == "cuda":
-            torch.cuda.empty_cache()
+        free_memory(device)
+    val_items.sort(key=item_length)  # held-out batches of similar length: less padding, same averages
 
     def step_loss(items):
         """(mean loss, sum of per-unit losses, number of units, extra sums); units are answer tokens
@@ -228,10 +287,11 @@ def train(args):
         mem['micro'] examples (each weighted by its share of the batch's units); on
         out-of-memory the micro-batch is halved, then activation checkpointing is
         switched on, and the batch starts again. Returns the batch's mean loss."""
+        items = sorted(items, key=item_length)  # pieces of similar length: less padding, the same gradient
         while True:
             opt.zero_grad(set_to_none=True)
             total_units = units_of(items)
-            loss_sum = 0.0
+            loss_sum, loss = 0.0, None
             try:
                 for part in pieces(items, mem["micro"]):
                     loss, part_sum, n, _ = step_loss(part)
@@ -245,15 +305,17 @@ def train(args):
             except RuntimeError as exc:
                 if not is_oom(exc) or (mem["micro"] == 1 and model.grad_checkpoint):
                     raise
-                opt.zero_grad(set_to_none=True)
-                if device.type == "cuda":
-                    torch.cuda.empty_cache()
-                if mem["micro"] > 1:
-                    mem["micro"] //= 2
-                    print(f"out of memory: micro-batch {mem['micro']} (gradients accumulated to {args.batch})")
-                else:
-                    model.grad_checkpoint = True
-                    print("out of memory at micro-batch 1: activation checkpointing on")
+            # out of memory: drop the failed piece's graph (held by `loss` and, inside the except block, by the
+            # error's traceback) and its gradients before the retry, or the retry runs out of memory too
+            loss = None
+            opt.zero_grad(set_to_none=True)
+            free_memory(device)
+            if mem["micro"] > 1:
+                mem["micro"] //= 2
+                print(f"out of memory: micro-batch {mem['micro']} (gradients accumulated to {args.batch})")
+            else:
+                model.grad_checkpoint = True
+                print("out of memory at micro-batch 1: activation checkpointing on")
 
     def evaluate_items(items):
         model.eval()
@@ -272,13 +334,18 @@ def train(args):
     val_loss, val_info = evaluate_items(val_items)
     print(f"epoch 0 | held-out loss {val_loss:.4f}" + "".join(f" | {k} {v:.3f}" for k, v in val_info.items()))
     for epoch in range(1, args.epochs + 1):
-        random.Random(args.seed + epoch).shuffle(train_items)
+        rng = random.Random(args.seed + epoch)
+        if args.no_length_grouping:
+            rng.shuffle(train_items)
+            batches = pieces(train_items, args.batch)
+        else:
+            batches = length_grouped_batches(train_items, args.batch, rng)
         running = []
-        for i in range(0, len(train_items), args.batch):
+        for batch in batches:
             step += 1
             for group in opt.param_groups:
                 group["lr"] = schedule.lr_at(step)
-            loss = train_batch(train_items[i:i + args.batch])
+            loss = train_batch(batch)
             if scaler is not None:
                 scaler.unscale_(opt)
                 torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
@@ -299,12 +366,13 @@ def train(args):
     info = {"method": args.mode, "base": os.path.abspath(args.base), "data": os.path.abspath(args.data),
             "examples": len(rows), "epochs": args.epochs, "lr": args.lr, "template": TEMPLATE,
             **({"beta": args.beta} if args.mode == "dpo" else {})}
-    save(model, tok, cfg, base_obj, out_path, info, history)
-    print(f"saved {out_path}")
+    saved = save(model, tok, cfg, base_obj, out_path, info, history)
+    print(f"saved {saved}")
     tiny_gpt.record_experiment(args.out_dir, {
-        "event": f"fine-tune ({args.mode})", "name": args.name, "status": "completed", "checkpoint": out_path,
+        "event": f"fine-tune ({args.mode})", "name": args.name, "status": "completed", "checkpoint": saved,
         "notes": f"base {os.path.basename(args.base)}; {len(rows)} examples; held-out loss {val_loss:.4f}"
                  + "".join(f"; {k} {v:.3f}" for k, v in val_info.items())})
+    return saved
 
 
 def answer_question(model, tok, prompt, device, amp_dtype, max_new_tokens, seed=0):
@@ -315,7 +383,8 @@ def answer_question(model, tok, prompt, device, amp_dtype, max_new_tokens, seed=
 
 def ask(args):
     device = tiny_gpt.select_device(args.device)
-    amp_dtype, _, _ = tiny_gpt.choose_precision(device, args.precision)
+    check_gpu_free(device, args)
+    amp_dtype, _, _ = tiny_gpt.choose_precision(device, args.precision, training=False)  # generation only
     model, tok, cfg, _ = tiny_gpt.load_for_inference(args.checkpoint, device, args.trust_checkpoint)
     print(answer_question(model, tok, args.question, device, amp_dtype, args.max_new_tokens, args.seed))
 
@@ -346,6 +415,9 @@ def main(argv=None):
         s.add_argument("--weight-decay", type=float, default=0.0)
         s.add_argument("--val-fraction", type=float, default=0.1)
         s.add_argument("--max-new-tokens", type=int, default=80)
+        s.add_argument("--no-length-grouping", action="store_true",
+                       help="plain shuffled batches (default: batches of examples of similar length, so less "
+                            "compute goes into padding)")
         s.add_argument("--overwrite", action="store_true")
     a = sub.add_parser("ask")
     a.add_argument("question")
@@ -356,6 +428,7 @@ def main(argv=None):
         s.add_argument("--precision", choices=("auto", "bf16", "fp16", "fp32"), default="auto")
         s.add_argument("--seed", type=int, default=0)
         s.add_argument("--trust-checkpoint", action="store_true")
+        s.add_argument("--force", action="store_true", help="use the GPU even if another job seems to be using it")
         s.add_argument("--log-file", default=log)
     try:
         args = p.parse_args(argv)
@@ -367,9 +440,11 @@ def main(argv=None):
         for path in (args.base, args.data):
             if not os.path.exists(path):
                 p.error(f"not found: {path}")
-        if not (1 <= args.epochs <= 100 and 1 <= args.batch <= 1024 and 0 < args.lr < 1 and 0 < args.val_fraction < 0.5):
-            p.error("check --epochs (1-100), --batch (1-1024), --lr (0-1) and --val-fraction (0-0.5)")
-        train(args)
+        if not (1 <= args.epochs <= 100 and 1 <= args.batch <= 1024 and 0 < args.lr < 1 and 0 < args.val_fraction < 0.5
+                and (args.micro_batch is None or 1 <= args.micro_batch <= args.batch)):
+            p.error("check --epochs (1-100), --batch (1-1024), --micro-batch (1 to --batch), --lr (0-1) and "
+                    "--val-fraction (0-0.5)")
+        return train(args)
     except SystemExit as exc:
         if exc.code not in (0, None):
             print(f"ERROR: {exc.code}" if isinstance(exc.code, str) else f"exit code {exc.code}", file=sys.stderr)

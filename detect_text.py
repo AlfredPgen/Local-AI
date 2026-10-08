@@ -104,6 +104,8 @@ def main():
         p.error("--watermark-gamma must be between 0 and 1")
     device = tiny_gpt.select_device(args.device)
     model, tok, cfg, obj = tiny_gpt.load_for_inference(args.checkpoint, device, args.trust_checkpoint)
+    ds = (obj.get("dataset") or {}).get("path") if isinstance(obj.get("dataset"), dict) else None
+    del obj  # only the dataset path is needed; the raw weights would double the memory used
 
     def report(label, text):
         prefix = [tok.bos_id] if tok.bos_id >= 0 else []
@@ -139,7 +141,6 @@ def main():
         for prompt in ("Genetic drift is", "The heritability of", "In statistics,", "Proteins are", "A GWAS"):
             report(f"  sample '{prompt}'", tiny_gpt.generate(model, tok, prompt, 150, device, None, 0.8, 50, 0.95,
                                                              gen, wm))
-        ds = (obj.get("dataset") or {}).get("path")
         if ds and os.path.isdir(ds):
             import compare_models
             print("... and validation text written by people (should score near 0):")

@@ -21,11 +21,12 @@ training run is going, give every other script `--device cpu`.
 Once the text is in `ai_training_data` (step 1 below), three commands do the rest:
 
 ```
-python run_pipeline.py build               # build the dataset datasets\bio_v4 (~2 hours)
+python run_pipeline.py build               # build the dataset datasets\bio_all (~2 hours)
 python run_pipeline.py plan --hours 48     # show which model fits in 48 hours (trains nothing)
 python run_pipeline.py train --hours 48    # train it
 python run_pipeline.py resume              # continue after Ctrl+C or a shutdown
 python run_pipeline.py continue --hours 24 # after adding more text: train further from the first model
+python run_pipeline.py posttrain           # teach the trained model to answer questions (SFT, DPO, evaluation)
 ```
 
 - `--hours` is how long you are willing to wait. The planner picks the largest model that can read about 20
@@ -33,6 +34,9 @@ python run_pipeline.py continue --hours 24 # after adding more text: train furth
 - Each command prints the full `data_prep.py` or `tiny_gpt.py` command it runs, so you can see (and copy) the
   options. The settings (data folder, dataset name, run name) are at the top of `run_pipeline.py`.
 - `python run_pipeline.py estimate` shows the expected dataset size first, without building anything.
+- `plan`, `train`, `resume`, `continue` and `posttrain` refuse to start while the GPU is busy (the plan times
+  training steps on the GPU, and a busy GPU may mean the run is still training).
+- `OPTIMIZER = "muon"` at the top of `run_pipeline.py` trains new runs with Muon instead of AdamW (Step 4).
 
 The rest of this file explains the steps and options behind these commands.
 
@@ -42,12 +46,12 @@ The rest of this file explains the steps and options behind these commands.
 
 | Step | What happens | Script | How long |
 |---|---|---|---|
-| 1 | Put text into `$HOME\ai_training_data` | `convert_to_markdown.py`, `download_pmc.py`, `youtube_transcripts.py` | minutes to hours |
+| 1 | Put text into `$HOME\ai_training_data` | `convert_to_markdown.py`, `download_pmc.py`, `download_arxiv.py`, `youtube_transcripts.py` | minutes to days |
 | 2 | (Optional) See how big the dataset will be and which model it supports | `estimate_dataset.py` | ~7 min |
 | 3 | Clean, filter and tokenise everything into a dataset folder | `data_prep.py` | ~2-2.5 h |
 | 4 | Train the model | `tiny_gpt.py` | 12 h to days |
 | 5 | Look at the results | `view_pt.py`, `tiny_gpt.py --benchmark`, `compare_models.py` | minutes |
-| 6 | Use or fine-tune the model | `tiny_gpt.py --generate`, `finetune.py`, `detect_text.py` | minutes |
+| 6 | Use or fine-tune the model | `tiny_gpt.py --generate`, `finetune.py`, `posttrain.py`, `detect_text.py` | minutes to hours |
 
 ---
 
@@ -67,9 +71,18 @@ python convert_to_markdown.py "D:\SomeFolder" --out $HOME\ai_training_data `
 - `--by-type` puts long PDFs in `books`, others in `articles` (and slides, tables, code in their folders).
 - `--types pdf` converts only PDFs from the folder (use `pdf,docx` for more).
 - `--name-prefix` avoids name clashes between collections.
-- Rerunning skips files already converted.
-- `--ocr` also reads scanned PDFs (pages that are only pictures) with Tesseract OCR. It is slow, a few seconds
-  per page, so it is used only for PDFs with (almost) no text layer: under 200 characters per page on average.
+- Rerunning skips files already converted. `conversion_manifest.json` (in `--out`) remembers which input made
+  each output, so a file added later gets a name of its own instead of being skipped, and nothing is converted twice.
+- `--ocr` also reads scanned pages (pages that are only pictures) with Tesseract OCR. It is slow, a few seconds
+  per page, so only the scanned pages are read this way: under 200 characters of text and mostly covered by
+  images. The other pages keep their normal conversion. Without `--ocr` the report says, for example, `3 of 120
+  pages look scanned: rerun with --ocr --overwrite`.
+- Each PDF is converted in its own process with a time limit (`--timeout`, default 3600 s), so one damaged PDF
+  costs only that file.
+- `--max-cols 30` (default): CSV, TSV and Excel tables keep their first 30 columns, with a note saying how many
+  were left out.
+- Compressed data files (`.vcf.gz`, `.fa.gz`, `.bam.gz` ...) are refused: they are data, not text. GWAS summary
+  statistics are summarised instead (see the guide).
 
 **Open-access papers from PubMed Central**
 
@@ -78,6 +91,27 @@ python download_pmc.py --out $HOME\ai_training_data\pmc --max-papers 100000
 ```
 
 Already done: 99,664 papers (about 1.25 billion tokens). `--max-papers 200000` would add the next 100,000.
+
+**arXiv papers**
+
+```
+python download_arxiv.py --out $HOME\ai_training_data\arxiv              # first run; a rerun continues
+python download_arxiv.py --out $HOME\ai_training_data\arxiv --update     # later: add papers new on arXiv
+```
+
+- Papers are chosen by keywords in the title and abstract: biology first, then statistics, then AI and
+  mathematics. The text comes from the LaTeX source (equations kept); papers without usable source come from
+  their PDF.
+- `--wait 5-60` (default): a random pause of 5 to 60 s before each paper, on top of arXiv's 3 s minimum; about 110
+  papers an hour. `--wait 0` keeps only the 3 s minimum (faster, but "too many requests" answers become more
+  likely). After a "too many requests" answer (429 or 503) every request waits for the time arXiv asks for, or 1,
+  2, 4 ... up to 10 minutes; no paper is skipped because of it.
+- A PDF conversion is stopped after 180 s (`--pdf-seconds`) and the paper is marked `pdf_timeout`. A later run with
+  a larger limit, for example `--pdf-seconds 600`, tries those papers again.
+- `%USERPROFILE%`, `$HOME` and `~` in `--out` work in PowerShell too (also in `download_pmc.py` and
+  `youtube_transcripts.py`).
+- What happened to each paper, with its licence: `ai_training_data\_arxiv_meta\report.tsv`. Stop with Ctrl+C and
+  rerun the same command to continue.
 
 **YouTube lecture transcripts**
 
@@ -91,8 +125,11 @@ python youtube_transcripts.py --channels-file youtube_channels.txt --recheck-off
 ```
 
 Only videos whose transcripts match `keywords.txt` are kept. The `--whisper` run transcribes videos that
-have no usable captions (it uses the GPU if nothing else does). What happened to each video is listed in
-`ai_training_data\_lectures_meta\<channel>_report.tsv` (kept, off topic, queued for Whisper...).
+have no usable captions (it uses the GPU if nothing else does; on the CPU it uses 4 threads, `--whisper-threads`).
+What happened to each video is listed in `ai_training_data\_lectures_meta\<channel>_report.tsv` (kept, off topic,
+queued for Whisper...). Videos that failed for a passing reason (a rate limit, "format not available"), and
+premieres or live streams that have not aired yet, are tried again on the next run. If YouTube says the session
+is rate-limited, the run stops: wait a few hours.
 
 ---
 
@@ -111,21 +148,21 @@ with the exact training command for each. It builds nothing.
 
 ```
 $D = "$HOME\ai_training_data"
-python data_prep.py --out datasets\bio_v4 --text-root $D `
-    --wiki-dir $D\wikipedia --wiki-max-docs 200000 `
+python data_prep.py --out datasets\bio_all --text-root $D `
+    --wiki-dir $D\wikipedia --wiki-max-docs 0 `
     --parquet "$D\web\fineweb-edu\sample\10BT\*.parquet" --parquet-name fineweb --min-score 3 `
     --jsonl "$D\web\pes2o\data\v2\*.json.gz" --jsonl-name pes2o `
     --include-keywords keywords.txt --keyword-min-distinct 3 `
-    --tokenizer-weights books=3,articles=3 --near-dup drop --threads 8
+    --tokenizer-weights books=3,articles=3 --near-dup drop --near-dup-max-docs 3000000
 ```
 
 What the options mean:
 
 | Option | Meaning |
 |---|---|
-| `--out datasets\bio_v4` | The new dataset folder (must not exist yet). |
+| `--out datasets\bio_all` | The new dataset folder (must not exist yet). |
 | `--text-root $D` | Read every sub-folder of ai_training_data as a source. |
-| `--wiki-dir ... --wiki-max-docs 200000` | Keep the 200,000 Wikipedia articles that match the keywords best. |
+| `--wiki-dir ... --wiki-max-docs 0` | Keep every Wikipedia article that matches the keywords (a number keeps only that many, best matches first). |
 | `--parquet ... --min-score 3` | FineWeb-Edu web pages with an education score of 3 or more. |
 | `--jsonl ... --jsonl-name pes2o` | Scientific papers from peS2o. |
 | `--include-keywords keywords.txt` | Wikipedia, FineWeb and peS2o documents must match these terms (your own folders are not filtered). |
@@ -133,13 +170,19 @@ What the options mean:
 | `--tokenizer-weights books=3,articles=3` | Let books and articles shape the vocabulary more. |
 | `--superbpe` | Optional: a SuperBPE tokenizer, whose tokens can span words ("of the"): about 12% fewer tokens at 16,384 pieces. In a small test (20.5M parameters) it did 3% worse in bits per byte, so it is off by default; see the guide. In run_pipeline.py: `SUPERBPE = True`. |
 | `--near-dup drop` | Keep only one copy of near-identical documents (for example the 5 copies of *The Germ-Plasm*). |
-| `--threads 8` | Use all 8 CPU threads for tokenising. |
+| `--near-dup-max-docs 3000000` | Look for near-duplicates in sources of up to 3 million documents. |
+| `--threads 8` | Optional: use all 8 CPU threads for tokenising. |
 | `--scan-only` | Add this to count and filter without tokenising (fast check of the settings). |
 
-The result: `datasets\bio_v4\report.md` explains, per source, what was kept, removed and why. Lines repeated in
+The result: `datasets\bio_all\report.md` explains, per source, what was kept, removed and why. Lines repeated in
 20 or more documents (licence notices, navigation) are removed as boilerplate, but headings never are.
 
-`python run_pipeline.py build` runs exactly this command.
+`python run_pipeline.py build` runs this command (the books and articles weights only for folders that exist).
+
+- A folder whose name is not a valid source name (for example `lecture notes`, with a space) is skipped with a
+  WARNING on screen and in `report.md`: rename it (`lecture_notes`).
+- While a build runs, `datasets\bio_all\_build.lock` stops a second build into the same folder.
+- `manifest.json` is written only when the dataset is complete; a folder without it is not a finished dataset.
 
 ---
 
@@ -183,8 +226,8 @@ The planner looks only at *how much* text there is, never at what it says.
 **Simplest:** give the time and let the planner choose (this is what `run_pipeline.py` does):
 
 ```
-python tiny_gpt.py --dataset datasets\bio_v4 --time-budget-hours 48 --plan    # look first
-python tiny_gpt.py --dataset datasets\bio_v4 --time-budget-hours 48           # then train
+python tiny_gpt.py --dataset datasets\bio_all --time-budget-hours 48 --plan    # look first
+python tiny_gpt.py --dataset datasets\bio_all --time-budget-hours 48           # then train
 ```
 
 It times each model size briefly on the GPU, and uses the speed your last training run actually sustained for
@@ -195,10 +238,10 @@ at 55 W then; at 40 W expect longer).
 
 | Time | Model | Command |
 |---|---|---|
-| ~12 h | 36.6M | `python tiny_gpt.py --dataset datasets\bio_v4 --d-model 512 --layers 10 --train-tokens 950000000` |
-| ~24 h | 36.6M | `python tiny_gpt.py --dataset datasets\bio_v4 --d-model 512 --layers 10 --train-tokens 1890000000` |
-| ~48 h | 70M | `python tiny_gpt.py --dataset datasets\bio_v4 --d-model 640 --layers 12 --train-tokens 1850000000` |
-| ~3 days | 99M | `python tiny_gpt.py --dataset datasets\bio_v4 --d-model 768 --layers 14 --train-tokens 2000000000` |
+| ~12 h | 36.6M | `python tiny_gpt.py --dataset datasets\bio_all --d-model 512 --layers 10 --train-tokens 950000000` |
+| ~24 h | 36.6M | `python tiny_gpt.py --dataset datasets\bio_all --d-model 512 --layers 10 --train-tokens 1890000000` |
+| ~48 h | 70M | `python tiny_gpt.py --dataset datasets\bio_all --d-model 640 --layers 12 --train-tokens 1850000000` |
+| ~3 days | 99M | `python tiny_gpt.py --dataset datasets\bio_all --d-model 768 --layers 14 --train-tokens 2000000000` |
 
 - More time gives a better model, but each extra day helps less. By the loss formula of the 2022 "Chinchilla"
   study (which predicts final loss from model size and training text), going from 12 h to 24 h improves the
@@ -207,6 +250,29 @@ at 55 W then; at 40 W expect longer).
   training.
 - `--train-tokens` sets how much is trained. **Do not use `--steps` for this**: `--steps` on its own only splits
   the data's full budget (4 passes, 10.4 billion tokens) into that many steps, so it still trains for weeks.
+
+### Memory: does the model fit on the GPU?
+
+The plan prints a `memory:` line. The planner estimates the GPU memory each model needs and, only when the model
+would not fit otherwise, switches on one or both of these savings. Neither changes what the model learns:
+
+- **The loss in pieces** (`--loss-chunk-tokens`): the output layer and the loss are computed 4,096 tokens at a
+  time, so the large table of scores (every token against every vocabulary entry) never exists in full. It costs a
+  few per cent of speed.
+- **Activation checkpointing** (`--activation-checkpointing`): the values inside each block are recomputed in the
+  backward pass instead of being kept. Much less memory, about a third more computation.
+
+If the first step still runs out of memory, the run tries, in order: the loss in pieces, a smaller micro-batch
+(down to 4), activation checkpointing, then smaller micro-batches down to 1. It never switches on a saving you
+switched off. Set them yourself only to force a choice: `--activation-checkpointing on` or `off`,
+`--loss-chunk-tokens 0` (off) or a number. A resumed run keeps its settings unless you give these options.
+
+### AdamW or Muon
+
+`--optimizer muon` trains the weight matrices inside the blocks with Muon and the rest (embedding, norm gains) with
+AdamW; one learning rate and schedule drive both. It needs PyTorch 2.9 or newer, applies to new runs only (a resumed
+run keeps its optimizer), and needs about half of AdamW's optimizer memory for those matrices. The default is
+AdamW. Compare two runs with `compare_models.py`.
 
 ### Is a bigger or deeper model better?
 
@@ -220,7 +286,11 @@ and, without more text, not better.
   about 1.45 times faster. The header line says `compile: on`.
 - Every 200 steps a **metrics line**: training loss, validation loss per source, bits per byte, speed, energy used,
   CO2 and electricity cost, time left. `NEW BEST` means the model improved; `tinyGPT_best.pt` is saved then.
-- **Pause:** press Ctrl+C. **Continue:** `python tiny_gpt.py --resume` (same `--name` if you used one).
+- **Pause:** press Ctrl+C. **Continue:** `python tiny_gpt.py --resume` (same `--name` if you used one). A step
+  is either applied in full or not at all, and the resumed run continues exactly as if it had not stopped.
+- **Dashboard:** after each `NEW BEST` the dashboard is redrawn in the background on the CPU (log:
+  `logs\dashboard.log`) and pushed to GitHub (`dashboards\`) at most every 3 hours (`--dashboard-push-hours`;
+  `--dashboard off` switches it off).
 - **Overfitting** (memorising text) would show as validation loss rising while training loss keeps falling. The
   runs above read the data less than once, so it is not a risk; the best checkpoint is kept anyway.
 - A second run with a different name: add `--name tinyGPT_70M`. Reusing a name needs `--overwrite` (old files are
@@ -244,16 +314,17 @@ python run_pipeline.py continue --hours 24
 
 This does two things:
 
-1. **Builds a new dataset, `datasets\bio_v5`, from all of `ai_training_data`** (old and new text) with the
-   *same tokenizer* as the first dataset (`data_prep.py --tokenizer-from datasets\bio_v4`). The same tokenizer is
+1. **Builds a new dataset, `datasets\bio_all_v2`, from all of `ai_training_data`** (old and new text) with the
+   *same tokenizer* as the first dataset (`data_prep.py --tokenizer-from datasets\bio_all`). The same tokenizer is
    essential: the model's weights belong to its vocabulary, and a new tokenizer would give every token a different
    meaning. Keeping the old text in stops the model from forgetting it while it learns the new, and the old
-   train/validation split is kept too (`--keep-split-from datasets\bio_v4`): a document the first model trained on
-   never becomes a validation document, where its loss would look better than the model really is.
+   train/validation split is kept too (`--keep-split-from datasets\bio_all`): a document the first model trained on
+   never becomes a validation document, where its loss would look better than the model really is. This holds even
+   when the file was renamed or moved, or when a near-copy of it is the one kept.
 2. **Trains further from the first model's weights**
-   (`tiny_gpt.py --dataset datasets\bio_v5 --init-from tinyGPT_best.pt --name tinyGPT_continued
+   (`tiny_gpt.py --dataset datasets\bio_all_v2 --init-from tinyGPT_best.pt --name tinyGPT_continued
    --time-budget-hours 24`): same model size, a fresh learning-rate schedule, and as much of the new dataset as fits
-   in the hours given.
+   in the hours given. Without `--steps`, the planned steps come on top of the step the first model reached.
 
 Why not LoRA? LoRA freezes the model and trains small add-on matrices. It saves memory when the model has billions
 of parameters (it is the plan for fine-tuning large open models on the Mac Studio), but it limits how much new
@@ -279,7 +350,18 @@ python tiny_gpt.py --benchmark                               # 336 biology fact 
 python compare_models.py A_best.pt B_best.pt --device cpu    # is A really better than B?
 ```
 
-`experiments.csv` (opens in Excel) has one row per training run, benchmark and comparison.
+- The dashboard draws the fact benchmark from the results training stored at that step, so it takes about 30 s.
+  For a fine-tuned file it scores the fine-tuned weights itself, and labels the base model's numbers as such.
+- `view_pt.py --device auto` uses the GPU (or Apple's MPS on a Mac) for the panels that run the model; the default
+  is the CPU.
+- `compare_models.py` leaves out validation documents that the other model trained on, when the two were trained
+  on different datasets. If it cannot check this, it prints a WARNING and gives no verdict, unless you add
+  `--allow-different-datasets`.
+
+`experiments.csv` (opens in Excel) has one row per training run, benchmark, comparison and fine-tune, with the full
+recipe: model shape, batch, optimizer, learning-rate schedule, weight decay, clipping, dropout, precision and the
+memory settings. When a new version adds columns, the old file is kept as a backup and rewritten once with the
+new header. A copy goes to GitHub as `results\experiments.csv`.
 
 ## Step 6: use the model
 
@@ -289,7 +371,18 @@ python tiny_gpt.py --export exported_model                   # safetensors + tok
 python finetune.py sft --base tinyGPT_best.pt --data finetune_examples\sft_examples.jsonl --name tinyGPT_sft
 python finetune.py ask --checkpoint tinyGPT_sft.pt "What does genetic drift do to small populations?"
 python detect_text.py some_text.txt --checkpoint tinyGPT_best.pt
+python posttrain.py data                                     # question data from open datasets (once)
+python posttrain.py run --base tinyGPT_best.pt --name tinyGPT # SFT, then DPO, then evaluation of all three
 ```
+
+- `finetune.py --batch 8` is the number of examples per update. `--micro-batch N` processes N at a time and adds
+  up their gradients (same result, less memory). An out-of-memory error halves it by itself, and at 1 switches on
+  `--activation-checkpointing`.
+- Batches hold examples of similar length, so little time goes into padding; `--no-length-grouping` gives plain
+  shuffled batches.
+- `finetune.py` and `posttrain.py eval` refuse the GPU while another job uses it: use `--device cpu`, or `--force`.
+- `posttrain.py` writes `posttrain_data\posttrain_report.md`: multiple-choice accuracy on held-out questions
+  against a shuffled-question floor, the fact benchmark, and example answers.
 
 ---
 
@@ -307,6 +400,12 @@ python detect_text.py some_text.txt --checkpoint tinyGPT_best.pt
 | `--overwrite` | Start again under an existing name (old files renamed) | |
 | `--eval-every N` | Steps between metrics lines | 200 |
 | `--save-minutes M` | Save the training state every M minutes | 30 |
+| `--stop-after-steps N` | End this session cleanly after N more steps (continue with `--resume`) | |
+| `--optimizer adamw` or `muon` | Optimizer of a new run | adamw |
+| `--activation-checkpointing auto`, `on` or `off` | Recompute blocks in the backward pass to save memory | auto |
+| `--loss-chunk-tokens N` | Compute the loss N tokens at a time (0 = off) | auto |
+| `--dashboard auto`, `on` or `off` | Redraw the dashboard after each new best | auto |
+| `--dashboard-push-hours H` | Push the dashboard to GitHub at most every H hours (0 = every time) | 3 |
 | `--mix wiki=1,notes=3` | Read some sources more often than their size | by size |
 | `--device cpu` | Run on the CPU (for anything while the GPU trains) | auto |
 | `--tariff`, `--region` | Electricity price for the cost figure | Flexible Octopus, H |
@@ -320,7 +419,12 @@ python detect_text.py some_text.txt --checkpoint tinyGPT_best.pt
 | Message | What to do |
 |---|---|
 | `... already exists` | Use a new `--name`, or add `--overwrite`. |
-| `Out of memory at the first step; retrying ...` | Nothing: it halves the batch automatically. |
+| `Out of memory at the first step; retrying ...` | Nothing: it tries the memory savings and smaller batches by itself. |
+| `Out of memory at the first step even at micro-batch 1` | Choose a smaller `--d-model`, `--layers` or `--ctx`, or drop the `--loss-chunk-tokens 0` / `--activation-checkpointing off` the message names. |
+| `... is a newer training state than tinyGPT.pt` | A save went to `tinyGPT.HHMMSS.pt` because `tinyGPT.pt` was locked by another program. Rename it to `tinyGPT.pt` and resume again. |
+| `... is being trained by another process` | A run with that name is already training. Wait for it or stop it; delete `<name>.train.lock` only if nothing is training. |
+| `The GPU is busy` | Another job uses the GPU. Wait, or use `--device cpu`. |
+| `--precision fp16` refused on a Mac | This PyTorch cannot scale FP16 gradients on MPS: use `--precision bf16` or `fp32`. |
 | `training loss became nan` | Restart from the last checkpoint with a lower `--lr` (see the message). |
 | The screen goes black / driver reset | Two GPU jobs ran at once. Resume with `--resume`; keep other jobs on `--device cpu`. |
 | `manifest.json missing` | The dataset folder was deleted or is incomplete: rebuild it (step 3). |

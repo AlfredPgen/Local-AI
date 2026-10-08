@@ -48,6 +48,7 @@ Example (everything the default subject areas offer, best matches first):
 import argparse
 import datetime
 import concurrent.futures as cf
+import email.utils
 import gzip
 import http.client
 import io
@@ -67,6 +68,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
+import zlib
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 OAI_URL = "https://oaipmh.arxiv.org/oai"
@@ -78,7 +80,7 @@ MAX_DOWNLOAD = 60 << 20  # e-print or PDF bytes; a larger source falls back to t
 MAX_UNPACKED = 300 << 20
 MAX_TEX_FILE = 5 << 20
 PANDOC_SECONDS = 90
-PDF_SECONDS = 180  # a PDF conversion that takes longer (huge or awkward PDF) is stopped and the paper skipped
+PDF_SECONDS = 180  # default --pdf-seconds: a PDF conversion that takes longer is stopped and the paper left
 _PDF_CHILD = (
     "import sys, types; import convert_to_markdown as c; "
     "t = c.convert_pdf(sys.argv[1], types.SimpleNamespace(extract_images=False, out=None)); "
@@ -90,8 +92,13 @@ GROUPS = [("biology", ("q-bio", "physics.bio-ph")), ("statistics", ("stat",)),
           ("AI", ("cs.AI", "cs.LG", "cs.CL", "cs.CV", "cs.NE", "cs.MA", "cs.IR")), ("mathematics", ("math",))]
 GROUP_RANK = {"biology": 0, "statistics": 1, "AI": 2, "mathematics": 2}  # AI and mathematics share a rank
 FINAL = {"ok", "too_short", "no_text"}  # statuses not retried on a rerun
+# "pdf_timeout" is retried only by a run with a larger --pdf-seconds; "error: ..." always
+_TIMEOUT_RE = re.compile(r"pdf took over ([\d.]+) s")
+# a PDF converter failure caused by the environment, not by the paper: retried on the next run (a MemoryError
+# is not one: it comes from a huge or pathological PDF, which would be fetched and converted again on every run)
+_NOT_THE_PAPER_RE = re.compile(r"\b(ImportError|ModuleNotFoundError|DLL load failed|No module named)\b")
 REPORT_COLUMNS = ["id", "status", "chars", "method", "group", "year", "categories", "licence", "file"]
-LIST_COLUMNS = ["id", "group", "score", "year", "categories", "licence", "title"]
+LIST_COLUMNS = ["id", "group", "score", "year", "categories", "licence", "title", "abstract"]
 ARXIV_NS = "{http://arxiv.org/OAI/arXiv/}"
 OAI_NS = "{http://www.openarchives.org/OAI/2.0/}"
 
@@ -101,19 +108,66 @@ OAI_NS = "{http://www.openarchives.org/OAI/2.0/}"
 # ---------------------------------------------------------------------------
 _NET_LOCK = threading.Lock()
 _LAST_START = [0.0]
+_STOP = threading.Event()  # set on Ctrl+C: requests that are waiting give up at once
+MAX_SLOW_DOWN_PAUSE = 7200.0  # seconds of server-requested pauses one request may sit through in total
+
+
+class Stopped(Exception):
+    """The run was stopped (Ctrl+C) while a request was waiting."""
+
+
+def _pause(seconds):
+    """Sleep, but give up (Stopped) as soon as the run is stopped; short steps
+    keep the main thread responsive to Ctrl+C on Windows too."""
+    end = time.monotonic() + seconds
+    while True:
+        left = end - time.monotonic()
+        if left <= 0:
+            return
+        if _STOP.wait(min(left, 0.5)):
+            raise Stopped("stopped")
+
+
+def _acquire_net():
+    while not _NET_LOCK.acquire(timeout=0.5):
+        if _STOP.is_set():
+            raise Stopped("stopped")
+
+
+def _retry_after(headers):
+    """Seconds asked for by a Retry-After header (a number or an HTTP date); None if absent or unreadable."""
+    value = (headers.get("Retry-After") if headers is not None else None) or ""
+    value = value.strip()
+    if not value:
+        return None
+    try:
+        return max(0.0, float(value))
+    except ValueError:
+        pass
+    try:
+        when = email.utils.parsedate_to_datetime(value)
+        if when.tzinfo is None:
+            when = when.replace(tzinfo=datetime.timezone.utc)
+        return max(0.0, (when - datetime.datetime.now(datetime.timezone.utc)).total_seconds())
+    except (TypeError, ValueError, IndexError, OverflowError):
+        return None
 
 
 def http_get(url, limit=MAX_DOWNLOAD, tries=4, timeout=60):
     """Bytes of url; None on 404 (or when the body exceeds `limit`, as
     'too_large'). Network failures and server errors are retried with backoff.
     "Too many requests" (429) and "busy" (503) pause ALL requests, not just
-    this one, for Retry-After or 1, 2, 4 ... 10 minutes, up to 8 times."""
-    delay, slow_down, attempt = 5.0, 0, 0
+    this one: for as long as the server's Retry-After asks (at most an hour at a
+    time; after 8 pauses at least 1, 2, 4 ... 10 minutes, so an outage is waited
+    out; two hours in all), or without it for 1, 2, 4 ... 10 minutes, up to 8
+    times. Raises Stopped when the run is stopped during a pause."""
+    delay, slow_down, attempt, paused = 5.0, 0, 0, 0.0
     while True:
-        with _NET_LOCK:
+        _acquire_net()
+        try:
             pause = _LAST_START[0] + MIN_REQUEST_GAP - time.monotonic()
             if pause > 0:
-                time.sleep(pause)
+                _pause(pause)
             _LAST_START[0] = time.monotonic()
             try:
                 request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
@@ -131,17 +185,24 @@ def http_get(url, limit=MAX_DOWNLOAD, tries=4, timeout=60):
             except urllib.error.HTTPError as exc:
                 if exc.code == 404:
                     return None
-                if exc.code in (429, 503) and slow_down < 8:
-                    try:
-                        wait = float(exc.headers.get("Retry-After") or 0)
-                    except ValueError:
-                        wait = 0.0
-                    wait = min(max(wait, 60.0 * 2 ** slow_down), 600.0)
-                    slow_down += 1
-                    # every thread waits: the next request may start only after the pause
-                    _LAST_START[0] = time.monotonic() + wait - MIN_REQUEST_GAP
-                    print(f"  arXiv asks to slow down ({exc.code}); pausing all requests for {wait:.0f} s", flush=True)
-                    continue
+                if exc.code in (429, 503):
+                    asked = _retry_after(exc.headers)
+                    if asked is not None:  # the server says how long: honour it, short or long
+                        wait = min(max(asked, MIN_REQUEST_GAP), 3600.0)
+                        if slow_down >= 8:  # still busy after 8 short pauses: an outage, so wait longer
+                            wait = max(wait, min(60.0 * 2 ** (slow_down - 8), 600.0))
+                        go_on = paused + wait <= MAX_SLOW_DOWN_PAUSE
+                    else:
+                        wait = min(60.0 * 2 ** slow_down, 600.0)
+                        go_on = slow_down < 8
+                    if go_on:
+                        slow_down += 1
+                        paused += wait
+                        # every thread waits: the next request may start only after the pause
+                        _LAST_START[0] = time.monotonic() + wait - MIN_REQUEST_GAP
+                        print(f"  arXiv asks to slow down ({exc.code}); pausing all requests for {wait:.0f} s",
+                              flush=True)
+                        continue
                 attempt += 1
                 if exc.code not in (500, 502, 504) or attempt >= tries:
                     raise
@@ -149,9 +210,10 @@ def http_get(url, limit=MAX_DOWNLOAD, tries=4, timeout=60):
                 attempt += 1
                 if attempt >= tries:
                     raise
-        time.sleep(delay + random.random())
+        finally:
+            _NET_LOCK.release()
+        _pause(delay + random.random())
         delay = min(delay * 2, 300)
-
 
 
 # ---------------------------------------------------------------------------
@@ -203,10 +265,17 @@ def harvest(set_spec, cache_dir, update=False):
     later). Returns the number of records written."""
     base = os.path.join(cache_dir, _set_file(set_spec))
     state_path = base + ".state.json"
+    cache_path = base + ".jsonl.gz"
     state = {"token": None, "pages": 0, "records": 0, "complete": False}
     if os.path.isfile(state_path):
         with open(state_path, encoding="utf-8") as handle:
             state.update(json.load(handle))
+    # "bytes": the cache size when the progress file was last written. Anything after it is a page whose
+    # progress was never saved (possibly a gzip member cut off by a crash): cut it off, it is fetched again.
+    # Progress files from before this field have none and are left as they are.
+    if state.get("bytes") is not None and os.path.isfile(cache_path) and os.path.getsize(cache_path) > state["bytes"]:
+        with open(cache_path, "r+b") as handle:
+            handle.truncate(state["bytes"])
     if state["complete"] and update:
         # sets finished before this field existed: the state file was last written when the harvest ended
         since = state.get("harvested_until") or datetime.date.fromtimestamp(os.path.getmtime(state_path)).isoformat()
@@ -217,8 +286,8 @@ def harvest(set_spec, cache_dir, update=False):
     elif state["complete"]:
         print(f"  [{set_spec}] cached: {state['records']:,} records")
         return state["records"]
-    if not state["token"] and not state["pages"] and os.path.exists(base + ".jsonl.gz"):
-        os.remove(base + ".jsonl.gz")  # an interrupted first page: start clean
+    if not state["token"] and not state["pages"] and os.path.exists(cache_path):
+        os.remove(cache_path)  # an interrupted first page: start clean
     t0 = time.time()
     while True:
         if state["token"]:
@@ -243,17 +312,24 @@ def harvest(set_spec, cache_dir, update=False):
         if not isinstance(body, bytes):
             raise RuntimeError(f"{set_spec}: no answer from the OAI-PMH server")
         records, token, error = parse_oai_page(body)
-        if error == "badResumptionToken":  # expired position: restart this set (duplicates are removed later)
+        if error == "badResumptionToken":
+            if state.get("from"):  # a date window (an update, or a harvest in windows): ask for the window again
+                print(f"  [{set_spec}] saved position expired; asking again for everything from {state['from']}",
+                      flush=True)
+                state["token"] = None  # the records kept so far stay; the few seen twice are removed later
+                continue
+            # an open-ended first harvest has no date to go back to: restart the set
             print(f"  [{set_spec}] saved position expired; restarting the set", flush=True)
-            state.update(token=None, pages=0, records=0, **{"from": None})
-            if os.path.exists(base + ".jsonl.gz"):
-                os.remove(base + ".jsonl.gz")
+            state.update(token=None, pages=0, records=0, bytes=0, **{"from": None})
+            if os.path.exists(cache_path):
+                os.remove(cache_path)
             continue
         if error and error != "noRecordsMatch":
             raise RuntimeError(f"{set_spec}: OAI-PMH error {error}")
-        with gzip.open(base + ".jsonl.gz", "at", encoding="utf-8") as out:  # gzip members append cleanly
+        with gzip.open(cache_path, "at", encoding="utf-8") as out:  # gzip members append cleanly
             for r in records:
                 out.write(json.dumps(r, ensure_ascii=False) + "\n")
+        state["bytes"] = os.path.getsize(cache_path)
         state["pages"] += 1
         state["records"] += len(records)
         state["token"] = token
@@ -275,22 +351,57 @@ def harvest(set_spec, cache_dir, update=False):
             return state["records"]
 
 
-def read_cache(cache_dir, sets):
-    """Records of the given sets, each paper once."""
-    seen = set()
-    for set_spec in sets:
-        path = os.path.join(cache_dir, _set_file(set_spec) + ".jsonl.gz")
-        if not os.path.isfile(path):
-            continue
+_ID_PREFIX = '{"id": "'
+
+
+def _cache_lines(path, warn=True):
+    """(line number, line) of one metadata cache file. A damaged file (a page
+    cut off by a crash before the cache was guarded against that) is read up
+    to the damage, with a warning, instead of stopping the run."""
+    try:
         with gzip.open(path, "rt", encoding="utf-8") as handle:
-            for line in handle:
-                try:
-                    rec = json.loads(line)
-                except json.JSONDecodeError:  # a line cut by an interruption
-                    continue
-                if rec["id"] and rec["id"] not in seen:
-                    seen.add(rec["id"])
-                    yield rec
+            for number, line in enumerate(handle):
+                yield number, line
+    except (OSError, EOFError, zlib.error) as exc:  # gzip.BadGzipFile is an OSError
+        if warn:
+                print(f"  warning: {path} is damaged ({type(exc).__name__}: {exc}); using the records before the "
+                  "damage. Delete it and its .state.json to harvest that set again.", flush=True)
+
+
+def _line_id(line):
+    """The paper id of a complete cache line (each starts with {"id": "...), else None."""
+    if line.startswith(_ID_PREFIX) and line.endswith("}\n") and line.count(_ID_PREFIX) == 1:
+        return line[len(_ID_PREFIX):line.find('"', len(_ID_PREFIX))] or None
+    return None
+
+
+def read_cache(cache_dir, sets):
+    """Records of the given sets, each paper once: its newest copy, i.e. the
+    last one in its set's file (an --update appends the papers that changed),
+    from the first set it appears in. Two passes keep memory small: the first
+    only notes where each paper's newest copy is."""
+    paths = [os.path.join(cache_dir, _set_file(s) + ".jsonl.gz") for s in sets]
+    paths = [p for p in paths if os.path.isfile(p)]
+    newest = {}  # id -> set index << 40 | line number of the copy to keep
+    for k, path in enumerate(paths):
+        for number, line in _cache_lines(path):
+            pid = _line_id(line)
+            if pid is None:
+                continue
+            here = newest.get(pid)
+            if here is None or here >> 40 == k:  # a later copy in the same set replaces the earlier one
+                newest[pid] = k << 40 | number
+    for k, path in enumerate(paths):
+        for number, line in _cache_lines(path, warn=False):
+            pid = _line_id(line)
+            if pid is None or newest.get(pid) != (k << 40 | number):
+                continue
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:  # a line cut by an interruption
+                continue
+            if rec.get("id") == pid:
+                yield rec
 
 
 # ---------------------------------------------------------------------------
@@ -324,21 +435,22 @@ def build_list(cache_dir, sets, keyword_path, min_hits, min_distinct, path):
         words = len(rec["title"].split()) + len(rec["abstract"].split())
         score = hits / math.sqrt(max(words, 50))
         rows.append((GROUP_RANK[group], -score, rec["id"], group, rec["created"][:4], rec["categories"],
-                     rec["license"], rec["title"]))
+                     rec["license"], rec["title"], rec["abstract"]))
         if counts["records"] % 200_000 == 0:
             print(f"  checked {counts['records']:,} papers ({time.time() - t0:,.0f} s)", flush=True)
     rows.sort()
     with open(path + ".part", "w", encoding="utf-8", newline="\n") as handle:
         handle.write("\t".join(LIST_COLUMNS) + "\n")
-        for _, neg, pid, group, year, cats, lic, title in rows:
-            handle.write("\t".join([pid, group, f"{-neg:.3f}", year, cats, lic, _flat(title)]) + "\n")
+        for _, neg, pid, group, year, cats, lic, title, abstract in rows:
+            handle.write("\t".join([pid, group, f"{-neg:.3f}", year, cats, lic, _flat(title), _flat(abstract)])
+                         + "\n")
     os.replace(path + ".part", path)
     by_group = {}
     for r in rows:
         by_group[r[3]] = by_group.get(r[3], 0) + 1
     print(f"Paper list: {len(rows):,} of {counts['records']:,} papers match the keywords {by_group} "
           f"(no matching category {counts['no_group']:,}, too few keyword matches {counts['keywords']:,}); {path}")
-    return [dict(zip(LIST_COLUMNS, [r[2], r[3], f"{-r[1]:.3f}", r[4], r[5], r[6], r[7]])) for r in rows]
+    return [dict(zip(LIST_COLUMNS, [r[2], r[3], f"{-r[1]:.3f}", r[4], r[5], r[6], r[7], r[8]])) for r in rows]
 
 
 def read_list(path):
@@ -396,31 +508,55 @@ def tex_files(blob):
         return {"main.tex": text} if "\\" in text[:100_000] else {}
 
 
-def main_tex(files):
-    """The file with \\begin{document} (the longest if several)."""
-    cands = [n for n, t in files.items() if n.endswith(".tex") and re.search(r"\\begin\s*\{document\}", t)]
-    return max(cands, key=lambda n: len(files[n])) if cands else None
-
-
 _COMMENT_RE = re.compile(r"(?<!\\)%.*")
 _INPUT_RE = re.compile(r"\\(?:input|include|subfile)\s*\{([^{}]+)\}|\\input\s+([^\s{}\\]+)")
+_CLASS_RE = re.compile(r"\\document(?:class|style)\s*(?:\[[^\]]*\])?\s*\{([^{}]*)\}")
+
+
+def _include_keys(name, target):
+    """Archive names an \\input{target} in file `name` may refer to."""
+    base = os.path.dirname(name)
+    return [key for cand in (target, target + ".tex")
+            for key in (os.path.normpath(os.path.join(base, cand)).replace("\\", "/"),
+                        os.path.normpath(cand).replace("\\", "/"))]
+
+
+def main_tex(files):
+    """The main file: a .tex file with \\begin{document} outside comments that
+    is not a part of another one (a subfiles section, a standalone figure, a
+    file another candidate \\input's). If several remain, one with a
+    \\documentclass is preferred, then the longest once its \\input files are
+    filled in (a short main.tex that only includes its sections beats a long
+    supplement or template)."""
+    texts = {n: _COMMENT_RE.sub("", t) for n, t in files.items() if n.endswith(".tex")}
+    cands = [n for n, t in texts.items() if re.search(r"\\begin\s*\{document\}", t)]
+    if not cands:
+        return None
+    parts = set()
+    for n in cands:
+        m = _CLASS_RE.search(texts[n])
+        if m and m.group(1).strip() in ("subfiles", "standalone"):
+            parts.add(n)
+        for inc in _INPUT_RE.finditer(texts[n]):
+            target = (inc.group(1) or inc.group(2) or "").strip()
+            if target:
+                parts.update(k for k in _include_keys(n, target) if k != n)
+    cands = [n for n in cands if n not in parts] or cands
+    return max(cands, key=lambda n: (bool(_CLASS_RE.search(texts[n])), len(flatten(files, n)), n))
 
 
 def flatten(files, name, depth=0):
     """The main file with \\input/\\include replaced by the included files
     (inside the archive only; anything else is dropped), comments removed."""
     text = _COMMENT_RE.sub("", files[name])
-    base = os.path.dirname(name)
 
     def include(m):
         target = (m.group(1) or m.group(2) or "").strip()
         if depth >= 10 or not target:
             return ""
-        for cand in (target, target + ".tex"):
-            for key in (os.path.normpath(os.path.join(base, cand)).replace("\\", "/"),
-                        os.path.normpath(cand).replace("\\", "/")):
-                if key in files and key != name:
-                    return "\n" + flatten(files, key, depth + 1) + "\n"
+        for key in _include_keys(name, target):
+            if key in files and key != name:
+                return "\n" + flatten(files, key, depth + 1) + "\n"
         return ""
 
     return _INPUT_RE.sub(include, text)
@@ -558,16 +694,16 @@ def clean_markdown(body, title, abstract):
     return head + body + "\n"
 
 
-def pdf_markdown(pdf_bytes):
+def pdf_markdown(pdf_bytes, seconds=PDF_SECONDS):
     """Markdown of a PDF, converted in a child process that is stopped after
-    PDF_SECONDS (raises subprocess.TimeoutExpired): one pathological PDF must not
+    `seconds` (raises subprocess.TimeoutExpired): one pathological PDF must not
     hold up the whole download."""
     with tempfile.TemporaryDirectory(prefix="arxiv_pdf_") as tmp:
         path, out = os.path.join(tmp, "paper.pdf"), os.path.join(tmp, "paper.md")
         with open(path, "wb") as handle:
             handle.write(pdf_bytes)
         done = subprocess.run([sys.executable, "-c", _PDF_CHILD, path, out], cwd=HERE, capture_output=True,
-                              timeout=PDF_SECONDS)
+                              timeout=seconds)
         if done.returncode != 0 or not os.path.isfile(out):
             err = done.stderr.decode("utf-8", "replace").strip().splitlines()
             raise RuntimeError(err[-1][:120] if err else f"PDF converter exit code {done.returncode}")
@@ -589,8 +725,27 @@ def latex_markdown(blob, title, abstract, pandoc):
     return clean_markdown(body, title, abstract), "latex"
 
 
-def convert_paper(row, blob, out_dir, min_body, pandoc):
-    """Convert one downloaded paper (falling back to its PDF) and write it."""
+def check_pdf_route():
+    """None if the PDF converter can run, else the reason (checked once in a
+    child process, as the conversions are)."""
+    import importlib.util
+    if importlib.util.find_spec("pymupdf4llm") is None:
+        return "pymupdf4llm is not installed (python -m pip install pymupdf4llm)"
+    try:
+        done = subprocess.run([sys.executable, "-c", "import convert_to_markdown"], cwd=HERE, capture_output=True,
+                              timeout=120)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return f"the converter could not be started ({type(exc).__name__})"
+    if done.returncode != 0:
+        err = done.stderr.decode("utf-8", "replace").strip().splitlines()
+        return "convert_to_markdown.py does not import: " + (err[-1][:160] if err else f"exit code {done.returncode}")
+    return None
+
+
+def convert_paper(row, blob, out_dir, min_body, pandoc, pdf_seconds=PDF_SECONDS, pdf_problem=None):
+    """Convert one downloaded paper (falling back to its PDF) and write it.
+    pdf_problem: why the PDF converter cannot run (from check_pdf_route); such
+    papers get a status that a later run retries."""
     base = {k: row.get(k, "") for k in ("id", "group", "year", "categories")}
     base.update(licence=row.get("licence", ""), chars=0, method="", file="")
     md, method = None, ""
@@ -602,16 +757,21 @@ def convert_paper(row, blob, out_dir, min_body, pandoc):
         if md is not None and len(md) - len(row["title"]) - len(row.get("abstract", "")) < min_body:
             md, method = None, "latex too short"
     if md is None:  # PDF-only submission, unreadable LaTeX or no source: the PDF
+        if pdf_problem:  # nothing to do with this paper: left for a run where the converter works
+            return {**base, "status": "error: no PDF converter", "method": method or "no source"}
         pdf = blob if isinstance(blob, bytes) and blob[:5] == b"%PDF-" else http_get(PDF_URL.format(row["id"]))
         if not isinstance(pdf, bytes) or pdf[:5] != b"%PDF-":
             return {**base, "status": "no_text", "method": method or "no source"}
         try:
-            md = pdf_markdown(pdf)
+            md = pdf_markdown(pdf, pdf_seconds)
             method = "pdf" if not method or method == "pdf_only" else f"pdf ({method})"
-        except subprocess.TimeoutExpired:
-            return {**base, "status": "no_text", "method": f"pdf took over {PDF_SECONDS} s"}
+        except subprocess.TimeoutExpired:  # retried by a run with a larger --pdf-seconds
+            return {**base, "status": "pdf_timeout", "method": f"pdf took over {pdf_seconds:g} s"}
         except Exception as exc:  # noqa: BLE001 - a damaged PDF: recorded, not fatal
-            return {**base, "status": "no_text", "method": f"pdf failed: {type(exc).__name__}"}
+            reason = f"{type(exc).__name__}: {str(exc)[:80]}"
+            if isinstance(exc, OSError) or _NOT_THE_PAPER_RE.search(reason):
+                return {**base, "status": f"error: pdf failed: {reason}", "method": method}
+            return {**base, "status": "no_text", "method": f"pdf failed: {reason}"}
     if len(md) < min_body:
         return {**base, "status": "too_short", "chars": len(md), "method": method}
     name = f"{row['id'].replace('/', '_')}__{safe_name(row['title'])}.md"
@@ -625,7 +785,10 @@ def convert_paper(row, blob, out_dir, min_body, pandoc):
 # ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------
-def read_report(path):
+def read_report(path, pdf_limits=None):
+    """{id: last status}. pdf_limits, if given, is filled with {id: seconds}
+    for papers whose PDF conversion ran out of time (status pdf_timeout, or
+    no_text from before that status existed)."""
     done = {}
     if os.path.isfile(path):
         with open(path, encoding="utf-8") as handle:
@@ -633,6 +796,12 @@ def read_report(path):
             for line in handle:
                 row = dict(zip(head, line.rstrip("\n").split("\t")))
                 done[row.get("id")] = row.get("status")
+                if pdf_limits is not None:
+                    m = _TIMEOUT_RE.fullmatch(row.get("method") or "")
+                    if m and row.get("status") in ("pdf_timeout", "no_text"):
+                        pdf_limits[row.get("id")] = float(m.group(1))
+                    else:
+                        pdf_limits.pop(row.get("id"), None)
     return done
 
 
@@ -662,6 +831,9 @@ def parse_args(argv=None):
     p.add_argument("--wait", default="5-60", help="random pause in seconds before each paper, MIN-MAX (default "
                                                   "5-60; 0 = only arXiv's 3 s minimum between requests)")
     p.add_argument("--min-body-chars", type=int, default=3000, help="skip papers whose text is shorter")
+    p.add_argument("--pdf-seconds", type=float, default=PDF_SECONDS,
+                   help=f"time limit of one PDF conversion (default {PDF_SECONDS}); papers that ran out of time are "
+                        "tried again by a run with a larger limit")
     p.add_argument("--rebuild-list", action="store_true", help="select again from the cached metadata (after "
                                                                 "changing the keywords or thresholds)")
     p.add_argument("--update", action="store_true",
@@ -671,6 +843,8 @@ def parse_args(argv=None):
     args.sets = [s.strip() for s in args.sets.split(",") if s.strip()]
     if args.max_papers < 0:
         p.error("--max-papers must be >= 0")
+    if args.pdf_seconds <= 0:
+        p.error("--pdf-seconds must be > 0")
     try:
         low, _, high = args.wait.partition("-")
         args.wait = (float(low), float(high or low))
@@ -693,6 +867,7 @@ def main(argv=None):
     except (AttributeError, OSError):
         pass
     args = parse_args(argv)
+    _STOP.clear()  # an earlier run in this process may have been stopped (Ctrl+C)
     _lower_priority()
     pandoc = pandoc_path()
     if not pandoc:
@@ -715,16 +890,32 @@ def main(argv=None):
         print(f"Paper list: {len(rows):,} papers from {list_path} (--rebuild-list selects again)")
     if args.list_only:
         return
-    abstracts = {}
-    for rec in read_cache(cache, args.sets):  # the abstract goes into each paper's Markdown
-        abstracts[rec["id"]] = rec["abstract"]
-    for row in rows:
-        row["abstract"] = abstracts.get(row["id"], "")
-    del abstracts
+    missing = {r["id"] for r in rows if "abstract" not in r}  # a list.tsv written before it held the abstracts
+    if missing:
+        abstracts = {}
+        for rec in read_cache(cache, args.sets):  # the abstract goes into each paper's Markdown
+            if rec["id"] in missing:  # only the selected papers: the whole cache would take GBs
+                abstracts[rec["id"]] = rec["abstract"]
+        for row in rows:
+            row.setdefault("abstract", abstracts.get(row["id"], ""))
+        del abstracts
     report_path = os.path.join(args.meta, "report.tsv")
-    done = read_report(report_path)
+    pdf_limits = {}
+    done = read_report(report_path, pdf_limits)
     have = {name.split("__", 1)[0] for name in os.listdir(args.out) if name.endswith(".md")}
-    todo = [r for r in rows if r["id"].replace("/", "_") not in have and done.get(r["id"]) not in FINAL]
+
+    def wanted(row):
+        if row["id"].replace("/", "_") in have:
+            return False
+        if row["id"] in pdf_limits:  # its PDF ran out of time: tried again only with a larger --pdf-seconds
+            return args.pdf_seconds > pdf_limits[row["id"]]
+        return done.get(row["id"]) not in FINAL
+
+    todo = [r for r in rows if wanted(r)]
+    pdf_problem = check_pdf_route()
+    if pdf_problem:
+        print(f"Warning: the PDF converter cannot run: {pdf_problem}. Papers that need it (PDF-only, or LaTeX "
+              "pandoc cannot read) are left for a later run.", flush=True)
     if args.max_papers:
         todo = todo[:max(0, args.max_papers - len([1 for r in rows if done.get(r["id"]) == "ok"]))]
     per_paper = max(MIN_REQUEST_GAP, sum(args.wait) / 2)
@@ -768,7 +959,8 @@ def main(argv=None):
                 except Exception as exc:  # noqa: BLE001 - network trouble: the PDF route may still work
                     blob = None
                     print(f"  {row['id']}: source download failed ({type(exc).__name__})", flush=True)
-                pending[pool.submit(convert_paper, row, blob, args.out, args.min_body_chars, pandoc)] = row
+                pending[pool.submit(convert_paper, row, blob, args.out, args.min_body_chars, pandoc,
+                                    args.pdf_seconds, pdf_problem)] = row
                 while len(pending) >= 4:
                     finished, _ = cf.wait(pending, return_when=cf.FIRST_COMPLETED)
                     for future in finished:
@@ -776,8 +968,10 @@ def main(argv=None):
             for future in cf.as_completed(list(pending)):
                 record(future, pending.pop(future))
         except KeyboardInterrupt:
+            _STOP.set()  # a worker sitting in a slow-down pause gives up at once
             for future in pending:
                 future.cancel()
+            pool.shutdown(wait=False, cancel_futures=True)
             print("\nStopped; rerun the same command to continue.")
             raise
     print(f"Done: {counts.get('ok', 0):,} papers written to {args.out}; statuses {counts}; report {report_path}")

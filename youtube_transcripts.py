@@ -15,7 +15,8 @@ transcript of each comes from, in this order:
   3. Whisper speech recognition (faster-whisper) of the audio track, only with
      --whisper. Without it such videos are marked "queued_whisper" and a later
      run with --whisper transcribes them. Whisper runs on the GPU only when the
-     GPU is idle (never next to a training run), otherwise on 4 CPU threads.
+     GPU is idle (never next to a training run), otherwise on the CPU
+     (--whisper-threads, default 4; on a Mac half its cores).
 
 Only on-topic videos are kept: the title and transcript must match the terms in
 keywords.txt (data_prep.py's keyword test) at least 10 times, with at
@@ -33,9 +34,11 @@ Output:
       then the transcript in paragraphs (no timestamps or [Music] tags)
   <out>\..\_<out name>_meta\<channel>_report.tsv    one row per video: status,
       transcript source, date, duration, words, licence, file
-Reruns skip finished videos, so new uploads are added by running the command
-again. If YouTube asks to "confirm you're not a bot", the run stops; wait a few
-hours, or pass --cookies-from-browser firefox (this uses your YouTube login).
+Reruns skip finished videos, so new uploads (and premieres and streams that
+have aired since) are added by running the command again. If YouTube asks to
+"confirm you're not a bot" or says the session is rate-limited, the run stops;
+wait a few hours, or pass --cookies-from-browser firefox (this uses your
+YouTube login).
 
 YouTube's terms restrict downloading content; the licence column shows which
 videos are Creative Commons, and --creative-commons-only keeps only those.
@@ -56,13 +59,23 @@ import time
 HERE = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_OUT = os.path.join(os.path.expanduser("~"), "ai_training_data", "lectures")
 DEFAULT_KEYWORDS = os.path.join(HERE, "keywords.txt")
-FINAL = {"ok", "not_english", "too_short", "unavailable", "not_cc", "empty", "live", "off_topic"}
+# statuses not retried on a rerun ("live" and "upcoming" are: once aired they are ordinary videos)
+FINAL = {"ok", "not_english", "too_short", "unavailable", "not_cc", "empty", "off_topic"}
 TSV_COLUMNS = ["video_id", "status", "source", "title", "date", "duration_s", "words", "keyword_hits", "licence",
                "file"]
 BOT_CHECK = ("confirm you", "not a bot", "sign in to confirm")
+# YouTube limiting this session ("Video unavailable. This content isn't available, try again later. The current
+# session has been rate-limited"): every further video would fail the same way, so the run stops
+RATE_LIMITED = ("rate-limited", "rate limited", "content isn't available, try again later")
+# failures of this run, not of the video (the JavaScript challenge failed, an old yt-dlp): retried later
+# the page loaded but no audio/video format could be read (no "try again later" here: that is also YouTube's
+# rate-limit message, which must stop the run instead of being retried)
+FORMAT_FAILURE = ("requested format is not available", "not available on this app", "only images are available")
+TRANSIENT = FORMAT_FAILURE + ("try again later",)
+UPCOMING = ("premieres in", "live event will begin")
 UNAVAILABLE = ("private video", "members-only", "join this channel", "video unavailable", "has been removed",
                "is not available", "please sign in",
-               "age-restricted", "confirm your age", "premieres in", "copyright", "this live event")
+               "age-restricted", "confirm your age", "copyright", "this live event")
 
 
 class BotCheck(Exception):
@@ -85,13 +98,26 @@ def ydl(cookies=None, **extra):
 AGE_LIMITED = ("confirm your age", "age-restricted", "inappropriate for some users")
 
 
-def classify_error(exc):
-    text = str(exc).lower()
+def error_status(text):
+    """'unavailable' (final), 'upcoming', 'error' (both retried later) or
+    'blocked' (YouTube is blocking or limiting this session) for an error text."""
+    text = text.lower()
     if any(a in text for a in AGE_LIMITED):  # "Sign in to confirm your age": one video, not a bot block
         return "unavailable"
-    if any(b in text for b in BOT_CHECK):
-        raise BotCheck(str(exc)[:200])
+    if any(b in text for b in BOT_CHECK + RATE_LIMITED):
+        return "blocked"
+    if any(t in text for t in TRANSIENT):
+        return "error"
+    if any(u in text for u in UPCOMING):
+        return "upcoming"
     return "unavailable" if any(u in text for u in UNAVAILABLE) else "error"
+
+
+def classify_error(exc):
+    status = error_status(str(exc))
+    if status == "blocked":
+        raise BotCheck(str(exc)[:200])
+    return status
 
 
 def source_url(spec, tab="videos"):
@@ -255,29 +281,37 @@ class Whisper:
     moves to the CPU at once, because two GPU jobs on this laptop crashed the
     driver before."""
 
-    def __init__(self, device, model):
+    def __init__(self, device, model, threads=4):
         self.requested_model = model
+        self.threads = threads
+        self.detector = None  # a small multilingual model, loaded when an English-only model must tell the language
         if device == "auto":
             busy = gpu_busy()
             device = "cuda" if busy is False else "cpu"
             if busy:
-                print("  The GPU is busy (training?), so Whisper runs on the CPU (4 threads, slower).")
+                print(f"  The GPU is busy (training?), so Whisper runs on the CPU ({threads} threads, slower).")
         self.load(device)
+
+    @staticmethod
+    def _folder(name):
+        folder = os.path.join(os.path.expanduser("~"), ".cache", "faster-whisper", name.replace("/", "--"))
+        if not os.path.isfile(os.path.join(folder, "model.bin")):
+            from faster_whisper.utils import download_model
+            print(f"  Downloading Whisper {name} (once) ...", flush=True)
+            download_model(name, output_dir=folder)  # plain files: Windows needs admin rights for symlinks
+        return folder
 
     def load(self, device):
         if device == "cuda":
             _cuda_dll_dirs()
         from faster_whisper import WhisperModel
-        from faster_whisper.utils import download_model
         self.device = device
         self.name = self.requested_model or ("distil-large-v3" if device == "cuda" else "small.en")
-        folder = os.path.join(os.path.expanduser("~"), ".cache", "faster-whisper", self.name.replace("/", "--"))
-        if not os.path.isfile(os.path.join(folder, "model.bin")):
-            print(f"  Downloading Whisper {self.name} (once) ...", flush=True)
-            download_model(self.name, output_dir=folder)  # plain files: Windows needs admin rights for symlinks
-        print(f"  Whisper {self.name} on {device}", flush=True)
+        folder = self._folder(self.name)
+        print(f"  Whisper {self.name} on {device}" + ("" if device == "cuda" else f" ({self.threads} threads)"),
+              flush=True)
         self.model = WhisperModel(folder, device=device, compute_type="float16" if device == "cuda" else "int8",
-                                  cpu_threads=4)
+                                  cpu_threads=self.threads)
         self.beam = 5 if device == "cuda" else 1
         self.baseline = gpu_memory_used() if device == "cuda" else None
 
@@ -294,8 +328,23 @@ class Whisper:
             self.requested_model = None
             self.load("cpu")
 
+    def detect_language(self, audio_path):
+        """Language of the audio, by the multilingual "tiny" model on the CPU:
+        an English-only model (small.en) cannot tell and calls everything English."""
+        if self.detector is None:
+            from faster_whisper import WhisperModel
+            self.detector = WhisperModel(self._folder("tiny"), device="cpu", compute_type="int8",
+                                         cpu_threads=self.threads)
+        _, info = self.detector.transcribe(audio_path, language=None, beam_size=1, vad_filter=True)
+        return info.language  # detected at once; the segments are never decoded
+
     def transcribe(self, audio_path, language):
         self.check_gpu()
+        if language is None and not getattr(self.model.model, "is_multilingual", True):
+            detected = self.detect_language(audio_path)
+            if detected != "en":
+                return None, detected
+            language = "en"
         segments, info = self.model.transcribe(audio_path, language=language, beam_size=self.beam, vad_filter=True,
                                                condition_on_previous_text=False)
         if language is None and info.language != "en":
@@ -351,13 +400,26 @@ def process_video(entry, channel, args, whisper, tmp):
     vid = entry["id"]
     row = {"video_id": vid, "status": "", "source": "", "title": entry.get("title") or "", "date": "",
            "duration_s": entry.get("duration") or "", "words": 0, "keyword_hits": "", "licence": "", "file": ""}
-    if entry.get("live_status") in ("is_upcoming", "is_live"):
-        return {**row, "status": "live"}
+    if entry.get("live_status") in ("is_upcoming", "is_live"):  # not final: once aired it is an ordinary video
+        return {**row, "status": "upcoming" if entry["live_status"] == "is_upcoming" else "live"}
     if entry.get("duration") and entry["duration"] < args.min_minutes * 60:
         return {**row, "status": "too_short"}
     try:
         with ydl(args.cookies_from_browser) as y:
-            info = y.extract_info(f"https://www.youtube.com/watch?v={vid}", download=False)
+            watch = f"https://www.youtube.com/watch?v={vid}"
+            try:
+                info = y.extract_info(watch, download=False)
+            except yt_dlp.utils.DownloadError as exc:
+                text = str(exc)
+                if error_status(text) != "error" or not any(t in text.lower() for t in FORMAT_FAILURE):
+                    raise  # blocked / rate-limited, unavailable, upcoming: the outer handler classifies it
+                # the page loaded but no audio/video format could be read this time (the JavaScript
+                # challenge failed?); captions need none, so ask again without choosing a format. Only
+                # here: the option would also turn private or rate-limited videos into mere warnings
+                y.params["ignore_no_formats_error"] = True
+                info = y.extract_info(watch, download=False)
+            if info.get("live_status") in ("is_upcoming", "is_live"):
+                return {**row, "status": "upcoming" if info["live_status"] == "is_upcoming" else "live"}
             row.update(title=info.get("title") or row["title"], duration_s=info.get("duration") or row["duration_s"],
                        licence=info.get("license") or "YouTube standard", date=_date(info.get("upload_date")))
             if info.get("duration") and info["duration"] < args.min_minutes * 60:
@@ -432,7 +494,12 @@ def read_status(path):
             head = handle.readline().rstrip("\n").split("\t")
             for line in handle:
                 row = dict(zip(head, line.rstrip("\n").split("\t")))
-                status[row.get("video_id")] = row.get("status")
+                found = row.get("status")
+                # rows written before rate limits, format failures and premieres were told apart from
+                # unavailable videos: the error text (source column) shows which to try again
+                if found == "unavailable" and error_status(row.get("source") or "") != "unavailable":
+                    found = "error"
+                status[row.get("video_id")] = found
     return status
 
 
@@ -450,6 +517,9 @@ def parse_args(argv=None):
     p.add_argument("--whisper-device", choices=("auto", "cuda", "cpu"), default="auto",
                    help="auto: the GPU when it is idle, otherwise the CPU")
     p.add_argument("--whisper-model", help="default distil-large-v3 on the GPU, small.en on the CPU")
+    p.add_argument("--whisper-threads", type=int, default=None,
+                   help="CPU threads for Whisper on the CPU (default 4, which keeps the PC usable; on a Mac, "
+                        "which has no GPU route, half its cores)")
     p.add_argument("--keywords", default=DEFAULT_KEYWORDS,
                    help="keep only videos whose title and transcript match these terms (data_prep's keyword test); "
                         "'none' keeps every video")
@@ -464,7 +534,14 @@ def parse_args(argv=None):
     p.add_argument("--recheck-off-topic", action="store_true",
                    help="look again at videos rejected as off topic (after the keyword list has changed)")
     args = p.parse_args(argv)
+    if args.whisper_threads is None:
+        args.whisper_threads = max(4, (os.cpu_count() or 8) // 2) if sys.platform == "darwin" else 4
+    if args.whisper_threads < 1:
+        p.error("--whisper-threads must be >= 1")
+    # %USERPROFILE% / $HOME / ~ are expanded here too: PowerShell leaves %VAR% as it is
+    args.out = os.path.expanduser(os.path.expandvars(args.out))
     if args.channels_file:
+        args.channels_file = os.path.expanduser(os.path.expandvars(args.channels_file))
         with open(args.channels_file, encoding="utf-8") as handle:
             args.channels += [ln.split("#", 1)[0].strip() for ln in handle if ln.split("#", 1)[0].strip()]
     if not args.channels:
@@ -476,7 +553,10 @@ def parse_args(argv=None):
         sys.path.insert(0, HERE)
         import data_prep
         terms = data_prep.read_terms(args.keywords)
-        args.kw = data_prep.KeywordFilter(terms, [], args.keyword_min_hits, args.keyword_min_distinct, 3)
+        # the whole transcript is scanned (not only data_prep's first 100,000 characters), so the matches
+        # per 1,000 words are counted over the same words they are divided by, for lectures of any length
+        args.kw = data_prep.KeywordFilter(terms, [], args.keyword_min_hits, args.keyword_min_distinct, 3,
+                                          scan_chars=1 << 60)
         args.kw_loose = data_prep.KeywordFilter(terms, [], 1, 1, 3)
     return args
 
@@ -519,7 +599,7 @@ def main(argv=None):
             todo = [e for e in entries if status.get(e["id"]) not in final]
             if args.whisper and whisper is None and any(status.get(e["id"]) in (None, "queued_whisper", "error")
                                                         for e in todo):
-                whisper = Whisper(args.whisper_device, args.whisper_model)
+                whisper = Whisper(args.whisper_device, args.whisper_model, args.whisper_threads)
             print(f"[{spec}] {len(entries) - len(todo):,} done earlier; processing {len(todo):,}", flush=True)
             counts = {}
             with open(tsv, "a", encoding="utf-8", newline="\n") as report:
@@ -545,7 +625,7 @@ def main(argv=None):
                 print(f"  {counts['queued_whisper']} videos have no usable captions: rerun with --whisper "
                       "(after training, so it can use the GPU).")
     except BotCheck as exc:
-        print(f"\nYouTube asked to confirm this is not a bot ({exc}). Stopped; finished videos are saved. "
+        print(f"\nYouTube is blocking or rate-limiting this session ({exc}). Stopped; finished videos are saved. "
               "Wait a few hours and rerun, or add --cookies-from-browser firefox.")
         sys.exit(2)
     finally:

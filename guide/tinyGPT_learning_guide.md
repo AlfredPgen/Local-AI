@@ -1,7 +1,7 @@
 ---
 title: "tinyGPT: a learning guide"
 subtitle: "Training a small biology language model on your own data, understanding every step, and scaling it up"
-date: "29 September 2026"
+date: "8 October 2026"
 ---
 
 # Start here
@@ -36,18 +36,23 @@ answerer. **e**, tools to inspect, compare, export and use checkpoints.](figures
 |-------------------------|---------------------------------------------------------------------------|
 | data_prep.py | Builds a tokenised dataset from your folders, Wikipedia, FineWeb-Edu and peS2o: cleaning, English filter, keyword filter, deduplication, document-level split, tokenizer, leakage audit and a report |
 | tiny_gpt.py | Plans and trains the model; also `--plan`, `--generate`, `--benchmark` and `--export` |
+| run_pipeline.py | The whole pipeline in a few commands: build, plan, train, resume, continue, posttrain |
 | view_pt.py | Dashboard picture of a checkpoint: weights, embeddings, attention, outputs, calibration, benchmark and loss curves |
 | compare_models.py | Is checkpoint A really better than B? A paired bootstrap over validation documents |
 | finetune.py | Post-training: `sft` (question and answer pairs), `dpo` (preferred and rejected answers) and `ask` |
+| posttrain.py | A whole post-training round from open datasets: question data, SFT, DPO and a before/after evaluation |
 | detect_text.py | Was this text written by my model? A watermark test and a likelihood score |
 | convert_to_markdown.py | Turns PDF, DOCX, PPTX, XLSX, CSV, HTML, code and GWAS summary statistics into Markdown, sorted by type |
+| download_pmc.py, download_arxiv.py | Open-access papers from PubMed Central and arXiv, as Markdown |
+| youtube_transcripts.py | On-topic lecture transcripts from YouTube channels |
+| download_wikipedia.py | English Wikipedia in the format data_prep.py reads |
 | gpu_check.py | GPU readings, a load test and a training benchmark; refuses to run while the GPU is busy |
-| test_tiny_gpt.py | 18 automated tests that run on the CPU |
-| keywords.txt | 2,385 topic terms for the keyword filter |
+| test_tiny_gpt.py | About 30 automated tests that run on the CPU |
+| keywords.txt | 4,100 topic terms for the keyword filter |
 | probes_biology.tsv | The fact benchmark: 336 questions in 16 categories, with near-miss wrong answers |
 | calibrate_probes.py | Sets the benchmark's difficulty labels from how open reference models score it |
 | finetune_examples/ | Format templates: 20 SFT examples and 12 DPO pairs |
-| experiments.csv | A permanent table with one row per training run, benchmark, comparison or fine-tune |
+| experiments.csv | A permanent table with one row per training run, benchmark, comparison or fine-tune; copied to GitHub as results/experiments.csv |
 | log.txt | Everything the scripts print, appended |
 
 ## Everyday commands
@@ -57,11 +62,11 @@ every step and option.
 
 ```
 cd $HOME\local-ai
-python run_pipeline.py build                               # build datasets\bio_v4 from ai_training_data
+python run_pipeline.py build                               # build datasets\bio_all from ai_training_data
 python run_pipeline.py plan --hours 48                     # which model fits in 48 hours
 python run_pipeline.py train --hours 48                    # train it
-python tiny_gpt.py --dataset datasets\bio_v2 --plan        # what would be trained
-python tiny_gpt.py --dataset datasets\bio_v2               # train, planned for you
+python tiny_gpt.py --dataset datasets\bio_all --plan       # what would be trained
+python tiny_gpt.py --dataset datasets\bio_all              # train, planned for you
 python tiny_gpt.py --resume                                # continue after Ctrl+C
 python tiny_gpt.py --generate "Genetic drift is"           # write text
 python tiny_gpt.py --benchmark                             # the 336-question fact test
@@ -84,7 +89,7 @@ expects. In the old Command Prompt, use `^` instead.
   (Section 9.1).
 - **compare_models.py** gives a paired, document-level bootstrap between two checkpoints (Section 6.3).
 - **z-loss** keeps the output scores from drifting. It's on by default at $10^{-4}$.
-- **experiments.csv** keeps a permanent table of every run and test (Section 5.3).
+- **experiments.csv** keeps a permanent table of every run and test (Section 5.4).
 - **finetune.py** adds supervised fine-tuning and DPO (Chapter 7).
 - **detect_text.py** and **generation watermarks** (Chapter 8).
 - **The English-only filter** is on by default, and the **keyword filter is 11 times faster** (Chapter 4).
@@ -133,13 +138,54 @@ Every script was reviewed for bugs, stale code and speed. What you will notice:
     (Section 4.8).
   - `youtube_transcripts.py`: lecture transcripts from YouTube channels, kept only if on topic (Section 4.9).
   - `estimate_dataset.py`: tokens per source and the model sizes they support, without building (Section 4.5).
-  - Energy, carbon and electricity cost in every metrics line of tiny_gpt.py (Section 5.4).
+  - Energy, carbon and electricity cost in every metrics line of tiny_gpt.py (Section 5.5).
   - `run_pipeline.py` and `HOW_TO_RUN.md`: the whole pipeline in a few commands, and a plain run sheet.
   - `convert_to_markdown.py --ocr`: scanned PDFs read with Tesseract OCR (Section 4.2).
 - **Faster, better data preparation:** near-duplicate detection is about 10 times faster (one-permutation
   MinHash, Section 9.8), and headings are no longer removed as boilerplate.
 - **Realistic time budgets:** `--time-budget-hours` now uses the speed your last training run sustained, not a
   few seconds on a cool GPU, which had been 1.7 times too optimistic.
+
+## What changed from 1 to 8 October 2026
+
+**New tools and options:**
+
+- **`download_arxiv.py`:** arXiv papers on the keyword topics, from their LaTeX source (Section 4.10).
+- **`posttrain.py`:** SFT and DPO from open question datasets, with a before/after evaluation
+  (`run_pipeline.py posttrain`; Chapter 7).
+- **`--optimizer muon`:** Muon for the matrices inside the blocks, AdamW for the rest (Section 3.5).
+- **Ready for larger models:** the loss computed in pieces and activation checkpointing, switched on by the planner
+  only when a model would not fit otherwise; automatic recovery when the first step runs out of memory; the size
+  ladder now reaches width 3,072 (Section 3.5). `finetune.py` gained `--micro-batch`.
+- **keywords.txt** has 4,100 terms: many more genes, proteins and microbes, cancer types, biobanks and databases.
+- **The dashboard** is redrawn in the background after each new best and pushed to GitHub at most every 3 hours. It
+  reuses the fact-benchmark results stored by training, so it takes about 30 s instead of 4.5 minutes (Section 6.4).
+- **experiments.csv** records the whole training recipe and is copied to GitHub (Section 5.4).
+
+**Fixes from a second audit that you may notice:**
+
+- **Training:** a Ctrl+C at any moment, even in the middle of a step, resumes exactly as if the run had not
+  stopped. A best checkpoint that could not be written is no longer claimed. `--init-from` without `--steps`
+  trains the planned steps after the checkpoint's step, instead of stopping at once. When the tokens per step are
+  not a power of two, the batch no longer loses up to half of them to rounding.
+- **Safety:** checkpoints are flushed to disk before they are renamed into place. A save that had to use a
+  fallback name because the file was locked (`tinyGPT.HHMMSS.pt`) is reported, and `--resume` asks you to rename
+  it rather than silently resume from older weights. Lock files allow one trainer per run name and one build per
+  dataset folder. `--export` no longer writes your user name into `config.json`.
+- **Data preparation:** `--keep-split-from` keeps an earlier training document in training even when it was
+  renamed, moved, rebuilt on another system, or replaced by a near-copy (`docs.tsv` has a new `content_hash`
+  column). Near-copies across sources share one split. Mistyped options are refused before an existing dataset is
+  touched. `manifest.json` is written only when a dataset is complete. Long documents need about 6 times less
+  memory, and work files are deleted as soon as they are no longer needed.
+- **Converter:** reruns keep each file's output name (`conversion_manifest.json`); scanned pages are found page by
+  page; Word tracked changes, citations, equations and footnotes are kept; Excel dates come out as dates;
+  compressed genomic data files (`.vcf.gz` ...) are refused; each PDF runs in its own process.
+- **Downloads:** a YouTube rate limit stops the run, and passing failures are retried later. Non-English videos are
+  detected before Whisper writes them out as English. PubMed Central papers keep body sections such as
+  "Contributions of rare variants", which the old back-matter rule dropped.
+- **Evaluation:** `compare_models.py` leaves out documents the other model trained on (Section 6.3). The dashboard
+  labels fine-tuned files as such, checks that the dataset is the one the model was trained on, and can use a Mac's
+  GPU (`--device auto`).
 
 # How language models are trained
 
@@ -426,6 +472,7 @@ additions), final normalisation and the tied output layer. **b**, causal attenti
 | Biases | None | They add little and complicate weight decay |
 | Attention kernel | PyTorch SDPA, `repeat_kv` path chosen by a timing race | On Windows the native GQA path falls back to a kernel about 5 times slower (17 times with torch 2.5.1) |
 | Compilation | `torch.compile` when Triton is installed (`triton-windows` on Windows) | Fuses many small GPU operations into few: 1.46 times faster for 36.6M and 1.44 times for 70M parameters on the RTX 3070, measured alternating both modes; the first steps take 10-30 s longer to compile |
+| Optimizer | **AdamW** by default; **Muon** for the block matrices with `--optimizer muon` | AdamW is the standard; Muon is a newer, often faster alternative (Section 3.5) |
 
 ## Why decoder-only, and not encoder-decoder?
 
@@ -519,7 +566,7 @@ and a `train{...}` block. Here is what each value means and where it came from.
 
 1. **Training tokens:** $D = \text{max\_epochs} \times \text{unique tokens}$, unless you give `--train-tokens`,
    `--epochs` or `--steps`.
-2. **Model size:** the largest shape on a ladder of widths (128 to 2,048, with depth growing with width) whose
+2. **Model size:** the largest shape on a ladder of widths (128 to 3,072, with depth growing with width) whose
    parameter count satisfies $D \geq r N$, where $r$ is `--tokens-per-param` (default 20). Your `--d-model` and
    `--layers` override this.
 3. **Batch, learning rate, warm-up and dropout** follow from $N$ and the number of passes (the table above).
@@ -528,6 +575,48 @@ and a `train{...}` block. Here is what each value means and where it came from.
    few seconds than it does for hours (power and heat limits; 1.7 times on this RTX 3070). So the planner uses the
    speed your last training run sustained, converted to floating-point operations per second so that it carries
    over to other sizes; before the first run it slows the short measurement down by 1.6.
+5. **Memory:** for each model it estimates the GPU memory a training step needs and switches on memory savings
+   only when needed (next section). The plan's `memory:` line says what it chose.
+
+## Larger models: memory and the optimizer
+
+**Where the memory goes.** A training step holds:
+
+- the weights and their gradients (8 bytes per parameter);
+- the optimizer's state (AdamW: 8 bytes per parameter);
+- the *activations*, the values each block computed in the forward pass, kept for the backward pass. They grow
+  with micro-batch × context × layers, and for large models they are the biggest part;
+- the output scores of every token against the whole vocabulary, which for a 16,384-token vocabulary are large.
+
+**Two savings that leave the mathematics unchanged** (a test checks that the gradients are identical):
+
+| Saving | What it does | Cost | Option |
+|------------------|------------------------------------------|------------------|--------------------------|
+| Loss in pieces | The output layer and the loss run 4,096 tokens at a time, so the full score table never exists | A few per cent of speed | `--loss-chunk-tokens` (0 = off) |
+| Activation checkpointing | Only each block's input is kept; the block is recomputed in the backward pass (Chen et al. 2016) | About a third more computation | `--activation-checkpointing auto`, `on` or `off` |
+
+- **The rule:** the planner takes the cheapest combination that allows a micro-batch of 4 sequences (or that fits
+  at all), so a model that fits normally pays nothing.
+- **If the first step still runs out of memory,** the run tries, in order: the loss in pieces, a smaller
+  micro-batch down to 4 (with more accumulation, so the tokens per step stay the same), activation checkpointing,
+  then smaller micro-batches down to 1. It never switches on a saving the command line switched off, and the
+  retry trains on the same windows as an uninterrupted run would.
+- **On `--resume`** the run keeps its saved settings; giving either option changes them.
+- **experiments.csv** records both settings for every run.
+
+**AdamW or Muon.** AdamW keeps two running averages for every parameter and scales each one's step separately.
+Muon (Jordan et al. 2024) keeps one average (momentum) per weight matrix and turns its update into an
+*orthogonal* one, so every direction of the matrix moves by a similar amount. It is designed for the matrices
+inside the blocks; the embedding and the norm gains stay on AdamW.
+
+- `--optimizer muon` scales Muon's step to AdamW's typical update size (Liu et al. 2025), so the same `--lr`,
+  schedule and weight decay drive both.
+- Muon needs PyTorch 2.9 or newer. It applies to new runs; a resumed run keeps its optimizer.
+  `OPTIMIZER = "muon"` in run_pipeline.py uses it for the pipeline's runs.
+- It keeps half of AdamW's optimizer memory for those matrices.
+- Published runs reach the same loss with noticeably less computation. Whether that holds for tinyGPT is an
+  experiment: train the same shape both ways and compare with compare_models.py.
+- The dashboard shows each block matrix's momentum size for a Muon run, in place of Adam's update size.
 
 ## Hands-on exercises
 
@@ -564,6 +653,7 @@ nothing is overwritten, and compare the results with compare_models.py.
 | tables | Spreadsheets, CSV and GWAS summaries (as text) | Yes, "tables" |
 | codes | R, Python and other code (as text; never run) | Yes, "codes" |
 | synthetic | AI-written text (GLM and DeepSeek genetics notes) | Yes, "synthetic". Rename it to `_synthetic` to leave it out |
+| pmc, arxiv, lectures | Downloaded papers and lecture transcripts (Sections 4.8 to 4.10) | Yes, one source each; their reports are in `_pmc_meta`, `_arxiv_meta` and `_lectures_meta` |
 | images | Pictures for future multimodal work | No |
 | wikipedia | English Wikipedia (Hugging Face Arrow format, 6.4M articles) | Through `--wiki-dir` |
 | web | FineWeb-Edu (Parquet) and peS2o (JSON Lines) | Through `--parquet` and `--jsonl` |
@@ -592,10 +682,23 @@ python convert_to_markdown.py "D:\Papers" --out $HOME\ai_training_data `
 | `--book-pages 150` | PDFs with at least this many pages count as books |
 | `--name-prefix Papers__` | Avoids name clashes between collections |
 | `--workers 2` | Converts files in parallel, each in its own process with a time limit |
-| `--ocr` | Reads scanned PDFs (no text layer) with Tesseract OCR, a few seconds per page; formulas in old papers come out garbled |
+| `--ocr` | Reads scanned pages (no text layer) with Tesseract OCR, a few seconds per page; formulas in old papers come out garbled |
+| `--max-cols 30` | CSV, TSV and Excel tables keep this many columns, with a note saying how many were left out |
+| `--timeout 3600` | Seconds allowed per file in its own process (every PDF runs in its own process) |
 | (default) | Skips files already converted, so an interrupted batch can simply be restarted |
 
 - **Log:** every batch writes a `conversion_report_*.tsv` listing what was converted, skipped or failed, and why.
+  It is rewritten every 30 seconds, so even a killed batch leaves a record.
+- **Names stay fixed:** `conversion_manifest.json` records which input made each output. On a rerun every file keeps
+  its name, and a file added later (for example a second `summary.txt` in another sub-folder) gets a new name
+  instead of being skipped as "already converted".
+- **Scanned pages** are found page by page: under 200 characters of text and at least 80% covered by images. With
+  `--ocr` only those pages are read by OCR and put back in place; without it, the report says how many pages look
+  scanned.
+- **Word files** keep tracked insertions, citations, text boxes and hyperlinks (deleted text is dropped).
+  Equations become linear LaTeX such as `$(a)/(b)$`, and footnotes are listed under `## Notes`.
+- **Excel files:** dates come out as dates (2024-03-15, not 45366), and numbers with 15 significant digits.
+- **Refused:** compressed data files such as `.vcf.gz`, `.fa.gz` or `.bam`, which are data, not text.
 - **Tools:** PDFs go through pymupdf4llm, which keeps headings, lists and tables. Word, PowerPoint and Excel files are
   read directly from their XML, without Office.
 - **Plot pages:** a page whose drawing instructions exceed 200 KB is a plot made of tens of thousands of shapes.
@@ -629,13 +732,15 @@ are never keyword-filtered.
 
 **The keyword list:**
 
-- keywords.txt has 2,385 terms. It covers molecular and cell biology, genetics and genomics, evolution and
-  phylogenetics, statistics and mathematics, machine learning, medicine and specific diseases, drugs and other
-  chemicals, nutrition and metabolism, enzymes and other proteins, gene symbols, species and microbes, molecular
-  structure and 3D modelling and rendering, and the names of well-known scientists.
+- keywords.txt has 4,100 terms, grouped by category. It covers molecular and cell biology, genetics and genomics,
+  evolution and phylogenetics, statistics and mathematics, machine learning, medicine and specific diseases, drugs
+  and other chemicals, nutrition and metabolism, enzymes and other proteins, gene symbols, species and microbes,
+  molecular structure and 3D modelling and rendering, databases and biobanks, and the names of well-known
+  scientists.
 - **History:** 608 terms until 30 September 2026. Then mathematics, statistics and more genetics themes were added
   (1,006), then diseases, chemistry, genes, proteins and 3D modelling (1,686), then nutrition, species, microbes,
-  phylogenetics, more diseases and scientists' names (2,385).
+  phylogenetics, more diseases and scientists' names (2,385). On 1 October: many more genes (200 to 618), proteins
+  and enzymes, bacteria, viruses, parasites and fungi, cancer types, biobanks, databases and epidemiology (4,100).
 - **Everyday words are left out or used only in phrases.** Examples: "stroke" appears only as "ischaemic stroke";
   "Godot" only as "Godot engine" (not the play); "Falconer" only as "Douglas Falconer". Common surnames (Fisher,
   Wright, Snow) appear only as full names ("Ronald Fisher", "Sewall Wright", "John Snow").
@@ -685,7 +790,10 @@ Importance resampling towards it would make the corpus narrower. Keyword selecti
   separate groups (five for the 2,385 terms). On 100,000 FineWeb-Edu and peS2o documents it rejected none
   that the exact count keeps. For the 2,385-term list, every term was also written out in nine spellings (plural,
   capitals, punctuation around it; 21,465 test texts): the prefilter never counted fewer matches than the exact check.
-- **Pattern size matters:** each group is split into patterns of at most 200 terms (16 patterns for 2,385 terms).
+- **Repeated words:** a phrase whose last words repeat its first ones ("Gallus gallus", "Loa loa") is counted by
+  the prefilter by its first word, so the prefilter's count is still never below the exact count.
+- **Pattern size matters:** each group is split into patterns of at most 200 terms (16 patterns for 2,385 terms,
+  23 for 4,100).
   One pattern of 2,104 terms outgrew the regular-expression engine's fast memory and fell back to a far slower
   method: 0.22 MB of Wikipedia text per second, against 14.4 MB/s for the 16 smaller patterns, with identical
   counts. Before the split, growing the list from 608 to 2,385 terms had made the full build's Wikipedia step about
@@ -761,6 +869,22 @@ then the model sizes those tokens support and how long they take on this PC.
 
 Every decision is counted in `report.md` inside the dataset folder, per source and per reason.
 
+**Keeping the split of an earlier dataset** (`--keep-split-from`, used by `run_pipeline.py continue`): a document
+that was in the earlier training split stays in training. It is recognised by its source and name, and also by a
+hash of its text (the `content_hash` column of `docs.tsv`), so a renamed or moved file, a dataset rebuilt on
+another system, or a near-copy that is now the one kept, all stay in training. Near-copies across sources get one
+split together.
+
+**Safe rebuilds:**
+
+- Options are checked before anything is read, so a typing mistake never moves an existing dataset away.
+- `<out>\_build.lock` stops a second build into the same folder; a lock left by a process that has ended is
+  removed.
+- `manifest.json` is written only once the dataset is complete. A folder without it is not a dataset, and
+  `--keep-split-from` refuses it.
+- A sub-folder whose name is not a valid source name (`lecture notes`, with a space) is skipped with a WARNING
+  and a note in `report.md`; rename it.
+
 ## Downloaded data, and the recommended next dataset
 
 Downloaded on 29 September into `ai_training_data\web` (both are ODC-By licensed, which allows training):
@@ -829,8 +953,10 @@ first, the transcript comes from:
 2. **YouTube's automatic captions**, if they are punctuated (recent videos usually are);
 3. **Whisper** speech recognition of the audio track, only with `--whisper`. Without it these videos are marked
    `queued_whisper`, and a later `--whisper` run transcribes them. Whisper (distil-large-v3) uses the GPU only when
-   no other job does, and moves to the CPU at once if a training run starts. On the CPU (small.en, 4 threads) it
-   runs about 4 times faster than real time.
+   no other job does, and moves to the CPU at once if a training run starts. On the CPU (small.en, 4 threads,
+   `--whisper-threads`) it runs about 4 times faster than real time. small.en knows only English, so a video of
+   unknown language is first checked with a small multilingual model; a non-English video is then marked
+   `not_english` instead of being transcribed as English.
 
 - **On topic only:** a transcript is kept if it matches keywords.txt at least 10 times, with 3 different
   terms and at least 4 matches per 1,000 words. The density rule matters because channels repeat their theme in
@@ -842,10 +968,48 @@ first, the transcript comes from:
   and `ai_training_data\_lectures_meta\<channel>_report.tsv`: status (ok, off_topic, queued_whisper, not_english,
   too_short...), transcript source, duration, words, keyword matches and licence of every video.
 - **Reruns** skip finished videos, so running the same command later adds new uploads.
-- **If YouTube asks to "confirm you're not a bot",** the run stops. Wait a few hours, or add
-  `--cookies-from-browser firefox` (this uses your own YouTube login).
+- **If YouTube asks to "confirm you're not a bot", or says the session is rate-limited,** the run stops. Wait a
+  few hours, or add `--cookies-from-browser firefox` (this uses your own YouTube login).
+- **Retried on the next run:** passing failures ("format not available", "try again later") are marked `error`,
+  and premieres and live streams that have not aired yet are marked `upcoming` or `live`.
+- **Long lectures:** the keyword density is now counted over the whole transcript (before, only its first 100,000
+  characters). `--recheck-off-topic` looks again at lectures rejected earlier.
 - **Rights:** YouTube's terms restrict downloading content. The licence column shows Creative Commons videos, and
   `--creative-commons-only` keeps only those.
+
+## arXiv papers: download_arxiv.py
+
+```
+python download_arxiv.py --out $HOME\ai_training_data\arxiv              # first run; a rerun continues
+python download_arxiv.py --out $HOME\ai_training_data\arxiv --update     # later: add papers new on arXiv
+```
+
+1. **Harvest:** titles, abstracts, categories and licences of the subject areas in `--sets` (biology, statistics,
+   AI and mathematics), cached in `ai_training_data\_arxiv_meta`. A rerun continues where it stopped.
+2. **Select:** papers whose title and abstract match the keywords (at least 3 matches from 3 different terms; a
+   title match counts 3 times), biology first, then statistics, then AI and mathematics, each ranked by keyword
+   density.
+3. **Fetch and convert:** each paper's LaTeX source becomes Markdown with pandoc, equations kept as LaTeX;
+   references, acknowledgements and similar sections are left out. Papers without usable source come from their
+   PDF.
+
+**Options and limits:**
+
+- **`--update`** fetches the papers added to arXiv since the last harvest, then selects again with the current
+  keywords. `--rebuild-list` only selects again (after editing the keywords).
+- **`--wait 5-60`** (default): a random pause of 5 to 60 s before each paper, on top of the 3 s minimum arXiv asks
+  of automated tools: about 110 papers an hour. A shorter wait is faster but makes "too many requests" answers
+  more likely; `--wait 0` keeps only the 3 s minimum.
+- **"Too many requests" (429 or 503):** every request waits for the time arXiv asks for (`Retry-After`, at most an
+  hour at a time), or else 1, 2, 4 ... up to 10 minutes. Nothing is skipped; Ctrl+C stops at once even during a
+  pause.
+- **PDF time limit:** one PDF conversion may take 180 s (`--pdf-seconds`); a paper that takes longer is marked
+  `pdf_timeout`. A later run with a larger limit, for example `--pdf-seconds 600`, tries those papers again.
+- **Paths:** `%USERPROFILE%`, `$HOME` and `~` work in `--out` and `--meta`, also in PowerShell (which leaves
+  `%USERPROFILE%` as it is). The same holds for download_pmc.py and youtube_transcripts.py.
+- **Output:** `ai_training_data\arxiv\<arXiv id>__<title>.md`, and `_arxiv_meta\report.tsv` with each paper's
+  status, method, categories and licence. Most arXiv papers carry arXiv's own licence (reading, not reuse); check
+  `report.tsv` before sharing a model trained on them.
 
 ## More data worth getting
 
@@ -952,13 +1116,22 @@ step 400/11870 | train 4.912 | val 4.470 @400 [md 4.51 wiki 4.43] | ppl 87.36
 - **tinyGPT_best.pt** holds the weights of the best validation loss, for inference only.
 - `python tiny_gpt.py --resume` continues exactly where the run stopped. The learning-rate schedule is stateless, so
   resuming is exact.
+- **Ctrl+C at any moment** is safe. During an update the Ctrl+C is held until the update is complete, so a step is
+  applied in full or not at all; a step stopped halfway is rewound, so the resumed run gives the same numbers as
+  an uninterrupted one.
 - **No training state yet?** If the PC stopped before tinyGPT.pt was first written, `--resume` continues from
   tinyGPT_best.pt at its step. Weights, schedule position and history are kept. Adam's averages start again from zero,
-  so the learning rate is ramped back up over 50 steps.
+  so the learning rate is ramped back up over 50 steps. The ramp is saved, so a pause during it resumes inside it.
 - `--resume --steps 20000` extends a finished run. `--init-from other.pt` starts a new run from another checkpoint's
-  weights: that's continued pre-training on new data.
+  weights: that's continued pre-training on new data. Without `--steps`, the planned steps come after the step the
+  other checkpoint had reached.
 - Existing files are never overwritten unless you pass `--overwrite`. Saves are atomic: written to a temporary file,
-  then renamed.
+  flushed to disk, then renamed.
+- **A locked file** (open in another program) cannot be replaced on Windows. The save then goes to
+  `tinyGPT.HHMMSS.pt` and says so; within a session, a fallback is deleted once a newer save replaces it. `--resume` refuses
+  while such a file is newer than tinyGPT.pt and tells you to rename it, so you never resume from older weights by
+  mistake.
+- **One trainer per run:** `<name>.train.lock` stops a second process from training the same run.
 
 ## More data later: training further from the first model
 
@@ -970,16 +1143,16 @@ python run_pipeline.py continue --hours 24
 
 This does two things:
 
-1. **Builds a new dataset, `datasets\bio_v5`, from all of `ai_training_data`** (old and new text) with the
-   *same tokenizer* as the first dataset (`data_prep.py --tokenizer-from datasets\bio_v4`). The same tokenizer is
+1. **Builds a new dataset, `datasets\bio_all_v2`, from all of `ai_training_data`** (old and new text) with the
+   *same tokenizer* as the first dataset (`data_prep.py --tokenizer-from datasets\bio_all`). The same tokenizer is
    essential: the model's weights belong to its vocabulary, and a new tokenizer would give every token a different
    meaning. Keeping the old text in stops the model from forgetting it while it learns the new, and the old
-   train/validation split is kept too (`--keep-split-from datasets\bio_v4`): a document the first model trained on
-   never becomes a validation document, where its loss would look better than the model really is.
+   train/validation split is kept too (`--keep-split-from datasets\bio_all`): a document the first model trained on
+   never becomes a validation document, where its loss would look better than the model really is (Section 4.6).
 2. **Trains further from the first model's weights**
-   (`tiny_gpt.py --dataset datasets\bio_v5 --init-from tinyGPT_best.pt --name tinyGPT_continued
+   (`tiny_gpt.py --dataset datasets\bio_all_v2 --init-from tinyGPT_best.pt --name tinyGPT_continued
    --time-budget-hours 24`): same model size, a fresh learning-rate schedule, and as much of the new dataset as fits
-   in the hours given.
+   in the hours given, counted from the step the first model reached.
 
 Why not LoRA? LoRA freezes the model and trains small add-on matrices. It saves memory when the model has billions
 of parameters (it is the plan for fine-tuning large open models on the Mac Studio), but it limits how much new
@@ -999,10 +1172,17 @@ first data splits new-field words into more pieces (slightly less efficient, sti
 benchmark, comparison and fine-tune.
 
 - **Columns include:** time, event, name, status, step, parameters, shape, context, vocabulary, tokens seen, learning
-  rate, z-loss, dataset, best and last validation loss, bits per byte, perplexity, benchmark accuracy, throughput,
-  training hours (`train_hours`, without evaluations and saving), total hours of the run over all sessions
-  (`run_hours`) and checkpoint.
-- **Opening it:** it opens directly in Excel. The scripts only ever append, and nothing deletes it.
+  rate, z-loss, dataset, best and last validation loss, bits per byte, perplexity, benchmark accuracy and floor,
+  throughput, training hours (`train_hours`, without evaluations and saving), total hours of the run over all
+  sessions (`run_hours`), energy, CO2e, cost and checkpoint.
+- **The recipe:** micro-batch and accumulation, optimizer, minimum learning rate, schedule, warm-up, decay share
+  and shape, weight decay, betas, gradient clipping, dropout, precision, and the memory settings
+  (`activation_checkpointing`, `loss_chunk_tokens`). With these, any row can be trained again.
+- **Opening it:** it opens directly in Excel. The scripts only ever append, and nothing deletes it. When a newer
+  version adds columns, the file is copied to `experiments.csv.before-columns-<date>` and rewritten once with the
+  new header; no row is lost.
+- **On GitHub:** every new row also updates `results/experiments.csv` in the repository, with your home folder
+  shown as `~`. Test runs in other folders are not published.
 - **Why keep it:** yes, storing the parameters in a table is useful. It is the only reliable way to know, months
   later, which settings gave which result. Add your own comments in the *notes* column.
 
@@ -1113,7 +1293,8 @@ weights need only a reordering of the attention rows for tinyGPT's RoPE layout; 
 - **Report:** `probes_biology_calibration.md`.
 - **Running it:** `python calibrate_probes.py` runs on the CPU (models that don't fit in memory are skipped). Once
   no training is running, `python calibrate_probes.py --device cuda` adds the 1.7B model. Scores are cached, so
-  reruns are quick.
+  reruns are quick; a change to the model code rescores once. It needs the `huggingface_hub` and `tokenizers`
+  packages, checked before any download.
 
 **Results of the first calibration (29 September 2026):**
 
@@ -1155,23 +1336,43 @@ same logic as clustered standard errors.
 - If the interval excludes 0, the difference is unlikely to be noise.
 - The table is printed per source, saved as a CSV next to A, and recorded in experiments.csv.
 
+**Models trained on different datasets.** A validation document of one dataset may be a training document of the
+other, which would flatter that model. compare_models.py reads each model's dataset from its checkpoint and leaves
+out the documents the other model trained on (from its `docs.tsv`). If it cannot check this (the dataset is
+missing or was rebuilt), it prints a WARNING and gives no verdict, unless you add `--allow-different-datasets`.
+
 ## The dashboard
 
 `python view_pt.py tinyGPT_best.pt --plot` writes a 4 × 4 dashboard picture, `tinyGPT_best_dashboard.png`.
-- **Name:** it's the same every time, so each new dashboard replaces the previous one. The step and the time it was
-  drawn are printed in its title.
+
+- **Name:** it's the same every time, so each new dashboard replaces the previous one. The file is written under a
+  temporary name and then renamed, so an image viewer never shows half a picture.
 - **Keeping one:** to keep a particular dashboard, give it a name of its own with `--out`.
+- **During training** the dashboard is redrawn in the background after each new best checkpoint, on the CPU at low
+  priority (log: `logs/dashboard.log`). `--dashboard off` switches this off.
+- **On GitHub:** a dashboard of a checkpoint in this folder is committed to `dashboards/` and pushed. From training
+  this happens at most every 3 hours (`--dashboard-push-hours`; 0 = every time), because every 1.6 MB version stays
+  in the repository's history. `--no-push` skips it. Your home folder is shown as `~` in every text on the picture.
+- **Fast:** training stores the fact-benchmark results of each evaluation in the checkpoint, and the dashboard
+  reuses them when the questions file and the step match, instead of scoring all 336 questions again. A dashboard
+  takes about 30 s.
+- **Fine-tuned files** (from finetune.py) are labelled as such: the loss panel shows the fine-tuning curve, the
+  pre-training panels say they are the base model's, and the benchmark is scored on the fine-tuned weights.
+- **The right data:** the panels that run the model use the dataset stored in the checkpoint, and only if its
+  fingerprint matches the one the model was trained on (a moved dataset is also found by name in `datasets/`).
+  `--dataset` uses another one anyway.
+- **Device:** `--device auto` runs those panels on the GPU, or on Apple's MPS on a Mac; the default is the CPU.
 
 Its panels:
 
-- weight statistics per layer;
-- the embedding map, with PCA colours and labelled tokens;
-- attention patterns;
-- next-token predictions for a test sentence;
+- loss, perplexity, learning-rate and confidence curves;
+- the embedding map (PCA), token similarity and embedding norms;
 - output preferences;
+- weight scale per block, RMSNorm gains, singular-value spectra and per-head scale;
 - calibration;
-- the benchmark per category;
-- loss, perplexity and bits-per-byte curves.
+- the fact benchmark per category;
+- attention entropy;
+- the optimizer's update size per matrix (Adam), or momentum size (Muon).
 
 Panels that need the model to run are labelled as inference-only. `--html` writes an interactive embedding explorer.
 
@@ -1248,6 +1449,14 @@ python finetune.py sft --base tinyGPT_best.pt --name tinyGPT_sft --device cpu `
 - **The prompt tokens are masked**, so the loss is computed on the answer only.
 - 10% of examples are held out, and the held-out loss is printed each epoch.
 - Defaults: 3 epochs, batch 8, learning rate $10^{-4}$.
+- **Memory:** `--micro-batch N` processes N examples at a time and adds up their gradients, which gives the same
+  update as the whole batch. After an out-of-memory error it is halved by itself, and at 1 activation checkpointing
+  is switched on (`--activation-checkpointing` forces it).
+- **Length grouping:** batches hold examples of similar length, so little computation goes into padding; the number
+  of steps and the schedule are unchanged. `--no-length-grouping` gives plain shuffled batches.
+- **GPU:** refused while another job uses it; use `--device cpu`, or `--force`.
+- **The saved file** keeps the base model's last evaluation as `base_last_eval`, so no tool mistakes the base
+  model's scores for the fine-tuned model's.
 
 **Data needed:** the 20 examples are a format template. A useful SFT set has thousands of examples. They can come
 from:
@@ -1275,6 +1484,27 @@ should be *plausible* mistakes, such as the classic p-value misreading, not nons
 
 **Asking questions:** `python finetune.py ask "What is linkage disequilibrium?" --checkpoint tinyGPT_dpo.pt` uses the
 same template.
+
+## A whole round from open datasets: posttrain.py
+
+```
+python posttrain.py data                                       # build the question data once
+python posttrain.py run --base tinyGPT_best.pt --name tinyGPT  # SFT, then DPO, then evaluation
+python posttrain.py eval tinyGPT_best.pt tinyGPT_sft.pt tinyGPT_dpo.pt
+```
+
+`python run_pipeline.py posttrain` does the same for the pipeline's run.
+
+- **data** writes `posttrain_data\`: question-answer pairs for SFT (PubMedQA, MedMCQA biology subjects with
+  explanations, SciQ, keyword-matched SmolTalk conversations), preferred and worse answers for DPO (MedMCQA,
+  SciQ, keyword-matched UltraFeedback), and held-out multiple-choice questions (MMLU biology, medicine, genetics
+  and statistics; PubMedQA's expert-labelled set) that are never trained on. `sources.md` lists the counts and
+  each licence.
+- **run** fine-tunes the base model (SFT), then the SFT model (DPO), then evaluates all three.
+- **eval** writes `posttrain_report.md`: multiple-choice accuracy on the held-out questions against a floor, the
+  fact benchmark, and answers to fixed example questions. The floor shuffles only the question's words and keeps
+  the "### Question / ### Answer" template, so it is the fair "topic words only" baseline.
+- The GPU must be free (one GPU job at a time).
 
 ## Reinforcement learning: the design for later
 
@@ -1971,6 +2201,8 @@ a 5–50M model: S (a few percent), M (noticeable) or L (large). **Effort:** S i
 | Supervised fine-tuning and DPO | finetune.py |
 | Generation watermark and likelihood detector | tiny_gpt.py `--watermark-key`, detect_text.py |
 | Permanent experiments table | experiments.csv |
+| Muon optimizer (1 October) | tiny_gpt.py `--optimizer muon` |
+| Chunked cross-entropy and activation checkpointing (8 October) | tiny_gpt.py, finetune.py; chosen by the planner |
 | Earlier: AdamW, WSD, clipping, BF16, RoPE, RMSNorm, SwiGLU, GQA, tied embeddings, data-aware planner, MinHash deduplication, document split, leakage audit, fixed validation windows, calibration, Wilson intervals | tiny_gpt.py, data_prep.py |
 
 ## Recommended next, in order
@@ -1992,12 +2224,12 @@ a 5–50M model: S (a few percent), M (noticeable) or L (large). **Effort:** S i
 
 ## Later or at larger scale
 
-- **Optimisers:** µP (learning rates that transfer across widths), Muon, schedule-free AdamW and critical-batch-size
-  estimation.
+- **Optimisers:** µP (learning rates that transfer across widths), schedule-free AdamW and critical-batch-size
+  estimation (Muon is done).
 - **Architecture:** multi-token prediction, RoPE context extension and mixture of experts.
 - **Data:** quality classifiers, suffix-array deduplication and synthetic textbook data.
-- **Efficiency:** chunked cross-entropy, activation checkpointing, 8-bit optimisers and FlashAttention kernels
-  (`torch.compile` is already on).
+- **Efficiency:** 8-bit optimisers and FlashAttention kernels (`torch.compile`, chunked cross-entropy and
+  activation checkpointing are done).
 - **Interpretability:** logit lens, linear probes, sparse autoencoders.
 - **Uncertainty:** conformal answer sets and semantic entropy.
 
@@ -2035,16 +2267,20 @@ a 5–50M model: S (a few percent), M (noticeable) or L (large). **Effort:** S i
     yourself.
 - **No overwriting.**
   - New names are required; `--overwrite` is always explicit.
-  - Saves are atomic.
+  - Saves are atomic, and flushed to disk before the rename.
+  - Lock files allow one trainer per run (`<name>.train.lock`) and one build per dataset folder (`_build.lock`).
   - The earlier scripts are kept in `backup_v3_2026-09-29`.
   - Dataset folders are never reused with different settings.
 - **Data is never executed.** Code files are read as text. Spreadsheets and Word files are parsed as XML without
   macros.
-- **One GPU job at a time.** gpu_check.py refuses to run while the GPU is busy, unless you pass `--force`.
+- **One GPU job at a time.** gpu_check.py, finetune.py and posttrain.py refuse the GPU while it is busy, unless you
+  pass `--force`; run_pipeline.py refuses plan, train, resume, continue and posttrain.
+- **No user name in shared files.** The dashboard, the GitHub copy of experiments.csv and an export's `config.json`
+  show your home folder as `~`.
 - **No installs.** Every package in requirements.txt is already installed. On a new machine:
   `python -m pip install -r requirements.txt`, with PyTorch installed first from pytorch.org for the right CUDA
   version.
-- **Tests.** `python -m unittest test_tiny_gpt.py` runs 24 tests on the CPU in about two and a half minutes.
+- **Tests.** `python -m unittest test_tiny_gpt.py` runs about 30 tests on the CPU in a few minutes.
 
 ## A name for the model
 
@@ -2117,7 +2353,9 @@ file names. Old checkpoints keep working, because the loader recognises them by 
   zero-shot generalization?
 - Su et al. 2021. RoFormer: rotary position embedding. Zhang and Sennrich 2019. Root mean square layer
   normalization. Shazeer 2020. GLU variants improve Transformer. Ainslie et al. 2023. GQA.
-- Loshchilov and Hutter 2019. Decoupled weight decay regularization (AdamW).
+- Loshchilov and Hutter 2019. Decoupled weight decay regularization (AdamW). Jordan et al. 2024. Muon: an
+  optimizer for hidden layers in neural networks. Liu et al. 2025. Muon is scalable for LLM training.
+- Chen et al. 2016. Training deep nets with sublinear memory cost (activation checkpointing).
 - Hoffmann et al. 2022. Training compute-optimal large language models (Chinchilla).
 - Muennighoff et al. 2023. Scaling data-constrained language models.
 - Hägele et al. 2024. Scaling laws and compute-optimal training beyond fixed training durations (WSD).

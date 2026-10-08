@@ -6,7 +6,8 @@ r"""Set the fact benchmark's difficulty labels from how reference language model
 
 Reference models are small open models with the Llama design, the same as tinyGPT's
 (RoPE, RMSNorm, SwiGLU, grouped-query attention). They are downloaded once from Hugging
-Face and run by tinyGPT's own model code, so no extra packages are needed. Each model
+Face and run by tinyGPT's own model code; reading them needs only the huggingface_hub
+and tokenizers packages (pip install huggingface_hub "tokenizers>=0.15"). Each model
 answers every item the way tinyGPT does: the correct continuation must beat every
 distractor in log-probability per character. An item is then labelled
     easy    if at least 3/4 of the reference models answer it correctly,
@@ -22,6 +23,7 @@ import argparse
 import csv
 import datetime
 import hashlib
+import inspect
 import json
 import os
 import subprocess
@@ -189,12 +191,36 @@ def sanity_loss(model, tok, device):
 
 # ---------------------------------------------------------------------------
 def gpu_busy():
+    """True if another job holds GPU memory (a training run uses several GB, even
+    while it saves a checkpoint and the utilization drops) or keeps the GPU busy."""
     try:
-        out = subprocess.run(["nvidia-smi", "--query-gpu=utilization.gpu", "--format=csv,noheader,nounits"],
+        out = subprocess.run(["nvidia-smi", "--query-gpu=memory.used,utilization.gpu", "--format=csv,noheader,nounits"],
                              capture_output=True, text=True, timeout=15).stdout
-        return max(int(v) for v in out.split()) >= 20
+        rows = [[float(v) for v in line.split(",")] for line in out.strip().splitlines()]
+        return any(used > 2500 or util >= 20 for used, util in rows)
     except Exception:  # noqa: BLE001
         return False
+
+
+def model_code():
+    """Source of every model class in tiny_gpt (TinyGPT, its blocks, attention,
+    feed-forward, RotaryEmbedding, RMSNorm ...): a change there changes the scores."""
+    classes = [c for c in vars(tiny_gpt).values() if isinstance(c, type) and issubclass(c, torch.nn.Module)
+               and c.__module__ == tiny_gpt.__name__]
+    return "".join(inspect.getsource(c) for c in sorted(classes, key=lambda c: c.__name__))
+
+
+def check_packages():
+    """Reference models need two Hugging Face packages; say so before any download."""
+    missing = []
+    for module, package in (("huggingface_hub", "huggingface_hub"), ("tokenizers", "tokenizers>=0.15")):
+        try:
+            __import__(module)
+        except ImportError:
+            missing.append(package)
+    if missing:
+        raise SystemExit("calibrate_probes.py needs " + " and ".join(missing) + ": pip install "
+                         + " ".join(f'"{m}"' for m in missing))
 
 
 def lower_priority():
@@ -260,22 +286,33 @@ def main():
     print(f"{len(probes)} items from {args.probes}; {len(args.models)} reference models on {device}")
 
     per_model = {}
-    import inspect
     scoring = "".join(inspect.getsource(f) for f in (tiny_gpt.score_probes, tiny_gpt.shuffled_prompt, HFTokenizer,
-                                                    tinygpt_from_llama, interleave_rope_rows))
+                                                    tinygpt_from_llama, interleave_rope_rows)) + model_code()
     items_key = hashlib.sha256((json.dumps([[p["prompt"], p["answer"], p["distractors"]] for p in probes])
                                 + scoring).encode()).hexdigest()[:16]  # new items or new scoring code: rescore
     cache_dir = os.path.join(os.path.expanduser("~"), ".cache", "tinygpt_calibration")
+    def cache_path(repo):
+        return os.path.join(cache_dir, f"{repo.replace('/', '__')}_{items_key}{'_floor' if args.floor else ''}.json")
+
+    if not all(os.path.isfile(cache_path(repo)) for repo in args.models):
+        check_packages()
     for repo in args.models:
         started = datetime.datetime.now()
-        cache = os.path.join(cache_dir, f"{repo.replace('/', '__')}_{items_key}{'_floor' if args.floor else ''}.json")
+        cache = cache_path(repo)
         if os.path.isfile(cache):  # this model already scored exactly these items with this code
-            per_model[repo] = json.load(open(cache, encoding="utf-8"))
-            m = per_model[repo]
-            for result, probe in zip(m["results"], probes):  # labels may have been renamed since
-                result["category"], result["difficulty"] = probe["category"], probe["difficulty"]
-            print(f"{repo}: {m['params'] / 1e6:,.0f}M parameters | accuracy {m['acc']:.1%} (cached)")
-            continue
+            try:
+                with open(cache, encoding="utf-8") as handle:
+                    m = json.load(handle)
+                if len(m["results"]) != len(probes):
+                    raise ValueError("wrong number of items")
+                for result, probe in zip(m["results"], probes):  # labels may have been renamed since
+                    result["category"], result["difficulty"] = probe["category"], probe["difficulty"]
+                per_model[repo] = m
+                print(f"{repo}: {m['params'] / 1e6:,.0f}M parameters | accuracy {m['acc']:.1%} (cached)")
+                continue
+            except (OSError, ValueError, KeyError, TypeError) as exc:
+                print(f"{repo}: the cached scores in {cache} are unreadable ({exc}); scoring again")
+                check_packages()
         model, tok, cfg = load_llama(repo)
         n_params = sum(p.numel() for p in model.parameters())
         if device.type == "cpu":
@@ -307,8 +344,9 @@ def main():
               + (f" | floor {floor:.1%}" if floor is not None else "") + f" | {secs:.0f} s")
         per_model[repo] = {"params": n_params, "acc": acc, "floor": floor, "results": results, "loss": loss}
         os.makedirs(cache_dir, exist_ok=True)
-        with open(cache, "w", encoding="utf-8") as handle:
+        with open(cache + ".tmp", "w", encoding="utf-8") as handle:  # then renamed: a cut-off write leaves no cache
             json.dump(per_model[repo], handle)
+        os.replace(cache + ".tmp", cache)
         if not args.no_record:
             tiny_gpt.record_experiment(HERE, {
                 "event": "reference benchmark", "name": repo, "params": n_params, "d_model": cfg.d_model,

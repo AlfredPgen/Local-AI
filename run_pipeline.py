@@ -50,9 +50,16 @@ def build_command():
     pes2o = os.path.join(DATA, "web", "pes2o", "data", "v2", "*.json.gz")
     if glob.glob(pes2o):
         cmd += ["--jsonl", pes2o, "--jsonl-name", "pes2o"]
-    return cmd + ["--include-keywords", KEYWORDS, "--keyword-min-distinct", "3",
-                  "--tokenizer-weights", "books=3,articles=3", "--near-dup", "drop",
-                  "--near-dup-max-docs", "3000000"] + (["--superbpe"] if SUPERBPE else [])
+    # books and articles count 3x when the tokenizer is trained; only those sub-folders that exist (data_prep
+    # refuses a weight for a source it does not read)
+    try:
+        folders = {n.lower() for n in os.listdir(DATA) if os.path.isdir(os.path.join(DATA, n))}
+    except OSError:
+        folders = set()
+    weights = ",".join(f"{n}=3" for n in ("books", "articles") if n in folders)
+    return cmd + ["--include-keywords", KEYWORDS, "--keyword-min-distinct", "3"] + (
+        ["--tokenizer-weights", weights] if weights else []) + [
+        "--near-dup", "drop", "--near-dup-max-docs", "3000000"] + (["--superbpe"] if SUPERBPE else [])
 
 
 def train_command(hours, name, plan=False):
@@ -88,9 +95,16 @@ def step_build():
     return run(build_command())
 
 
+GPU_BUSY = ("The GPU is busy (another training run?). Two GPU jobs at once can crash the graphics driver; "
+            "wait for the other job or stop it first.")
+
+
 def step_plan(hours, name):
     if not dataset_ready():
         print("Build the dataset first: python run_pipeline.py build")
+        return 1
+    if gpu_busy():  # the planner times training steps on the GPU; next to another job that is risky and misleading
+        print(GPU_BUSY + " (The plan measures training speed on the GPU.)")
         return 1
     return run(train_command(hours, name, plan=True))
 
@@ -100,8 +114,7 @@ def step_train(hours, name):
         print("Build the dataset first: python run_pipeline.py build")
         return 1
     if gpu_busy():
-        print("The GPU is busy (another training run?). Two GPU jobs at once can crash the graphics driver; "
-              "wait for the other job or stop it first.")
+        print(GPU_BUSY)
         return 1
     if os.path.exists(os.path.join(HERE, f"{name}.pt")) or os.path.exists(os.path.join(HERE, f"{name}_best.pt")):
         print(f"A run called '{name}' already exists. Continue it with: python run_pipeline.py resume --name {name}\n"
@@ -125,10 +138,12 @@ def step_continue(hours, name, new_dataset):
         cmd[cmd.index("--out") + 1] = new_dataset
         print(f"Building {new_dataset} from all of {DATA} (old and new text, so the model does not forget), with the "
               f"tokenizer and the train/validation split of {DATASET}.")
+        if "--superbpe" in cmd:  # the reused tokenizer already has its SuperBPE pieces; data_prep refuses both
+            cmd.remove("--superbpe")
         if run(cmd + ["--tokenizer-from", DATASET, "--keep-split-from", DATASET]):
             return 1
     if gpu_busy():
-        print("The GPU is busy (another training run?); wait for it or stop it first.")
+        print(GPU_BUSY)
         return 1
     return run([sys.executable, "tiny_gpt.py", "--dataset", new_dataset, "--init-from", base, "--name",
                 f"{name}_continued", "--time-budget-hours", str(hours), "--optimizer", OPTIMIZER])
@@ -140,11 +155,14 @@ def step_posttrain(name):
     if not os.path.isfile(base):
         print(f"No pre-trained model {base}: train one first (python run_pipeline.py train --hours N).")
         return 1
-    if not os.path.isfile(os.path.join(HERE, "posttrain_data", "sft.jsonl")):
+    data = os.path.join(HERE, "posttrain_data")
+    # sources.md is written last: without it (or any other file) the data build stopped partway
+    if not all(os.path.isfile(os.path.join(data, f)) for f in ("sft.jsonl", "dpo.jsonl", "eval_mcq.jsonl",
+                                                                "sources.md")):
         if run([sys.executable, "posttrain.py", "data"]):
             return 1
     if gpu_busy():
-        print("The GPU is busy (another training run?); wait for it or stop it first.")
+        print(GPU_BUSY)
         return 1
     return run([sys.executable, "posttrain.py", "run", "--base", base, "--name", name])
 
@@ -171,6 +189,9 @@ def main():
     if args.step == "train":
         return step_train(args.hours, args.name)
     if args.step == "resume":
+        if gpu_busy():  # perhaps the run itself is still training: a second copy would overwrite its checkpoints
+            print(GPU_BUSY + f" If '{args.name}' is still training, it does not need resuming.")
+            return 1
         return run([sys.executable, "tiny_gpt.py", "--name", args.name, "--resume"])
     # all
     if step_build() or step_plan(args.hours, args.name):

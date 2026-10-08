@@ -292,18 +292,26 @@ def evaluate(checkpoints, args):
     import finetune
     import tiny_gpt
     device = tiny_gpt.select_device(args.device)
-    amp_dtype, amp_name, _ = tiny_gpt.choose_precision(device, "auto")
+    amp_dtype, amp_name, _ = tiny_gpt.choose_precision(device, "auto", training=False)  # scoring only
     evals = [json.loads(line) for line in open(os.path.join(args.data_dir, "eval_mcq.jsonl"), encoding="utf-8")]
     mcq = [{"category": r["category"].split(":")[0], "difficulty": "unrated",
             "prompt": finetune.TEMPLATE.format(prompt=r["prompt"]), "answer": r["answer"],
             "distractors": r["distractors"]} for r in evals]
+    # The floor shuffles the question's words only, then puts them back in the template: shuffling the whole
+    # prompt would scatter '### Question:' / '### Answer:' too, an unfamiliar context for the fine-tuned models.
+    # The same word orders as the fact benchmark's floor (shuffled_prompt of the question).
+    floor_sets = [[dict(p, prompt=finetune.TEMPLATE.format(prompt=tiny_gpt.shuffled_prompt(r["prompt"], v)))
+                   for p, r in zip(mcq, evals)] for v in range(1, tiny_gpt.FLOOR_SHUFFLES + 1)]
     facts = tiny_gpt.read_probes(args.probes) if os.path.isfile(args.probes) else []
     rows, answers = [], {}
     for path in checkpoints:
         t0 = time.time()
         model, tok, cfg, _ = tiny_gpt.load_for_inference(path, device, args.trust_checkpoint)
         model.eval()
-        acc, results = tiny_gpt.score_probes(model, tok, mcq, device, amp_dtype)
+        acc, results = tiny_gpt.score_probes(model, tok, mcq, device, amp_dtype, floor=False)
+        shuffled = [tiny_gpt.score_probes(model, tok, fs, device, amp_dtype, floor=False)[1] for fs in floor_sets]
+        for k, row in enumerate(results):
+            row["floor_correct"] = sum(s[k]["correct"] for s in shuffled) / len(shuffled)
         floor = tiny_gpt.probe_floor(results)
         by_cat = {k: v["accuracy"] for k, v in tiny_gpt.probe_summary(results).items()}
         fact_acc = fact_floor = None
@@ -362,16 +370,17 @@ def run(args):
     if args.device != "cpu" and gpu_busy():
         raise SystemExit("The GPU is busy (another training run?). Two GPU jobs at once can crash the graphics "
                          "driver; wait for the other job or stop it first.")
-    common = ["--out-dir", args.out_dir, "--device", args.device] + (["--overwrite"] if args.overwrite else []) \
-        + (["--trust-checkpoint"] if args.trust_checkpoint else [])
-    sft_path = os.path.join(args.out_dir, args.name + "_sft.pt")
-    dpo_path = os.path.join(args.out_dir, args.name + "_dpo.pt")
-    finetune.main(["sft", "--base", args.base, "--data", os.path.join(args.data_dir, "sft.jsonl"),
-                   "--name", args.name + "_sft", "--epochs", str(args.sft_epochs), "--batch", str(args.batch),
-                   "--val-fraction", "0.02"] + common)
-    finetune.main(["dpo", "--base", sft_path, "--data", os.path.join(args.data_dir, "dpo.jsonl"),
-                   "--name", args.name + "_dpo", "--epochs", str(args.dpo_epochs), "--batch", str(args.batch),
-                   "--val-fraction", "0.02"] + common)
+    # --force: the GPU was checked above; this process's own cached memory from SFT must not count as busy for DPO
+    common = ["--out-dir", args.out_dir, "--device", args.device, "--force"] \
+        + (["--overwrite"] if args.overwrite else []) + (["--trust-checkpoint"] if args.trust_checkpoint else [])
+    # finetune returns the file it wrote: a locked target is saved under another name, and DPO and the
+    # evaluation must use that new file, not the old one
+    sft_path = finetune.main(["sft", "--base", args.base, "--data", os.path.join(args.data_dir, "sft.jsonl"),
+                              "--name", args.name + "_sft", "--epochs", str(args.sft_epochs), "--batch",
+                              str(args.batch), "--val-fraction", "0.02"] + common)
+    dpo_path = finetune.main(["dpo", "--base", sft_path, "--data", os.path.join(args.data_dir, "dpo.jsonl"),
+                              "--name", args.name + "_dpo", "--epochs", str(args.dpo_epochs), "--batch",
+                              str(args.batch), "--val-fraction", "0.02"] + common)
     evaluate([args.base, sft_path, dpo_path], args)
 
 
@@ -395,6 +404,7 @@ def parse_args(argv=None):
     r.add_argument("--overwrite", action="store_true")
     e = sub.add_parser("eval", help="evaluate checkpoints")
     e.add_argument("checkpoints", nargs="+")
+    e.add_argument("--force", action="store_true", help="use the GPU even if another job seems to be using it")
     for s in (d, r, e):
         s.add_argument("--data-dir", default=DEFAULT_DATA)
         s.add_argument("--seed", type=int, default=0)
@@ -418,6 +428,9 @@ def main(argv=None):
     elif args.cmd == "run":
         run(args)
     else:
+        if args.device != "cpu" and not args.force and gpu_busy():
+            raise SystemExit("The GPU is busy (another training run?). Two GPU jobs at once can crash the graphics "
+                             "driver; use --device cpu, wait for the other job, or pass --force.")
         evaluate(args.checkpoints, args)
 
 
