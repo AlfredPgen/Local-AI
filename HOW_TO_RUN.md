@@ -271,6 +271,10 @@ first data splits new-field words into more pieces (slightly less efficient, sti
 
 ```
 python view_pt.py tinyGPT_best.pt --plot                     # dashboard picture: tinyGPT_best_dashboard.png
+python view_pt.py tinyGPT_best.pt --plot --dpi 300           # the same, sharper (7,800 x 6,900 px)
+python view_pt.py tinyGPT_best.pt --plot --pca-labels 50 --sim-tokens 100
+                                                             # how many tokens the two embedding panels show
+                                                             # (these are the defaults)
 python tiny_gpt.py --benchmark                               # 336 biology fact questions, per category
 python compare_models.py A_best.pt B_best.pt --device cpu    # is A really better than B?
 ```

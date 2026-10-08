@@ -75,6 +75,10 @@ def parse_args():
                    help="do not commit and push the dashboard to GitHub (done automatically for checkpoints in "
                         "this repository's folder)")
     p.add_argument("--dpi", type=int, default=150)
+    p.add_argument("--pca-labels", type=int, default=50,
+                   help="most frequent tokens labelled in the 'Token embeddings (PCA)' panel")
+    p.add_argument("--sim-tokens", type=int, default=100,
+                   help="most frequent word tokens in the 'Token similarity (clustered)' panel")
     p.add_argument("--dataset", help="dataset folder for forward-pass panels (default: the one in the checkpoint)")
     p.add_argument("--eval-text", help="plain-text file for forward-pass panels when no dataset is available")
     p.add_argument("--probes", default=os.path.join(HERE, "probes_biology.tsv"), help="cloze fact probes TSV")
@@ -88,6 +92,10 @@ def parse_args():
         p.error(f"checkpoint does not exist (or is not an --export folder): {args.file}")
     if not 50 <= args.dpi <= 600:
         p.error("--dpi must be between 50 and 600")
+    if not 0 <= args.pca_labels <= 300:
+        p.error("--pca-labels must be between 0 and 300")
+    if not 4 <= args.sim_tokens <= 300:
+        p.error("--sim-tokens must be between 4 and 300")
     for name in ("dataset", "eval_text", "history_log"):
         value = getattr(args, name)
         if value and not os.path.exists(value):
@@ -589,8 +597,9 @@ def create_dashboard(ck, args):
         ("Validation perplexity", lambda ax: panel_ppl(ax, history, ck)),
         ("Learning rate", lambda ax: panel_lr(ax, history, ck)),
         ("How opinionated the model is", lambda ax: panel_confidence(ax, history, ck)),
-        ("Token embeddings (PCA)", lambda ax: panel_pca(ax, ck, pieces, classes, fstats)),
-        ("Token similarity (clustered)", lambda ax: panel_similarity(ax, fig, ck, pieces, classes, fstats, div)),
+        ("Token embeddings (PCA)", lambda ax: panel_pca(ax, ck, pieces, classes, fstats, args.pca_labels)),
+        ("Token similarity (clustered)",
+         lambda ax: panel_similarity(ax, fig, ck, pieces, classes, fstats, div, args.sim_tokens)),
         ("Token embedding norms", lambda ax: panel_norms(ax, ck, classes)),
         ("Output preference", lambda ax: panel_preference(ax, ck, pieces, classes, fstats, fnote)),
         ("Weight scale per block", lambda ax: panel_components(ax, fig, ck, seq)),
@@ -850,7 +859,7 @@ def finalize_legends(fig):
     _LEGENDS.clear()
 
 
-def panel_pca(ax, ck, pieces, classes, fstats):
+def panel_pca(ax, ck, pieces, classes, fstats, n_labels=50):
     title = "Token embeddings (PCA)"
     if ck.embedding is None or classes is None:
         return message(ax, "no token embedding or tokenizer in this file", title)
@@ -868,20 +877,22 @@ def panel_pca(ax, ck, pieces, classes, fstats):
         ax.scatter(coords[idx, 0], coords[idx, 1], s=9, marker=MARKERS[k] if k < len(MARKERS) else ".",
                    color=color, alpha=0.65, linewidths=0, label=f"{cls} ({len(idx):,})")
         counts[cls] = len(idx)
-    top = _token_order(ck, classes, fstats, {"word start", "word piece", "number", "punctuation"})[:40]
-    place_labels(ax, [coords[i] for i in top], [label_text(pieces[i]) for i in top], max_labels=22)
+    # candidates beyond n_labels, because labels that would overlap one already placed are skipped
+    top = _token_order(ck, classes, fstats, {"word start", "word piece", "number", "punctuation"})[:3 * n_labels + 40]
+    shown = place_labels(ax, [coords[i] for i in top], [label_text(pieces[i]) for i in top],
+                         fontsize=6.5 if n_labels <= 25 else 5.5, max_labels=n_labels) if n_labels else 0
     ax.set_xlabel(f"PC 1 ({var[0]:.1%} of variance)")
     ax.set_ylabel(f"PC 2 ({var[1]:.1%} of variance)")
     place_legend(ax, markerscale=1.6, fontsize=6.5)
-    titled(ax, title, "one dot per token; \u2581 marks a word start")
+    titled(ax, title, f"one dot per token; {shown} frequent tokens labelled; \u2581 marks a word start")
 
 
-def panel_similarity(ax, fig, ck, pieces, classes, fstats, cmap):
+def panel_similarity(ax, fig, ck, pieces, classes, fstats, cmap, n_tokens=100):
     title = "Token similarity (clustered)"
     if ck.embedding is None or classes is None:
         return message(ax, "no token embedding or tokenizer in this file", title)
     ids = [i for i in _token_order(ck, classes, fstats, {"word start", "word piece"})
-           if len(pieces[i].replace("\u2581", "")) >= 3][:50]
+           if len(pieces[i].replace("\u2581", "")) >= 3][:n_tokens]
     if len(ids) < 4:
         return message(ax, "fewer than 4 word tokens", title)
     e = F.normalize(ck.embedding.float()[ids], dim=1)
@@ -897,8 +908,9 @@ def panel_similarity(ax, fig, ck, pieces, classes, fstats, cmap):
     sims = sims[np.ix_(order, order)]
     labels = [label_text(pieces[ids[k]], 10) for k in order]
     heatmap(ax, fig, sims, labels, labels, cmap, "cosine similarity", -1, 1, annotate=False)
-    ax.set_xticklabels(labels, fontsize=4.5, rotation=90)
-    ax.set_yticklabels(labels, fontsize=4.5)
+    tick_size = min(4.5, 300 / len(ids))   # 4.5 pt up to ~65 tokens, then smaller so 100 rows still fit the panel
+    ax.set_xticklabels(labels, fontsize=tick_size, rotation=90)
+    ax.set_yticklabels(labels, fontsize=tick_size)
     ax.set_xlabel("token (same clustered order as rows)")
     ax.set_ylabel("token")
     titled(ax, title, f"{len(ids)} most frequent word tokens, clustered by cosine similarity")

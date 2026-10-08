@@ -1175,6 +1175,13 @@ Its panels:
 
 Panels that need the model to run are labelled as inference-only. `--html` writes an interactive embedding explorer.
 
+**How many tokens the embedding panels show:**
+
+- `--pca-labels N` (default 50) labels the N most frequent tokens on the embedding map. A label that would overlap
+  one already placed is skipped, so the subtitle states how many were actually drawn.
+- `--sim-tokens N` (default 100) uses the N most frequent word tokens in the similarity heat map.
+- With 100 words the axis labels are small; `--dpi 300` gives a 7,800 × 6,900 px picture in which they are readable.
+
 ## Towards standard LLM benchmarks, with a biology bias
 
 The next benchmark step is to score tinyGPT and any open model on the same public tests the field reports, using the
