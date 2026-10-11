@@ -379,7 +379,7 @@ def strip_page_furniture(pages, edge=4):
         for i in idx:
             raw = lines[i].strip()
             plain = re.sub(r"[*_`#>]", "", raw).strip()
-            if plain.isdigit() and len(plain) <= 4:
+            if plain.isascii() and plain.isdigit() and len(plain) <= 4:  # not '⑦' or '¹': int() fails
                 bare.append((page, int(plain)))
                 continue
             label = _page_label(plain)
@@ -426,7 +426,7 @@ def strip_page_furniture(pages, edge=4):
             if raw.startswith(("|", "<!--")) or len(raw) > 150:
                 continue
             plain = re.sub(r"[*_`#>]", "", raw).strip()
-            if plain.isdigit() and len(plain) <= 4:
+            if plain.isascii() and plain.isdigit() and len(plain) <= 4:  # not '⑦' or '¹': int() fails
                 if int(plain) - page in page_offsets:
                     drop.add(i)
                 continue
