@@ -61,15 +61,18 @@ tRNA
 # population and evolutionary genetics
 adaptive radiation
 admixture
+=aDNA
 allele frequenc*
 allele frequency spectrum
 ancestral recombination graph*
 ancient DNA
+archaic admixture
 assortative mating
 background selection
 balancing selection
 cline*
 coalescen*
+coalescent theory
 coevolution
 convergent evolution
 demographic history
@@ -83,6 +86,7 @@ effective population size
 F-statistic*
 fitness landscape*
 fixation index
+fixation probability
 founder effect*
 =FST
 gene duplication
@@ -98,6 +102,7 @@ homozyg*
 horizontal gene transfer
 human evolution
 hybrid zone*
+=IBD segment*
 identical by descent
 identity by descent
 inbreeding
@@ -108,6 +113,7 @@ kinship
 maximum parsimony
 metapopulation*
 molecular evolution
+Moran model
 most recent common ancestor
 mutation load
 mutation rate*
@@ -147,45 +153,81 @@ whole-genome duplication
 Wright-Fisher
 
 # quantitative and statistical genetics
+=ACAT
 additive effect*
 additive genetic variance
+admixture mapping
 adoption stud*
 association mapping
 biobank*
 BLUP
+=BOLT-LMM
 breeder's equation
 breeding value*
+burden test*
+=caQTL
+case-control stud*
 causal variant*
+=COJO
 colocalisation
 colocalization
+conditional analysis
 credible set*
+cross-ancestry
+cross-trait
 dominance deviation*
 dominance variance
+dynastic effect*
 epistatic
+exome-wide
+expression quantitative trait
 family stud*
 fine-mapping
+fine-mapping resolution
+gene-based test*
 gene-environment interaction*
 genetic architecture
 genetic correlation*
 genetic gain
+genetic nurture
+genetic relationship matrix
+genetic risk score*
+genome-wide significance
+genomic control
+genomic inflation
 genomic prediction
+genomic relatedness matrix
 genomic selection
 genotype imputation
 genotype-by-environment
 genotyping array*
+=GRM
 haplotype phasing
+heritability enrichment
 heterosis
+horizontal pleiotropy
 imputation
 inbreeding depression
+indirect genetic effect*
 infinitesimal model
+=LD
 LD score*
+lead variant*
 liability threshold
 linkage analysis
 linkage mapping
+=LMM
+local ancestry
 Mendelian randomisation
 Mendelian randomization
 missing heritability
+mixed-model association
+=mQTL
+=MR-Egger
+=MR-PRESSO
+multi-ancestry
 norm of reaction
+partitioned heritability
 phenome-wide
 phenotypic plasticity
 =PheWAS
@@ -194,21 +236,45 @@ polygenic risk score*
 polygenic score*
 polygenicity
 posterior inclusion probabilit*
+=pQTL
+=pQTLs
 Price equation
+principal component* of ancestry
+protein quantitative trait
+proteome-wide association
+=PRS-CSx
+=PWAS
 quantitative genetics
+rare variant association
 reaction norm*
 reference panel*
 =REML
 response to selection
 restricted maximum likelihood
 selection differential
+sibling design*
+=SKAT
+=SKAT-O
 SNP array*
 SNP heritability
+=sQTL
+statistical fine-mapping
 statistical genetics
+stratified LD score regression
 summary statistics
+summary-level data
+trans-ancestry
 transcriptome-wide association
 =TWAS
 twin stud*
+two-sample Mendelian randomisation
+two-sample Mendelian randomization
+vertical pleiotropy
+weak instrument*
+weighted median estimator
+whole-exome sequencing
+winner's curse
+within-family
 
 # evolution, speciation and phylogenetics
 allopatric
@@ -342,10 +408,13 @@ whole-genome sequencing
 
 # genotyping, imputation and sequencing
 ANNOVAR
+=ATAC-seq
 base calling
 base quality
 basecalling
+bisulfite sequencing
 =CADD
+=ChIP-seq
 coverage depth
 de novo assembly
 genome assembly
@@ -358,6 +427,8 @@ GRCh38
 heterozygosity rate
 =hg19
 =hg38
+=Hi-C
+HiFi reads
 high-coverage sequencing
 imputation accuracy
 imputation quality
@@ -366,28 +437,38 @@ INFO score*
 insert size
 k-mer*
 liftOver
+long-read RNA
 low-coverage sequencing
 low-pass sequencing
 =MAF
 mapping quality
+methylation array*
 minor allele frequenc*
+nanopore sequencing
 paired-end
+pangenome*
 PCR duplicate*
 Phred
 PolyPhen
 read alignment
 read depth
 reference genome*
+=RNA-seq
 sample QC
 sequencing coverage
 sequencing depth
 short-read
+short-read sequencing
 SNP call rate*
+spatial transcriptomics
+=T2T
+telomere-to-telomere
 variant effect predictor
 variant QC
 =VEP
 
 # single-cell genomics
+=10x Genomics
 ambient RNA
 batch correction
 batch effect*
@@ -396,39 +477,58 @@ cell clustering
 Cell Ranger
 cell state*
 cell type annotation
+cell-cell communication
+cell-type deconvolution
 cell-type-specific
 CellRanger
+=CITE-seq
 CITE-seq
+=CRISPR screen*
+doublet detection
 doublet*
 droplet-based
+=Harmony integration
 highly variable gene*
+Human Cell Atlas
 marker gene*
+=MERFISH
 multiome
 Perturb-seq
 pseudobulk
 pseudotime
 RNA velocity
+=sc-eQTL
 Scanpy
+=scATAC-seq
 scATAC-seq
+=scRNA-seq
+=Seurat
 Seurat object*
 Seurat package
+single-cell eQTL
+single-cell RNA sequencing
 single-nucleus
+=snRNA-seq
 snRNA-seq
+spatial omics
 trajectory inference
 =UMI
 =UMIs
 unique molecular identifier*
+=Visium
 
 # genomics software and file formats
 =BAM
 =BCF
 bcftools
+=Beagle
 bed file*
 bedtools
 =BGEN
 bgzip
 bim file*
 Bioconductor
+=Biopython
 =BLAST
 bowtie2
 =BWA
@@ -436,25 +536,39 @@ bowtie2
 cutadapt
 DESeq2
 edgeR
+=Ensembl VEP
 fam file*
 =FASTA
 =FASTQ
 FastQC
 featureCounts
+=FUSION
 =GATK
+=GCTB
+=GFF
+=GTF
 gzip
+=Hail
 HISAT2
+=HTSlib
 kallisto
 limma
+=METAL
+=Michigan Imputation Server
+=minimap2
 MultiQC
 Nextflow
 PLINK
 PLINK2
+=PRS-CS
 qctool
+=S-PrediXcan
 SAM file*
 samtools
 Snakemake
+=SnpEff
 tabix
+=TOPMed imputation
 Trimmomatic
 =VCF
 =VCFs
@@ -1694,15 +1808,21 @@ virus*
 anatom*
 bacteri*
 biological
+biological pathway*
 biologist*
 biology
+biophysics
 botan*
+computational biology
 ecolog*
+epigenomics
+homeostasis
 life science*
 microbiolog*
 neuron*
 neurosci*
 organism*
+pathophysiology
 physiolog*
 species
 virolog*
@@ -2122,22 +2242,40 @@ Wuchereria
 # diseases: cancer
 adenocarcinoma*
 angiosarcoma
+bladder cancer
+breast cancer
+cancer genomics
 cancer*
 carcinoma*
+cervical cancer
+checkpoint inhibitor*
 chemoresistance
 chordoma
+circulating tumor DNA
+circulating tumour DNA
+clonal haematopoiesis
+clonal hematopoiesis
+colorectal cancer
 craniopharyngioma
+=ctDNA
 dysplasia
+endometrial cancer
 ependymoma
+esophageal cancer
+gastric cancer
 glioblastoma*
 glioma*
+head and neck cancer
 hepatocellular
+hepatocellular carcinoma
 hyperplasia
 insulinoma
 leiomyosarcoma
 leukaemia*
 leukemia*
 liposarcoma
+liquid biopsy
+lung cancer
 lymphoma*
 melanoma*
 metaplasia
@@ -2148,47 +2286,74 @@ nephroblastoma
 neuroblastoma*
 neuroendocrine
 neurofibroma
+oesophageal cancer
 oligodendroglioma
+ovarian cancer
+pancreatic cancer
 paraganglioma
 pheochromocytoma
 polyposis
+prostate cancer
+renal cell carcinoma
 sarcoma*
 schwannoma
 seminoma
 squamous cell
 thymoma
+thyroid cancer
+tumor heterogeneity
+tumor microenvironment
+tumor suppressor*
+tumour heterogeneity
+tumour microenvironment
+tumour suppressor*
 Wilms tumor
 Wilms tumour
 
 # diseases: neurological and psychiatric
 =ADHD
+=ALS
+Alzheimer disease
+Alzheimer's disease
 Alzheimer*
 amyotrophic lateral sclerosis
 anorexia nervosa
 anxiety disorder*
 attention deficit
 autism
+autism spectrum disorder
 autistic
 bipolar disorder
 Creutzfeldt-Jakob
 dementia*
+depression
 depressive disorder*
 epilep*
+frontotemporal dementia
 haemorrhagic stroke
 hemorrhagic stroke
 Huntington disease
 Huntington's disease
+intellectual disability
 ischaemic stroke
 ischemic stroke
+Lewy body
+major depressive disorder
 migraine*
 multiple sclerosis
 neurodegenerat*
 neurodevelopmental
+neurodevelopmental disorder*
 obsessive-compulsive
+Parkinson disease
+Parkinson's disease
 Parkinson*
 post-traumatic stress
 prion*
+=PTSD
 schizophreni*
+stroke
+traumatic brain injury
 
 # diseases: cardiovascular, metabolic and organ
 anaemia
@@ -2293,26 +2458,37 @@ Wilson disease
 
 # diseases: infectious
 =AIDS
+=AMR
+aspergillosis
+Chagas disease
 cholera
 coronavirus*
 COVID
 dengue
 Ebola
+hepatitis B
+hepatitis C
 herpes
 =HIV
 =HPV
 influenza
 leprosy
+long COVID
 malaria
 measles
 =MRSA
+nosocomial infection*
+outbreak*
 polio*
 rabies
+=RSV
 SARS-CoV-2
 smallpox
 syphilis
 tuberculosis
+vaccine efficacy
 Zika
+zoonos*
 
 # diseases: other
 achondroplasia
@@ -2506,9 +2682,11 @@ cardiovascular
 ChEMBL
 China Kadoorie
 clinical
+clinical decision support
 clinical trial*
 ClinVar
 cohort stud*
+companion diagnostic*
 dbSNP
 diabetes
 diagnos*
@@ -2516,6 +2694,7 @@ disease*
 drug design
 drug development
 drug discovery
+drug repositioning
 drug target*
 DrugBank
 Eli Lilly
@@ -2540,20 +2719,28 @@ OMIM
 oncolog*
 Open Targets
 pathogen*
+personalised medicine
+personalized medicine
 Pfizer
 pharmaceutical*
 pharmacodynamic*
 pharmacokinetic*
 pharmacolog*
+phase I trial*
+phase II trial*
+phase III trial*
+polygenic risk prediction
 precision medicine
 Protein Data Bank
 public health
 PubMed
 Reactome
 Regeneron
+risk prediction model*
 Roche
 Sanofi
 Takeda
+target validation
 therapeutic*
 toxicolog*
 tumor*
@@ -2739,13 +2926,17 @@ blood pressure
 body mass index
 case fatality
 case series
+case-cohort
 case-control
+causal diagram*
 cohort studies
 cohort study
 collider bias
 competing risk*
 contact tracing
 Cox model
+Cox proportional hazards
+cross-sectional stud*
 cross-sectional study
 cumulative incidence
 =DALY
@@ -2754,6 +2945,9 @@ deprivation index
 difference-in-differences
 ecological study
 effect modification
+=EHR
+=EHRs
+electronic health record*
 epidemic curve
 excess mortality
 forest plot*
@@ -2761,15 +2955,18 @@ funnel plot*
 generalised estimating equation*
 generalized estimating equation*
 health inequalit*
+immortal time bias
 incidence rate*
 infection fatality
 information bias
 interaction term*
 interrupted time series
 inverse probability weighting
+=IPW
 life expectancy
 log-rank test
 matched controls
+meta-analysis
 meta-regression
 multilevel model*
 natural experiment*
@@ -2778,6 +2975,7 @@ observational studies
 observational study
 outcome measure*
 person-years
+pharmacoepidemiology
 pharmacovigilance
 physical activity
 population attributable fraction
@@ -2787,6 +2985,9 @@ prospective cohort
 publication bias
 =QALY
 =QALYs
+=RCT
+=RCTs
+real-world evidence
 recall bias
 regression discontinuity
 residual confounding
@@ -3464,9 +3665,12 @@ autoregressive
 =BIC
 biostatistic*
 Bonferroni
+bootstrap
 causal inference
 cluster analysis
+compositional data
 confidence interval*
+conformal prediction
 confounder*
 confounding
 conjugate prior*
@@ -3478,24 +3682,32 @@ Cox regression
 Cramer-Rao
 credible interval*
 cross-validation
+cure model*
 density estimation
 directed acyclic graph*
 econometric*
 effect size*
 elastic net
+=EM algorithm
 EM algorithm
 empirical Bayes
 estimator*
 expectation maximisation
 expectation-maximization
+extreme value
 F-test
 factor analysis
 false discovery rate
+=FDR
 Fisher information
 Fisher's exact test
 fixed effect*
+fixed effects
 frequentist
+functional data analysis
+generalised additive model*
 generalised linear model*
+generalized additive model*
 generalized linear model*
 Gibbs sampl*
 Hamiltonian Monte Carlo
@@ -3504,21 +3716,25 @@ heteroscedastic*
 hidden Markov model*
 hierarchical clustering
 hierarchical model*
+high-dimensional
 homoscedastic*
 hypothesis test*
 information criterion
 instrumental variable*
 jackknife
+James-Stein
 k-means
 Kalman filter*
 Kaplan-Meier
 kernel density
 Kolmogorov-Smirnov
+kriging
 Kruskal-Wallis
 lasso
 latent variable*
 least squares
 likelihood
+likelihood ratio test*
 likelihood ratio*
 linear mixed model*
 linear model*
@@ -3529,13 +3745,17 @@ Markov chain Monte Carlo
 maximum a posteriori
 maximum likelihood
 MCMC
+measurement error
 meta-analys*
 Metropolis-Hastings
+missing data
 mixed model*
 mixed-effects
+mixed-effects model*
 mixture model*
 multicollinearity
 multiple comparison*
+multiple imputation
 multiple testing
 multivariate
 non-parametric
@@ -3545,24 +3765,38 @@ ordinary least squares
 p-value*
 path analysis
 Pearson correlation
+penalised regression
+penalized regression
 permutation test*
 Poisson regression
 posterior probabilit*
 power analysis
+power calculation
 principal component analysis
 prior probabilit*
 propensity score*
 proportional hazards
 psychometric*
+q-value*
+quantile regression
 random effect*
+random effects
 regression
 regularisation
 regularization
 relative risk
 resampling
 ridge regression
+robust regression
+sample size calculation
 sample size calculation*
+score test*
+semiparametric
+sensitivity analysis
 shrinkage estimat*
+shrinkage estimator*
+sparse estimation
+spatial statistics
 Spearman
 spline*
 standard deviation
@@ -3575,6 +3809,7 @@ structural equation model*
 Student's t
 sufficient statistic*
 survival analysis
+survival model*
 systematic review*
 t-test*
 time series
@@ -3583,6 +3818,7 @@ type II error*
 univariate
 variance
 variational inference
+Wald test*
 Wilcoxon
 
 # Bayesian statistics
@@ -3593,8 +3829,14 @@ Bayesian hierarchical
 Bayesian inference
 Bayesian model averaging
 Bayesian network*
+Bayesian nonparametric*
 beta-binomial
 brms
+Dirichlet process
+=ELBO
+evidence lower bound
+expectation propagation
+Gaussian process*
 hierarchical Bayesian
 horseshoe prior
 importance sampling
@@ -3603,6 +3845,7 @@ informative prior*
 =JAGS
 likelihood function*
 marginal likelihood
+No-U-Turn sampler
 non-informative prior*
 particle filter*
 posterior distribution
@@ -3611,26 +3854,52 @@ posterior mean
 posterior predictive
 prior distribution
 prior distribution*
+prior elicitation
 PyMC
+sequential Monte Carlo
 spike-and-slab
 Stan model*
 variational Bayes
 WinBUGS
 
 # machine learning
+activation checkpointing
+active learning
+Adam optimiser
+Adam optimizer
+=AdamW
+anomaly detection
 artificial intelligence
 attention mechanism
 autoencoder*
 backpropagation
+batch normalisation
+batch normalization
 Bayesian optimisation
 Bayesian optimization
 =BERT
+byte-pair encoding
+=CNN
+=CNNs
+contrastive learning
+convolutional neural network*
+cross-entropy loss
 =CUDA
 deep learning
+denoising diffusion
 diffusion model*
 dimensionality reduction
+direct preference optimisation
+direct preference optimization
+dropout regularisation
+dropout regularization
 embedding*
+emergent abilit*
+explainable AI
 federated learning
+few-shot
+fine-tuning
+foundation model*
 =GAN
 =GANs
 generative adversarial
@@ -3638,41 +3907,87 @@ generative adversarial
 =GPU
 =GPUs
 gradient boosting
+gradient checkpointing
+graph convolutional
 graph neural network*
 hyperparameter*
+in-context learning
+instruction tuning
+interpretability
+knowledge distillation
 language model*
 large language model*
+layer normalisation
+layer normalization
+learning rate schedule*
+=LightGBM
+=LoRA
+low-rank adaptation
 =LSTM
 machine learning
+message passing neural
+mixed precision
+mixture of experts
+model compression
+multi-task learning
 neural network*
+next-token prediction
+normalising flow*
+normalizing flow*
 overfitting
+protein language model*
 PyTorch
+quantisation
+quantization
 random forest*
 recurrent neural
 reinforcement learning
+reinforcement learning from human feedback
 representation learning
+retrieval-augmented generation
+=RLHF
+saliency map*
+scaling law*
 scikit-learn
+score-based generative
 self-attention
 self-supervised
+semi-supervised learning
+=SHAP
 stochastic gradient descent
 supervised learning
 support vector machine*
 t-SNE
+time series forecasting
 tokenisation
+tokeniser
 tokenization
+tokenizer
+transfer learning
 transformer model*
 =UMAP
 unsupervised learning
+variational autoencoder*
+vision transformer*
+=XGBoost
+zero-shot
 
 # computer science and programming
 =API
 =APIs
+approximation algorithm*
 Apptainer
+automatic differentiation
 bash script*
 binary search
 binary tree*
+Bloom filter*
 Boost library
+Burrows-Wheeler
+cache locality
+Cholesky decomposition
 =Clang
+cloud computing
 cluster computing
 CMake
 command line
@@ -3680,15 +3995,27 @@ compiled language
 compiler*
 computational complexity
 conda environment*
+conjugate gradient
+containerisation
+containerization
+continuous integration
 =CRAN
 Cython
+data compression
+data sharing
 data structure*
 data.frame
 debugger
 debugging
+differential privacy
+distributed computing
 Docker
 dplyr
+dynamic programming
 Eigen library
+=FAIR data
+federated analysis
+floating-point
 for loop*
 Fortran
 function call*
@@ -3698,15 +4025,20 @@ ggplot2
 GitHub
 GitLab
 glmnet
+=GPU computing
+graph algorithm*
 hash table*
 header file*
 high-performance computing
+homomorphic encryption
 =HPC
 import pandas
 interpreted language
+=JIT
 job scheduler
 =JSON
 Jupyter
+just-in-time compilation
 knitr
 Kubernetes
 lambda function*
@@ -3715,16 +4047,28 @@ Linux
 list comprehension*
 =LLVM
 lme4
+locality-sensitive hashing
+lossless compression
 machine code
 Makefile
 MATLAB
 matplotlib
+matrix factorisation
+matrix factorization
+memory bandwidth
 memory leak*
+MinHash
 =MPI
+multi-threading
+multithreading
+=NoSQL
 null pointer
 Numba
+numerical linear algebra
+numerical stability
 NumPy
 object-oriented
+open-source software
 OpenMP
 operating system*
 pandas DataFrame
@@ -3732,39 +4076,58 @@ parallel computing
 =Perl
 pip install
 PostgreSQL
+privacy-preserving
 programming language*
 pthreads
 Python package*
 Python script*
 R Markdown
 R package*
+randomised algorithm*
+randomized algorithm*
 Rcpp
+re-identification
 recursion
 recursive function*
 regular expression*
+relational database*
+reproducible research
+=REST API
 RStudio
 SciPy
 seaborn
+secure multiparty computation
 segmentation fault
 shell script*
+shortest path
+=SIMD
 Singularity container*
+sketching algorithm*
 sklearn
 =SLURM
 software engineering
 source code
+sparse matrices
+sparse matrix
 =SQL
 SQLite
 stack trace
 std::vector
+suffix array*
+suffix tree*
 template metaprogramming
 tidyverse
 time complexity
+unit test*
 unit testing
 Unix
+vectorisation
+vectorization
 version control
 virtual environment*
 virtual machine*
 while loop*
+workflow manager*
 =YAML
 
 # 3D modelling, rendering and visualisation
@@ -4115,9 +4478,13 @@ Zuckerkandl
 
 # journals
 =AJHG
+American Journal of Epidemiology
 American Journal of Human Genetics
+Annals of Statistics
 Annual Review of Genomics
 arXiv
+Biometrics
+Biometrika
 bioRxiv
 =BMJ
 Briefings in Bioinformatics
@@ -4131,6 +4498,8 @@ Genome Research
 Human Molecular Genetics
 International Journal of Epidemiology
 =JAMA
+Journal of the American Statistical Association
+Journal of the Royal Statistical Society
 Lancet
 medRxiv
 Molecular Biology and Evolution
@@ -4146,7 +4515,10 @@ Nature Reviews Genetics
 New England Journal of Medicine
 Nucleic Acids Research
 PLOS
+PLOS Computational Biology
+PLOS Genetics
 =PNAS
+Theoretical Population Biology
 
 # funders
 Academy of Medical Sciences
@@ -4193,3 +4565,62 @@ Swiss National Science Foundation
 Versus Arthritis
 Wellcome Leap
 Wellcome Trust
+
+# econometrics and causal inference
+=2SLS
+average treatment effect
+bounds analysis
+=CATE
+causal forest*
+conditional average treatment effect
+control function
+double machine learning
+=DoubleML
+endogeneity
+exclusion restriction
+exogeneity
+fixed-effects estimator
+generalised method of moments
+generalized method of moments
+=GMM
+heterogeneous treatment effect*
+instrumental variables regression
+local average treatment effect
+panel data
+partial identification
+potential outcome*
+synthetic control*
+two-stage least squares
+
+# medical imaging and medical physics
+brain imaging
+chest X-ray*
+computed tomography
+=DEXA
+diffusion tensor imaging
+digital pathology
+dosimetry
+=DTI
+dual-energy X-ray absorptiometry
+=DXA
+=fMRI
+functional MRI
+image registration
+image segmentation
+imaging-derived phenotype*
+magnetic resonance imaging
+mammography
+medical imaging
+=MRI
+neuroimaging
+optical coherence tomography
+=PET
+positron emission tomography
+radiation therapy
+radiogenomics
+radiomics
+retinal imaging
+=U-Net
+=UK Biobank imaging
+ultrasound imaging
+whole-slide image*
