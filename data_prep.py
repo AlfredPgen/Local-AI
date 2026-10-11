@@ -2402,8 +2402,9 @@ def _prepare(args, state=None):
     try:  # informational, like the leakage audit: a failure must not cost the finished dataset
         t_dist = time.time()
         tok_dist = _token_distribution(out, tok)
-        print(f"\nToken use on the training data ({time.time() - t_dist:,.0f} s; every piece in token_counts.tsv):\n  "
-              + "\n  ".join(_distribution_lines(tok_dist)), flush=True)
+        png = plot_token_summary(tok_dist, os.path.join(out, "token_summary.png"))
+        print(f"\nToken use: {_distribution_line(tok_dist)} ({time.time() - t_dist:,.0f} s)\n  chart: {png}",
+              flush=True)
     except SystemExit:
         raise
     except BaseException as exc:  # noqa: BLE001 - Ctrl+C included: it only skips this summary
@@ -2435,7 +2436,7 @@ def _prepare(args, state=None):
 
 LOCK_NAME = "_build.lock"
 _OUTPUT_NAMES = {"_work", "tokenizer.model", "report.md", "docs.tsv", "duplicates.tsv", "boilerplate.tsv",
-                 "token_counts.tsv",
+                 "token_counts.tsv", "token_summary.png",
                  "keyword_hits.tsv", "leakage.tsv", "manifest.json.tmp", "docs.tsv.tmp", "report.md.tmp", LOCK_NAME}
 
 
@@ -2887,26 +2888,105 @@ def _token_distribution(out, tok, top=30, sample_tokens=40):
         for i in order:
             handle.write(f"{int(i)}\t{tok.piece(int(i))!r}\t{cats[i]}\t{int(counts[i])}\t"
                          f"{counts[i] / max(total, 1):.3e}\n")
+    manifest, _ = open_token_files(out, verify=False)
+    per_source = {}
+    for name, entry in manifest["sources"].items():
+        t = entry.get("train") or {}
+        if t.get("tokens") and t.get("chars"):
+            per_source[name] = t["chars"] / t["tokens"]
+    curve = np.cumsum(counts[order]) / max(total, 1)
+    plot_ranks = np.unique(np.geomspace(1, tok.vocab_size, 300).astype(int))
     return {"total": total, "vocab": tok.vocab_size, "cover": cover, "unused": int((counts == 0).sum()),
+            "chars_per_token": per_source, "curve": [(int(r), float(curve[r - 1])) for r in plot_ranks],
             "rare": int(((counts > 0) & (counts < 100)).sum()),
             "top": [(tok.piece(int(i)), int(counts[i]), counts[i] / max(total, 1)) for i in order[:top]],
             "by_type": {k: v / max(total, 1) for k, v in by_cat.most_common()},
             "longest": [(tok.piece(i), int(counts[i])) for i in longest], "samples": samples}
 
 
-def _distribution_lines(d):
-    """Plain-text summary of _token_distribution, for the terminal and report.md."""
-    v = d["vocab"]
-    lines = [f"{d['total']:,} training tokens: {d['cover'][50]:,} pieces ({d['cover'][50] / v:.1%} of the "
-             f"vocabulary) make up half of them, {d['cover'][90]:,} make up 90% and {d['cover'][99]:,} make up 99%; "
-             f"{d['unused']:,} pieces are never used and {d['rare']:,} fewer than 100 times.",
-             "Share of tokens by piece type: " + ", ".join(f"{k} {s:.1%}" for k, s in d["by_type"].items()),
-             "Most frequent: " + ", ".join(f"{p!r} {s:.2%}" for p, _, s in d["top"]),
-             "Longest pieces: " + ", ".join(f"{p!r} ({c:,}x)" for p, c in d["longest"]),
-             "First tokens of each source, as the model sees them (| between tokens):"]
-    for name, pieces in d["samples"].items():
-        lines.append(f"  {name}: " + "|".join(p.replace("\n", "\\n") for p in pieces))
-    return lines
+def _distribution_line(d):
+    """One-line summary of _token_distribution (terminal and report.md)."""
+    multi = d["by_type"].get("multi-word")
+    return (f"{d['total']:,} training tokens; {d['cover'][50]:,} pieces make up half of them, {d['cover'][90]:,} "
+            f"90% and {d['cover'][99]:,} 99% of {d['vocab']:,}; {d['unused']:,} never used"
+            + (f"; multi-word pieces {multi:.1%} of tokens" if multi else ""))
+
+
+def plot_token_summary(d, path):
+    """token_summary.png: how many pieces carry the text, token share by piece
+    type, the most frequent pieces and characters per token for each source."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    ink, ink2, muted, surface, grid, blue = "#0b0b0b", "#52514e", "#8a8984", "#fcfcfb", "#e6e5e1", "#2a78d6"
+    fig, axes = plt.subplots(2, 2, figsize=(13, 8.5), layout="constrained", facecolor=surface)
+
+    def style(ax, title):
+        ax.set_facecolor(surface)
+        for side in ("top", "right"):
+            ax.spines[side].set_visible(False)
+        for side in ("left", "bottom"):
+            ax.spines[side].set_color("#c9c8c2")
+        ax.tick_params(colors=ink2, labelsize=8, length=3)
+        ax.grid(True, color=grid, linewidth=0.6)
+        ax.set_axisbelow(True)
+        ax.set_title(title, loc="left", fontsize=10, fontweight="bold", color=ink)
+
+    # (a) coverage: share of all tokens carried by the N most frequent pieces
+    ax = axes[0, 0]
+    style(ax, "How many pieces carry the text")
+    ranks, shares = zip(*d["curve"])
+    ax.plot(ranks, shares, color=blue, lw=2)
+    ax.set_xscale("log")
+    ax.set_xlim(1, d["vocab"])
+    ax.set_ylim(0, 1.02)
+    ax.yaxis.set_major_formatter(matplotlib.ticker.PercentFormatter(1.0))
+    for q in (50, 90, 99):
+        n = d["cover"][q]
+        ax.plot([n], [q / 100], "o", ms=6, color=blue, mec=surface, mew=1.5)
+        ax.annotate(f"{q}%: {n:,} pieces", (n, q / 100), xytext=(-8, 6), textcoords="offset points",
+                    ha="right", fontsize=8, color=ink2)
+    ax.set_xlabel("most frequent pieces (log scale)", fontsize=8.5, color=ink2)
+    ax.set_ylabel("share of all training tokens", fontsize=8.5, color=ink2)
+    ax.text(0.99, 0.04, f"{d['unused']:,} of {d['vocab']:,} pieces never used", transform=ax.transAxes,
+            ha="right", fontsize=8, color=muted)
+
+    # (b) token share by piece type
+    ax = axes[0, 1]
+    style(ax, "Tokens by piece type")
+    kinds = [(k, v) for k, v in d["by_type"].items() if v >= 0.001][::-1]
+    ax.barh([k for k, _ in kinds], [v for _, v in kinds], color=blue, height=0.62)
+    for y, (_, v) in enumerate(kinds):
+        ax.text(v, y, f" {v:.1%}", va="center", fontsize=8, color=ink2)
+    ax.xaxis.set_major_formatter(matplotlib.ticker.PercentFormatter(1.0))
+    ax.grid(axis="y", visible=False)
+
+    # (c) the most frequent pieces
+    ax = axes[1, 0]
+    style(ax, "Most frequent pieces")
+    top = d["top"][:20][::-1]
+    labels = [repr(p)[1:-1].replace("\u2581", "\u2423") for p, _, _ in top]  # visible space marker
+    ax.barh(range(len(top)), [s_ for _, _, s_ in top], color=blue, height=0.62)
+    ax.set_yticks(range(len(top)), labels, fontsize=8, family="monospace")
+    ax.xaxis.set_major_formatter(matplotlib.ticker.PercentFormatter(1.0, decimals=1))
+    ax.set_xlabel("share of all training tokens (\u2423 = space)", fontsize=8.5, color=ink2)
+    ax.grid(axis="y", visible=False)
+
+    # (d) characters per token by source (higher = the tokenizer compresses that kind of text better)
+    ax = axes[1, 1]
+    style(ax, "Characters per token, by source")
+    cpt = sorted(d["chars_per_token"].items(), key=lambda kv: kv[1])
+    ax.barh([k for k, _ in cpt], [v for _, v in cpt], color=blue, height=0.62)
+    for y, (_, v) in enumerate(cpt):
+        ax.text(v, y, f" {v:.2f}", va="center", fontsize=8, color=ink2)
+    ax.set_xlabel("characters per token (training text)", fontsize=8.5, color=ink2)
+    ax.grid(axis="y", visible=False)
+
+    fig.suptitle(f"Tokenizer use: {d['total']:,} training tokens, {d['vocab']:,} pieces", x=0.01, ha="left",
+                 fontsize=12, color=ink)
+    fig.savefig(path, dpi=130, facecolor=surface)
+    plt.close(fig)
+    return path
 
 
 def _tokenizer_stats(tok, docs, split_of, doc_tokens):
@@ -3149,11 +3229,9 @@ def _write_report(out, args, sources, ledger, duplicates, removed_lines, line_ex
             L.append(f"- `{term!r}` -> {len(pieces)} tokens: `{' '.join(repr(p)[1:-1] for p in pieces)}`")
         if tok_stats.get("distribution"):
             L.append("\n### Token use on the training data\n")
-            dist_lines = _distribution_lines(tok_stats["distribution"])
-            L.extend(line + "\n" for line in dist_lines[:4])
-            L.append(dist_lines[4] + "\n")
-            L.extend(f"- `{line.strip()}`" for line in dist_lines[5:])
-            L.append("\nEvery piece with its count: token_counts.tsv.")
+            L.append(_distribution_line(tok_stats["distribution"]) + ".\n")
+            L.append("![Token use](token_summary.png)\n")
+            L.append("Every piece with its count: token_counts.tsv.")
         L.append("\n## Document lengths (tokens)\n")
         for name, entry in manifest["sources"].items():
             L.append(f"- {name}: " + ", ".join(f"p{q} {v:,}" for q, v in entry["doc_tokens_percentiles"].items()))

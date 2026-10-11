@@ -194,8 +194,7 @@ What the options mean:
 | `--scan-only` | Add this to count and filter without tokenising (fast check of the settings). |
 
 The result: `datasets\bio_all\report.md` explains, per source, what was kept, removed and why, and how the tokenizer's
-pieces are used on the training data (also printed when tokenizing ends; every piece with its count is in
-`token_counts.tsv`). Lines repeated in
+pieces are used on the training data (a chart, `token_summary.png`; every piece with its count is in `token_counts.tsv`). Lines repeated in
 20 or more documents (licence notices, navigation) are removed as boilerplate, but headings never are.
 
 `python run_pipeline.py build` runs this command (the books and articles weights only for folders that exist).

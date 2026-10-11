@@ -869,11 +869,10 @@ then the model sizes those tokens support and how long they take on this PC.
 
 Every decision is counted in `report.md` inside the dataset folder, per source and per reason.
 
-**Token use:** once the training tokens are written, the build prints (and adds to `report.md`) how the vocabulary
-is used on the real data: the 30 most frequent pieces, how many pieces make up 50%, 90% and 99% of all tokens, how
-many are never or rarely used, the share by piece type, the longest pieces and the first 40 tokens of each source
-exactly as the model sees them. `token_counts.tsv` lists every piece with its count. On bio_all: 170 pieces (1% of
-the vocabulary) make up half of the 4.0B tokens, 13,579 make up 99%, and 143 are never used.
+**Token use:** once the training tokens are written, the build prints a one-line summary and draws
+`token_summary.png` (also shown in `report.md`): how many pieces carry 50%, 90% and 99% of the tokens, the
+share of tokens by piece type, the most frequent pieces and characters per token for each source.
+`token_counts.tsv` lists every piece with its count.
 
 **Keeping the split of an earlier dataset** (`--keep-split-from`, used by `run_pipeline.py continue`): a document
 that was in the earlier training split stays in training. It is recognised by its source and name, and also by a

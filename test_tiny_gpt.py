@@ -230,7 +230,8 @@ class TestPipeline(unittest.TestCase):
         self.assertTrue(os.path.isfile(os.path.join(self.ds, "report.md")))
         self.assertFalse(os.path.exists(os.path.join(self.ds, "_work")), "work spool must be removed")
         # token distribution: printed, in report.md, and every piece counted in token_counts.tsv
-        self.assertIn("Token use on the training data", self.prep_log)
+        self.assertIn("Token use: ", self.prep_log)
+        self.assertGreater(os.path.getsize(os.path.join(self.ds, "token_summary.png")), 20_000)
         report = open(os.path.join(self.ds, "report.md"), encoding="utf-8").read()
         self.assertIn("### Token use on the training data", report)
         with open(os.path.join(self.ds, "token_counts.tsv"), encoding="utf-8") as handle:
