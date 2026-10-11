@@ -15,6 +15,14 @@ Last updated 11 October 2026.
 - [ ] **Code data** (planned): Stack-Edu (Python, R) first, then The Stack v2 subsets, Bioconductor/CRAN,
       nf-core/Snakemake, statistical-genetics tools, Stack Exchange dumps. Target about 5-10% of training tokens,
       into the `codes` folder; keep each file's licence. A downloader script is still to be written.
+- [ ] **Tokenizer sample (after the current SuperBPE build finishes):** draw it uniformly from all training text in
+      pieces of about 4,000 characters, with no per-source weights (`--tokenizer-weights` no longer needed). Today it
+      samples whole documents, so a source of a few long documents can drop out entirely: in the 2026-10-11 SuperBPE
+      build all 94 books (and the slides) were missing from the tokenizer sample (about a 37% chance with 84 books).
+- [ ] **Train/validation split per source:** every source with 2+ documents gets at least one validation document
+      (slides and synthetic had none); sources of a few large documents (books) may put whole large documents in
+      validation (today a book above 25% of the source's validation budget is forced into training); report.md
+      shows each source's validation share against its target and warns when a source has none.
 - [ ] **Protect equations from boilerplate removal** in `data_prep.py`: a line that looks like maths (`$...$`,
       `\begin{equation}`, `\frac` and similar) should never count as boilerplate. Today a standard equation on its
       own line that appears in 20+ documents of a source is removed from all of them.
