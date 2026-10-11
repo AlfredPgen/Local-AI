@@ -110,6 +110,25 @@ python download_arxiv.py --out $HOME\ai_training_data\arxiv --update     # later
   a larger limit, for example `--pdf-seconds 600`, tries those papers again.
 - `%USERPROFILE%`, `$HOME` and `~` in `--out` work in PowerShell too (also in `download_pmc.py` and
   `youtube_transcripts.py`).
+- 21 subject areas by default: q-bio, physics.bio-ph and physics.med-ph (biology); stat, econ.EM and physics.data-an
+  (statistics); cs.AI, LG, CL, CV, NE, MA, IR, CE, DS, DC, MS, CR, CY and eess.IV (AI and computing); math.
+  `--sets` chooses others (a new area also needs a group in `GROUPS`).
+
+**bioRxiv and medRxiv preprints** (most statistical genetics and genetic epidemiology preprints are here)
+
+```
+python download_rxiv.py --server biorxiv            # first run: harvests the metadata (hours), then downloads
+python download_rxiv.py --server medrxiv
+python download_rxiv.py --server biorxiv --update   # later: add new preprints
+```
+
+- Same rules as arXiv: keywords in the title and abstract (3 matches from 3 terms, the title counts 3 times),
+  best matches first, `--list-only`, `--rebuild-list`, `report.tsv` with each paper's licence (bioRxiv licences
+  vary from CC BY to "all rights reserved").
+- Text from the server's JATS XML (sections, equations, figure captions; references left out), else Europe PMC's
+  full text, else the PDF. Output in `ai_training_data\biorxiv` and `ai_training_data\medrxiv`.
+- `--wait 5-15` (default) before each paper and at least 1 s between requests; a bot-check page stops the run after
+  5 papers in a row so it never hammers the site.
 - What happened to each paper, with its licence: `ai_training_data\_arxiv_meta\report.tsv`. Stop with Ctrl+C and
   rerun the same command to continue.
 

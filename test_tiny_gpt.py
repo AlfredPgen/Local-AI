@@ -1762,5 +1762,236 @@ class TestFixes(unittest.TestCase):
                 self.assertEqual(calibrate_probes.gpu_busy(), busy, text)
 
 
+class TestRxiv(unittest.TestCase):
+    """download_rxiv.py (bioRxiv / medRxiv), offline: API pages, keyword list, JATS, report logic, bot checks."""
+
+    JATS = (b'<article xmlns:mml="http://www.w3.org/1998/Math/MathML" xmlns:xlink="http://www.w3.org/1999/xlink">'
+            b'<front><article-meta><title-group><article-title>Allele frequency drift</article-title></title-group>'
+            b'<abstract><p>We model drift. Contact x.y@uni.edu.</p></abstract></article-meta></front><body>'
+            b'<sec><title>Introduction</title><p>Genetic drift changes allele frequencies '
+            b'<xref ref-type="bibr" rid="r1">(1)</xref>, with variance '
+            b'<inline-formula><mml:math><mml:mfrac><mml:mi>p</mml:mi><mml:mi>N</mml:mi></mml:mfrac></mml:math>'
+            b'</inline-formula>. ' + b'Population genetics text. ' * 200 + b'</p>'
+            b'<fig id="f1"><label>Figure 1</label><caption><p>Drift paths.</p></caption>'
+            b'<graphic xlink:href="f1.tif"/></fig></sec>'
+            b'<sec><title>Acknowledgements</title><p>We thank our funders.</p></sec></body>'
+            b'<back><ack><p>Thanks.</p></ack><ref-list><ref id="r1"><mixed-citation>Wright S. 1931.'
+            b'</mixed-citation></ref></ref-list></back></article>')
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.mkdtemp(prefix="tiny_gpt_rxiv_")
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    @staticmethod
+    def page(records, total):
+        return json.dumps({"messages": [{"status": "ok", "count": len(records), "total": str(total)}],
+                           "collection": records}).encode()
+
+    @staticmethod
+    def rec(doi, version, title="t", abstract="a", date="2025-01-15"):
+        return {"doi": doi, "version": str(version), "title": title, "abstract": abstract, "date": date,
+                "category": "Genetics", "license": "cc_by", "authors": "A, B.", "published": "NA",
+                "jatsxml": f"https://www.biorxiv.org/content/early/x/{doi[8:]}.source.xml", "server": "biorxiv"}
+
+    def test_harvest_pages_windows_and_latest_version(self):
+        import datetime
+        import download_rxiv as rx
+        recs, total, size = rx.parse_details_page(self.page([self.rec("10.1101/1", 1), {"title": "no doi"}], 9))
+        self.assertEqual((len(recs), total, size, recs[0]["version"], recs[0]["category"]), (1, 9, 2, 1, "genetics"))
+        empty = json.dumps({"messages": [{"status": "no posts found"}], "collection": []}).encode()
+        self.assertEqual(rx.parse_details_page(empty), ([], 0, 0))
+        with self.assertRaises(rx.Blocked):
+            rx.parse_details_page(b"<!DOCTYPE html><html><title>Just a moment...</title></html>")
+        start = (datetime.date.today() - datetime.timedelta(days=40)).isoformat()
+        calls = []
+
+        def fake_get(url, limit, tries=4, timeout=60):
+            calls.append(url)
+            first, _end, cursor = url.rstrip("/").split("/")[-3:]
+            if first != start:
+                return empty
+            if cursor == "0":  # the window holds 3 records: two pages; v2 of DOI 1 comes BEFORE v1
+                return self.page([self.rec("10.1101/1", 2, "new"), self.rec("10.1101/2", 1)], 3)
+            return self.page([self.rec("10.1101/1", 1, "old")], 3)
+
+        cache = os.path.join(self.tmp, "rx_cache")
+        os.makedirs(cache)
+        with unittest.mock.patch.object(rx, "get", side_effect=fake_get), redirect_stdout(io.StringIO()):
+            self.assertEqual(rx.harvest("biorxiv", cache, start=start), 3)
+            self.assertEqual(rx.harvest("biorxiv", cache), 3, "a finished harvest is not asked again")
+        self.assertEqual(len(calls), 3)
+        self.assertTrue(calls[1].endswith("/2"), "the cursor moves by the records on the page")
+        with open(os.path.join(cache, "biorxiv.state.json"), encoding="utf-8") as f:
+            state = json.load(f)
+        self.assertTrue(state["complete"])
+        got = {r["doi"]: (r["version"], r["title"]) for r in rx.read_cache(os.path.join(cache, "biorxiv.jsonl.gz"))}
+        self.assertEqual(got, {"10.1101/1": (2, "new"), "10.1101/2": (1, "t")})
+        with unittest.mock.patch.object(rx, "get", side_effect=fake_get), redirect_stdout(io.StringIO()):
+            rx.harvest("biorxiv", cache, update=True)
+        with open(os.path.join(cache, "biorxiv.state.json"), encoding="utf-8") as f:
+            self.assertEqual(json.load(f)["harvested_until"], datetime.date.today().isoformat())
+        self.assertIn((datetime.date.today() - datetime.timedelta(days=3)).isoformat(), calls[3],
+                      "an update starts 3 days before the last harvest")
+
+    def test_keyword_list(self):
+        import gzip
+        import download_arxiv as ax
+        import download_rxiv as rx
+        meta = os.path.join(self.tmp, "rx_list")
+        os.makedirs(meta)
+        cache = os.path.join(meta, "biorxiv.jsonl.gz")
+        with gzip.open(cache, "wt", encoding="utf-8") as f:
+            for doi, title, abstract in (
+                    ("10.1101/a", "Allele frequency under drift", "genetic drift and selection " + "word " * 300),
+                    ("10.1101/b", "Allele drift selection", "allele drift selection"),
+                    ("10.1101/c", "Protein folding", "folding of a protein")):
+                f.write(json.dumps({"doi": doi, "version": 1, "date": "2024-02-01", "title": title,
+                                    "abstract": abstract, "category": "genetics", "license": "cc_no",
+                                    "jatsxml": ""}) + "\n")
+        kw = os.path.join(meta, "kw.txt")
+        with open(kw, "w", encoding="utf-8") as f:
+            f.write("# terms\nallele\ndrift\nselection\n")
+        with redirect_stdout(io.StringIO()):
+            rows = rx.build_list(cache, kw, 3, 3, os.path.join(meta, "list.tsv"))
+        self.assertEqual([r["id"] for r in rows], ["10.1101/b", "10.1101/a"], "denser match first, c left out")
+        back = ax.read_list(os.path.join(meta, "list.tsv"))
+        self.assertEqual([(r["id"], r["licence"], r["year"]) for r in back],
+                         [("10.1101/b", "cc_no", "2024"), ("10.1101/a", "cc_no", "2024")])
+        with redirect_stdout(io.StringIO()):
+            self.assertEqual(rx.build_list(cache, kw, 3, 4, os.path.join(meta, "list.tsv")), [],
+                             "--min-distinct applies")
+
+    def test_jats_markdown(self):
+        import download_rxiv as rx
+        md, body = rx.jats_markdown(self.JATS, "ignored", "ignored")
+        self.assertTrue(md.startswith("# Allele frequency drift\n\n## Abstract\n\nWe model drift."), md[:200])
+        self.assertIn("[email]", md)
+        self.assertNotIn("uni.edu", md)
+        self.assertIn("\\frac{p}{N}", md)
+        self.assertIn("(1)", md)
+        self.assertIn("Figure 1. Drift paths.", md)
+        for gone in ("Acknowledgements", "funders", "Thanks", "Wright"):
+            self.assertNotIn(gone, md)
+        self.assertGreater(body, 3000)
+        front = (b'<article><front><article-meta><title-group><article-title>T</article-title></title-group>'
+                 b'</article-meta></front></article>')
+        md, body = rx.jats_markdown(front, "Meta title", "Meta abstract")
+        self.assertEqual(body, 0)
+        self.assertEqual(md, "# T\n\n## Abstract\n\nMeta abstract\n\n")
+        with self.assertRaises(ValueError):
+            rx.jats_markdown(b"<html><body>x</body></html>", "", "")
+        evil = (b'<?xml version="1.0"?><!DOCTYPE article [<!ENTITY x SYSTEM "file:///c:/windows/win.ini">]>'
+                b'<article><body><p>&x;</p></body></article>')
+        try:
+            md, _ = rx.jats_markdown(evil, "t", "")
+        except Exception:  # noqa: BLE001 - refusing the entity is fine too
+            md = ""
+        self.assertNotIn("[fonts]", md.lower(), "an external entity is never read")
+
+    def test_bot_check_detection(self):
+        import download_rxiv as rx
+        page = (b"<!DOCTYPE html><html lang='en-US'><head><title>Just a moment...</title></head>"
+                b"<body><script src='/cdn-cgi/challenge-platform/h/b/orchestrate/chl_page/v1'></script></body></html>")
+        self.assertTrue(rx.is_challenge(page))
+        self.assertTrue(rx.is_challenge(b"", {"cf-mitigated": "challenge"}))
+        self.assertFalse(rx.is_challenge(self.JATS))
+        self.assertFalse(rx.is_challenge(b"%PDF-1.4 ... just a moment"))
+        self.assertFalse(rx.is_challenge(b"<!DOCTYPE html><html><body>Page not found</body></html>"))
+        self.assertTrue(rx.looks_like_html(b"\n <!doctype HTML><html>"))
+        self.assertFalse(rx.looks_like_html(b'<?xml version="1.0"?><article/>'))
+        self.assertTrue(rx._own_site("https://www.medrxiv.org/content/x.source.xml", "medrxiv"))
+        for bad in ("http://www.medrxiv.org/x", "https://evil.org/www.medrxiv.org", "https://medrxiv.org.evil.com/x"):
+            self.assertFalse(rx._own_site(bad, "medrxiv"), bad)
+
+    def test_fetch_routes_and_report(self):
+        import urllib.error
+        import download_arxiv as ax
+        import download_rxiv as rx
+        out = os.path.join(self.tmp, "rx_out")
+        os.makedirs(out)
+        row = {"id": "10.1101/2025.01.14.000001", "version": "2", "category": "genetics", "year": "2025",
+               "licence": "cc_by", "title": "Allele: drift?", "abstract": "abs",
+               "jatsxml": "https://www.biorxiv.org/content/early/2025/01/15/2025.01.14.000001.source.xml"}
+        challenge = b"<!DOCTYPE html><html><title>Just a moment...</title></html>"
+        search = json.dumps({"resultList": {"result": [
+            {"id": "PPR1", "source": "PPR", "doi": row["id"].upper(), "inEPMC": "Y"}]}}).encode()
+
+        def routes(table, seen=None):
+            def fake(url, limit, tries=4, timeout=60):
+                if seen is not None:
+                    seen.append(url)
+                for key, answer in table.items():
+                    if key in url:
+                        if isinstance(answer, Exception):
+                            raise answer
+                        return answer
+                raise AssertionError(url)
+            return fake
+
+        # the server's JATS is a bot-check page: Europe PMC's copy is used
+        table = {"source.xml": rx.Blocked("bot-check page"), "search": search, "PPR1/fullTextXML": self.JATS}
+        with unittest.mock.patch.object(rx, "get", side_effect=routes(table)):
+            r = rx.fetch_paper(row, "biorxiv", out, 3000)
+        self.assertEqual((r["status"], r["method"]), ("ok", "europepmc"))
+        self.assertEqual(r["file"], "10.1101_2025.01.14.000001__Allele drift.md")
+        self.assertTrue(os.path.isfile(os.path.join(out, r["file"])))
+        self.assertFalse(glob.glob(os.path.join(out, "*.part")))
+        # everything blocked: an error (retried), flagged as blocked
+        err403 = urllib.error.HTTPError("u", 403, "Forbidden", {}, None)
+        table = {"source.xml": rx.Blocked("403"), "search": err403, "full.pdf": rx.Blocked("403")}
+        with unittest.mock.patch.object(rx, "get", side_effect=routes(table)), \
+                unittest.mock.patch.object(ax, "check_pdf_route", return_value=None):
+            r = rx.fetch_paper(row, "biorxiv", out, 3000)
+        self.assertTrue(r["status"].startswith("error: jats blocked"), r["status"])
+        self.assertTrue(r["blocked"])
+        # nothing anywhere: no_text (final); the PDF URL names the version
+        seen = []
+        table = {"source.xml": None, "search": json.dumps({"resultList": {"result": []}}).encode(),
+                 "v2.full.pdf": None}
+        with unittest.mock.patch.object(rx, "get", side_effect=routes(table, seen)):
+            r = rx.fetch_paper(row, "biorxiv", out, 3000)
+        self.assertEqual(r["status"], "no_text")
+        self.assertEqual(seen[-1], "https://www.biorxiv.org/content/10.1101/2025.01.14.000001v2.full.pdf")
+        # JATS without a body and no other route: too_short (final)
+        front = (b"<article><front><article-meta><title-group><article-title>T</article-title></title-group>"
+                 b"<abstract><p>Short.</p></abstract></article-meta></front></article>")
+        with unittest.mock.patch.object(rx, "get", side_effect=routes({"source.xml": front})):
+            r = rx.fetch_paper(row, "biorxiv", out, 3000, europepmc=False, pdf=False)
+        self.assertEqual(r["status"], "too_short")
+        self.assertTrue(r["method"].startswith("jats"))
+        # a challenge page that comes back as 200 is caught by get() itself
+        with unittest.mock.patch.object(ax, "http_get", return_value=challenge), self.assertRaises(rx.Blocked):
+            rx.get("https://www.biorxiv.org/x", 100)
+        # report: final statuses are skipped, errors retried, PDF time-outs only with a larger limit
+        report = os.path.join(self.tmp, "rx_report.tsv")
+        with open(report, "w", encoding="utf-8") as f:
+            f.write("\t".join(rx.REPORT_COLUMNS) + "\n")
+            for pid, status, method in (("d/1", "ok", "jats"), ("d/2", "error: jats blocked (403)", ""),
+                                        ("d/3", "no_text", "jats missing"),
+                                        ("d/4", "pdf_timeout", "pdf took over 180 s"),
+                                        ("d/5", "too_short", "pdf"), ("d/6", "error: x", ""), ("d/6", "ok", "pdf")):
+                f.write("\t".join([pid, status, "0", method, "", "", "", ""]) + "\n")
+        limits = {}
+        done = ax.read_report(report, limits)
+        rows = [{"id": f"d/{i}"} for i in range(1, 9)]
+        self.assertEqual([r["id"] for r in rx.todo_rows(rows, done, limits, {"d_7"}, 180)], ["d/2", "d/8"])
+        self.assertEqual([r["id"] for r in rx.todo_rows(rows, done, limits, set(), 600)], ["d/2", "d/4", "d/7", "d/8"])
+
+    def test_args_defaults(self):
+        import download_rxiv as rx
+        args = rx.parse_args(["--server", "medrxiv"])
+        self.assertEqual(args.out, os.path.abspath(os.path.join(os.path.expanduser("~"), "ai_training_data",
+                                                                "medrxiv")))
+        self.assertEqual(os.path.basename(args.meta), "_medrxiv_meta")
+        self.assertEqual(args.wait, (5.0, 15.0))
+        with unittest.mock.patch.dict(os.environ, {"RXTEST": self.tmp}):
+            args = rx.parse_args(["--out", "%RXTEST%\\bio" if sys.platform == "win32" else "$RXTEST/bio"])
+        self.assertEqual(args.out, os.path.join(os.path.abspath(self.tmp), "bio"))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -86,10 +86,17 @@ _PDF_CHILD = (
     "t = c.convert_pdf(sys.argv[1], types.SimpleNamespace(extract_images=False, out=None)); "
     "open(sys.argv[2], 'w', encoding='utf-8').write(t)")
 # subject areas (OAI-PMH sets) and their priority groups
-DEFAULT_SETS = ["q-bio", "physics:physics:bio-ph", "stat", "cs:cs:AI", "cs:cs:LG", "cs:cs:CL", "cs:cs:CV",
-                "cs:cs:NE", "cs:cs:MA", "cs:cs:IR", "math"]
-GROUPS = [("biology", ("q-bio", "physics.bio-ph")), ("statistics", ("stat",)),
-          ("AI", ("cs.AI", "cs.LG", "cs.CL", "cs.CV", "cs.NE", "cs.MA", "cs.IR")), ("mathematics", ("math",))]
+DEFAULT_SETS = ["q-bio", "physics:physics:bio-ph", "physics:physics:med-ph", "stat", "econ:econ:EM",
+                "physics:physics:data-an", "cs:cs:AI", "cs:cs:LG", "cs:cs:CL", "cs:cs:CV", "cs:cs:NE", "cs:cs:MA",
+                "cs:cs:IR", "cs:cs:CE", "cs:cs:DS", "cs:cs:DC", "cs:cs:MS", "cs:cs:CR", "cs:cs:CY", "eess:eess:IV",
+                "math"]
+# a paper joins the highest-ranked group among its categories (paper_group); medical physics counts as biology, econometrics
+# (instrumental variables, causal inference) and physics data analysis as statistics, image processing as AI
+GROUPS = [("biology", ("q-bio", "physics.bio-ph", "physics.med-ph")),
+          ("statistics", ("stat", "econ.EM", "physics.data-an")),
+          ("AI", ("cs.AI", "cs.LG", "cs.CL", "cs.CV", "cs.NE", "cs.MA", "cs.IR", "cs.CE", "cs.DS", "cs.DC", "cs.MS",
+                  "cs.CR", "cs.CY", "eess.IV")),
+          ("mathematics", ("math",))]
 GROUP_RANK = {"biology": 0, "statistics": 1, "AI": 2, "mathematics": 2}  # AI and mathematics share a rank
 FINAL = {"ok", "too_short", "no_text"}  # statuses not retried on a rerun
 # "pdf_timeout" is retried only by a run with a larger --pdf-seconds; "error: ..." always
@@ -153,24 +160,30 @@ def _retry_after(headers):
         return None
 
 
-def http_get(url, limit=MAX_DOWNLOAD, tries=4, timeout=60):
+def http_get(url, limit=MAX_DOWNLOAD, tries=4, timeout=60, min_gap=None, user_agent=None, site="arXiv",
+             give_up=None):
     """Bytes of url; None on 404 (or when the body exceeds `limit`, as
     'too_large'). Network failures and server errors are retried with backoff.
     "Too many requests" (429) and "busy" (503) pause ALL requests, not just
     this one: for as long as the server's Retry-After asks (at most an hour at a
     time; after 8 pauses at least 1, 2, 4 ... 10 minutes, so an outage is waited
     out; two hours in all), or without it for 1, 2, 4 ... 10 minutes, up to 8
-    times. Raises Stopped when the run is stopped during a pause."""
+    times. Raises Stopped when the run is stopped during a pause.
+    Other downloaders reuse it: min_gap (seconds between request starts,
+    default MIN_REQUEST_GAP), user_agent (default USER_AGENT), site (the name in
+    the slow-down message) and give_up (called with a 429/503 HTTPError; True
+    re-raises it at once instead of pausing, e.g. for a bot-check page)."""
+    gap = MIN_REQUEST_GAP if min_gap is None else min_gap
     delay, slow_down, attempt, paused = 5.0, 0, 0, 0.0
     while True:
         _acquire_net()
         try:
-            pause = _LAST_START[0] + MIN_REQUEST_GAP - time.monotonic()
+            pause = _LAST_START[0] + gap - time.monotonic()
             if pause > 0:
                 _pause(pause)
             _LAST_START[0] = time.monotonic()
             try:
-                request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+                request = urllib.request.Request(url, headers={"User-Agent": user_agent or USER_AGENT})
                 with urllib.request.urlopen(request, timeout=timeout) as response:
                     chunks, size = [], 0
                     while True:
@@ -185,10 +198,10 @@ def http_get(url, limit=MAX_DOWNLOAD, tries=4, timeout=60):
             except urllib.error.HTTPError as exc:
                 if exc.code == 404:
                     return None
-                if exc.code in (429, 503):
+                if exc.code in (429, 503) and not (give_up is not None and give_up(exc)):
                     asked = _retry_after(exc.headers)
                     if asked is not None:  # the server says how long: honour it, short or long
-                        wait = min(max(asked, MIN_REQUEST_GAP), 3600.0)
+                        wait = min(max(asked, gap), 3600.0)
                         if slow_down >= 8:  # still busy after 8 short pauses: an outage, so wait longer
                             wait = max(wait, min(60.0 * 2 ** (slow_down - 8), 600.0))
                         go_on = paused + wait <= MAX_SLOW_DOWN_PAUSE
@@ -199,8 +212,8 @@ def http_get(url, limit=MAX_DOWNLOAD, tries=4, timeout=60):
                         slow_down += 1
                         paused += wait
                         # every thread waits: the next request may start only after the pause
-                        _LAST_START[0] = time.monotonic() + wait - MIN_REQUEST_GAP
-                        print(f"  arXiv asks to slow down ({exc.code}); pausing all requests for {wait:.0f} s",
+                        _LAST_START[0] = time.monotonic() + wait - gap
+                        print(f"  {site} asks to slow down ({exc.code}); pausing all requests for {wait:.0f} s",
                               flush=True)
                         continue
                 attempt += 1
