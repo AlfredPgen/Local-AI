@@ -24,6 +24,13 @@ Last updated 11 October 2026.
 
 ## Training
 
+- [ ] **SuperBPE tokenizer** on the rebuilt dataset: set `SUPERBPE = True` in `run_pipeline.py` (or
+      `data_prep.py --superbpe`). Compare against ordinary BPE with `compare_models.py` on bits per byte (not loss
+      per token, since the tokenizers differ). The small 2026-09-30 test favoured ordinary BPE, but the paper's gains
+      grow with data size.
+- [ ] **Check for new optimization strategies** before each big run: new optimizers, learning-rate schedules,
+      memory and speed tricks for PyTorch/MPS, tokenizer and data-mixing results. Search recent papers and release
+      notes; try only what can be tested with short A/B runs.
 - [ ] **Muon test** before the next big run: a few short runs (about 500 steps), AdamW against `--optimizer muon`
       at 2-3 learning rates; keep Muon only if its loss is clearly lower at the same step.
 - [ ] **8-bit optimizer** (`bitsandbytes`) would let models above about 300M parameters fit on the 8 GB GPU.
