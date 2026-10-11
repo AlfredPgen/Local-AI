@@ -215,7 +215,7 @@ models use 100,000 to 250,000 tokens; in English, one word is about 1.3 tokens.
 **In tinyGPT:**
 
 - **Tokenizer:** a SentencePiece BPE tokenizer, trained by data_prep.py on your own data. Its size follows the
-  amount of text: **4,096, 8,192 or 16,384 pieces** (`--vocab-size` overrides it). Its vocabulary therefore contains
+  amount of text: **4,096 pieces below 20M characters, then twice as many for every ten times more text** (16,384 below 2B characters, 32,768 below 20B, 65,536 below 200B, with no upper limit; `--vocab-size` overrides it). Its vocabulary therefore contains
   pieces such as *allele*, *heritab* and *GWAS*.
 - **Digits** are split one by one, so the model learns numbers digit by digit.
 - **Lines** are encoded one at a time, with a newline token between them, so Markdown structure is kept.

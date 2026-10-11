@@ -1342,6 +1342,13 @@ class CharTok:
 class TestFixes(unittest.TestCase):
     """Fast unit-level regression tests for the 2026-10 audit fixes (no dataset needed)."""
 
+    def test_vocab_size_grows_with_data(self):
+        """4,096 below 20M characters, then doubling for every 10x more text, with no cap."""
+        cases = [(5e6, 4096), (2e7, 8192), (1.99e8, 8192), (2e8, 16384), (1.5e9, 16384), (1.5e10, 32768),
+                 (2e10, 65536), (2e11, 131072)]
+        for chars, want in cases:
+            self.assertEqual(data_prep.auto_vocab_size(chars), want, chars)
+
     @classmethod
     def setUpClass(cls):
         cls.tmp = tempfile.mkdtemp(prefix="tiny_gpt_fixes_")

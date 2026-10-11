@@ -1635,11 +1635,15 @@ def _lower_priority():
 
 
 def auto_vocab_size(train_chars):
+    """Vocabulary size that grows with the training text, with no upper limit:
+    4,096 pieces below 20M characters, then twice as many for every ten times
+    more text (8,192 below 200M, 16,384 below 2B, 32,768 below 20B, 65,536 below
+    200B, 131,072 ...). Bigger corpora usually train bigger models, which use a
+    bigger vocabulary well (Tao et al. 2024). Token files switch to uint32 above
+    65,535 pieces. --vocab-size overrides it."""
     if train_chars < 20e6:
         return 4096
-    if train_chars < 1.5e9:
-        return 8192
-    return 16384
+    return 4096 * 2 ** (int(math.log10(train_chars / 20e6)) + 1)
 
 
 def parse_args(argv=None):
