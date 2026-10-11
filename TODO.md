@@ -19,6 +19,9 @@ Last updated 11 October 2026.
       pieces of about 4,000 characters, with no per-source weights (`--tokenizer-weights` no longer needed). Today it
       samples whole documents, so a source of a few long documents can drop out entirely: in the 2026-10-11 SuperBPE
       build all 94 books (and the slides) were missing from the tokenizer sample (about a 37% chance with 84 books).
+- [ ] **Vocabulary size without a cap:** `auto_vocab_size` stops at 16,384. New rule: double for every 10x more
+      training text (<20M chars 4,096; <200M 8,192; <2B 16,384; <20B 32,768; <200B 65,536; then 131,072 ...);
+      also in estimate_dataset.py. Token files already switch to uint32 above 65,535.
 - [ ] **Train/validation split per source:** every source with 2+ documents gets at least one validation document
       (slides and synthetic had none); sources of a few large documents (books) may put whole large documents in
       validation (today a book above 25% of the source's validation budget is forced into training); report.md
