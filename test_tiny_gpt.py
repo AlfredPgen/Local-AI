@@ -1993,5 +1993,182 @@ class TestRxiv(unittest.TestCase):
         self.assertEqual(args.out, os.path.join(os.path.abspath(self.tmp), "bio"))
 
 
+class TestBenchmarkSuite(unittest.TestCase):
+    """benchmark.py: offline only (no downloads, no sandbox, no real checkpoint)."""
+
+    @classmethod
+    def setUpClass(cls):
+        import benchmark
+        cls.b = benchmark
+        cls.tmp = tempfile.mkdtemp(prefix="tiny_gpt_bench_")
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def test_item_normalisation(self):
+        b = self.b
+        mmlu = b.norm_mmlu([{"question": "Q1?", "subject": "medical_genetics", "choices": ["a", "b", "c", "d"],
+                             "answer": 2},
+                            {"question": "Q2?", "subject": "astronomy", "choices": np.array(["w", "x", "y", "z"]),
+                             "answer": "0"}])
+        self.assertEqual(mmlu[0]["answer"], "c")
+        self.assertEqual(mmlu[0]["tags"], ["biology", "genetics", "medicine"])
+        self.assertEqual(mmlu[1]["answer"], "w")
+        self.assertNotIn("tags", mmlu[1])
+        pro = b.norm_mmlu_pro([{"question_id": 7, "question": "Q", "options": ["p", "N/A", "q", "r"],
+                                "answer_index": 2, "category": "health"}])[0]
+        self.assertEqual((pro["options"], pro["answer"], pro["tags"]), (["p", "q", "r"], "q", ["health"]))
+        arc = b.norm_arc([{"id": "x1", "question": "Which?", "choices": {"text": ["one", "two"], "label": ["1", "2"]},
+                           "answerKey": "2"}], "ARC-Easy")[0]
+        self.assertEqual(arc["answer"], "two")
+        medqa = b.norm_medqa([{"question": "Q", "options": "{'A': 'x', 'B': 'y'}", "answer_idx": "B",
+                               "meta_info": "step1"}])[0]
+        self.assertEqual((medqa["options"], medqa["answer"]), (["x", "y"], "y"))
+        self.assertEqual(b._list("['T' 'P' 'Ala']"), ["T", "P", "Ala"], "numpy's printed list")
+        lab = b.norm_labbench([{"id": "1", "question": "Q?", "ideal": "His", "distractors": "['T' 'P' 'Ala']",
+                                "protocol": "Step 1", "subtask": "s"}], "ProtocolQA")[0]
+        self.assertTrue(lab["question"].startswith("Step 1"))
+        self.assertEqual(lab["options"], ["His", "T", "P", "Ala"])
+        calc = b.norm_medcalc([{"Row Number": "3", "Question": "Score?", "Category": "risk", "Patient Note": "n",
+                                "Output Type": "integer", "Ground Truth Answer": "4", "Lower Limit": "4",
+                                "Upper Limit": "4", "Calculator Name": "c"}])[0]
+        self.assertEqual((calc["kind"], calc["options"]), ("numeric", None))
+        for item in mmlu + [pro, arc, medqa, lab, calc]:
+            self.assertIsNone(b.valid_item(item), item)
+            self.assertTrue({"id", "question", "options", "answer", "category", "kind"} <= set(item))
+        self.assertEqual(b.valid_item(dict(arc, answer="three")), "answer not among the options")
+        self.assertEqual(b.valid_item(dict(arc, options=["two", "two"])), "answer duplicated among the options")
+        self.assertEqual(b.valid_item(dict(calc, options=["1"])), "options must be null for non-MCQ items")
+
+    def test_mcq_scoring_on_a_tiny_model(self):
+        b = self.b
+        folder = os.path.join(self.tmp, "bench", "toy")
+        os.makedirs(folder)
+        items = [b.mcq_item(f"t{i}", f"Which gene number {i}?", ["alpha", "beta", "gamma"], ["alpha", "beta",
+                            "gamma"][i % 3], "genes" if i % 2 else "cells", ["biology"] if i < 3 else None)
+                 for i in range(6)]
+        b.write_items(os.path.join(folder, "items.jsonl"), items)
+        with unittest.mock.patch.object(b, "BENCH_DIR", os.path.join(self.tmp, "bench")):
+            back = b.read_items("toy")
+        self.assertEqual(back, items)
+        torch.manual_seed(0)
+        cfg = tiny_gpt.ModelConfig(vocab_size=50, ctx=16, d_model=32, n_layers=2, n_heads=4, n_kv_heads=2)
+        model = tiny_gpt.TinyGPT(cfg).eval()
+        rows = b.score_mcq(model, CharTok(), back, torch.device("cpu"), None, floor=True, batch_size=4)
+        self.assertEqual(len(rows), 6)
+        for r in rows:
+            self.assertAlmostEqual(r["chance"], 1 / 3)
+            self.assertIn(r["floor_correct"], (0, 1 / 3, 2 / 3, 1))
+            self.assertEqual(r["correct"], r["correct_score"] > r["best_other_score"])
+        summary = {s["category"]: s for s in b.summarise(rows)}
+        self.assertEqual(summary["all"]["n"], 6)
+        self.assertEqual(summary["[biology]"]["n"], 3)
+        self.assertEqual(summary["genes"]["n"] + summary["cells"]["n"], 6)
+        self.assertLessEqual(summary["all"]["low"], summary["all"]["accuracy"])
+        self.assertEqual(b.sample_items(back, 4, "toy"), b.sample_items(list(back), 4, "toy"))
+        self.assertEqual(len(b.sample_items(back, 4, "toy")), 4)
+        self.assertEqual(b.sample_items(back, 0, "toy"), back)
+
+    def test_numeric_parsing(self):
+        b = self.b
+        self.assertEqual(b.parse_first_number("about 1,234.5 mL/min, not 7"), 1234.5)
+        self.assertEqual(b.parse_first_number("score: -3"), -3.0)
+        self.assertIsNone(b.parse_first_number("no number here"))
+        dec = {"answer": "25.2381", "output_type": "decimal", "lower": "23.97619", "upper": "26.50001"}
+        self.assertTrue(b.numeric_correct(dec, " 26.1 mL/min")[0])
+        self.assertFalse(b.numeric_correct(dec, " 27")[0])
+        self.assertFalse(b.numeric_correct(dec, " unknown")[0])
+        integer = {"answer": "4", "output_type": "integer", "lower": "4", "upper": "4"}
+        self.assertTrue(b.numeric_correct(integer, "4 points")[0])
+        self.assertFalse(b.numeric_correct(integer, "5")[0])
+        date = {"answer": "09/11/2014", "output_type": "date", "lower": "09/11/2014", "upper": "09/11/2014"}
+        self.assertTrue(b.numeric_correct(date, " 9/11/2014.")[0])
+        self.assertFalse(b.numeric_correct(date, " 09/12/2014")[0])
+        tup = {"answer": "(4 weeks, 2 days)", "output_type": "integer"}
+        self.assertTrue(b.numeric_correct(tup, "4 weeks and 2 days")[0])
+        self.assertFalse(b.numeric_correct(tup, "4 weeks and 3 days")[0])
+
+    def test_sandbox_selector_never_runs_code_without_a_sandbox(self):
+        b = self.b
+        with unittest.mock.patch.object(b, "docker_available", return_value=False), \
+                unittest.mock.patch.object(b, "wsl_distros", return_value=[]):
+            self.assertIsNone(b.select_sandbox(log=lambda *a: None))
+            self.assertIsInstance(b.select_sandbox(unsafe=True, log=lambda *a: None), b.LocalSubprocess)
+        with unittest.mock.patch.object(b, "docker_available", return_value=True):
+            self.assertIsInstance(b.select_sandbox(log=lambda *a: None), b.DockerSandbox)
+        with unittest.mock.patch.object(b, "docker_available", return_value=False), \
+                unittest.mock.patch.object(b, "wsl_distros", return_value=["Debian", "Ubuntu"]), \
+                unittest.mock.patch.object(b, "wsl_probe", side_effect=lambda d: ("bwrap", False) if d == "Ubuntu"
+                                           else None):
+            sb = b.select_sandbox(log=lambda *a: None)
+            self.assertIsInstance(sb, b.WSLSandbox)
+            self.assertEqual(sb.distro, "Ubuntu")
+            script = sb.script("print(1)\n", 5)
+            self.assertIn("--unshare-all", script)
+            self.assertIn("timeout -k 2 5", script)
+            self.assertNotIn("print(1)", script, "the program travels base64-encoded")
+        # a run with a coding benchmark and no sandbox: refused, and nothing is executed anywhere
+        bench = os.path.join(self.tmp, "nosandbox")
+        os.makedirs(os.path.join(bench, "humaneval"))
+        b.write_items(os.path.join(bench, "humaneval", "items.jsonl"),
+                      [{"id": "h0", "question": "def f():\n", "options": None, "answer": "    return 1\n",
+                        "category": "python", "kind": "code", "style": "humaneval", "test": "def check(c): pass",
+                        "entry_point": "f"}])
+        with open(os.path.join(bench, "manifest.json"), "w", encoding="utf-8") as handle:
+            json.dump({"benchmarks": {"humaneval": {"items": 1}}}, handle)
+        boom = unittest.mock.Mock(side_effect=AssertionError("nothing may be executed"))
+        args = b.parse_args(["run", "--checkpoint", "none.pt", "--benchmarks", "humaneval", "--device", "cpu"])
+        out = io.StringIO()
+        with unittest.mock.patch.object(b, "BENCH_DIR", bench), \
+                unittest.mock.patch.object(b, "MANIFEST", os.path.join(bench, "manifest.json")), \
+                unittest.mock.patch.object(b, "select_sandbox", return_value=None), \
+                unittest.mock.patch.object(b, "_run", boom), \
+                unittest.mock.patch.object(subprocess, "run", boom), \
+                unittest.mock.patch.object(subprocess, "Popen", boom), \
+                unittest.mock.patch.object(b.LocalSubprocess, "run", boom), \
+                unittest.mock.patch.object(b, "greedy_generate", boom), \
+                redirect_stdout(out):
+            self.assertEqual(b.cmd_run(args), 1)
+        self.assertIn("REFUSING", out.getvalue())
+        boom.assert_not_called()
+
+    def test_results_csv_and_plot(self):
+        b = self.b
+        path = os.path.join(self.tmp, "results", "benchmarks.csv")
+        home_ck = os.path.join(os.path.expanduser("~"), "models", "tinyGPT_best.pt")
+        rows = []
+        for ck, step, shift in ((home_ck, 1000, 0.0), (home_ck.replace("best", "late"), 2000, 0.05)):
+            for bench, cat, n, acc, chance, floor in (
+                    ("mmlu", "all", 50, 0.28, 0.25, 0.26), ("mmlu", "[biology]", 9, 0.33, 0.25, 0.3),
+                    ("mmlu", "anatomy", 5, 0.4, 0.25, 0.2), ("mmlu", "virology", 4, 0.25, 0.25, 0.25),
+                    ("medqa", "all", 50, 0.3, 0.25, 0.27), ("humaneval", "all", 20, 0.0, 0.0, None),
+                    ("medcalc", "all", 30, 0.03, 0.0, None)):
+                low, high = tiny_gpt.wilson_interval(round((acc + shift) * n), n)
+                rows.append({"time": "t", "checkpoint": ck, "step": step, "params": 1, "benchmark": bench,
+                             "category": cat, "n": n, "accuracy": acc + shift, "low": low, "high": high,
+                             "chance": chance, "floor": "" if floor is None else floor, "notes": f"from {ck}"})
+        b.append_results(path, rows[:7])
+        b.append_results(path, rows[7:])
+        with open(path, encoding="utf-8-sig") as handle:
+            text = handle.read()
+        self.assertEqual(text.count("time,checkpoint,step"), 1, "one header")
+        self.assertEqual(text.splitlines()[0].split(","), b.RESULT_COLUMNS)
+        self.assertNotIn(os.path.expanduser("~"), text)
+        self.assertIn("~", text)
+        self.assertEqual(len(b.read_results(path)), 14)
+        self.assertEqual(len(b.latest_rows(b.read_results(path), "tinyGPT_best.pt")), 7)
+        item_csv = os.path.join(self.tmp, "items.csv")
+        b.write_item_csv(item_csv, [{"id": "a", "correct": True, "tags": ["x", "y"]}, {"id": "b", "extra": 1}])
+        with open(item_csv, encoding="utf-8-sig") as handle:
+            self.assertEqual(handle.readline().strip(), "id,correct,tags,extra")
+        out_dir = os.path.join(self.tmp, "plots")
+        with redirect_stdout(io.StringIO()):
+            self.assertEqual(b.main(["plot", "--results", path, "--out-dir", out_dir, "--dpi", "40"]), 0)
+        for name in ("tinyGPT_late_benchmarks.png", "tinyGPT_late_categories.png", "progress.png"):
+            p = os.path.join(out_dir, name)
+            self.assertTrue(os.path.isfile(p) and os.path.getsize(p) > 1000, name)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

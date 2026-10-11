@@ -384,6 +384,30 @@ recipe: model shape, batch, optimizer, learning-rate schedule, weight decay, cli
 memory settings. When a new version adds columns, the old file is kept as a backup and rewritten once with the
 new header. A copy goes to GitHub as `results\experiments.csv`.
 
+### Public benchmarks: benchmark.py
+
+```
+python benchmark.py download                                  # ~180 MB into benchmarks\ (once; --only mmlu,medqa)
+python benchmark.py sandbox-setup                             # numpy for the code sandbox in WSL (once)
+python benchmark.py run --checkpoint tinyGPT_best.pt --limit 200 --device cpu
+python benchmark.py run --checkpoint tinyGPT_best.pt --benchmarks mmlu,medqa,humaneval
+python benchmark.py plot                                      # PNGs in benchmarks\plots\
+```
+
+- `download` fetches 21 open benchmarks (MMLU, MMLU-Pro, MedQA, MedMCQA, PubMedQA, MedXpertQA, SciQ, ARC,
+  LAB-Bench, MedCalc-Bench, HumanEval(+), MBPP(+), DS-1000 and others) and writes `benchmarks\manifest.json` with
+  each source, revision, licence and checksum. Nothing gated is downloaded. Never train on these files.
+- `run` scores multiple-choice sets like the fact benchmark (log-probability of each option per character), with
+  chance and the shuffled-question floor; MedCalc by the first number of a greedy answer; coding sets by running
+  the tests of a greedy completion (pass@1). `--limit N` takes the same N items every time; leave it out for the
+  full sets (best on the GPU). Results go to `results\benchmarks.csv`, per-item CSVs to `benchmarks\runs\`, and one
+  row to `experiments.csv` (`--no-publish`: not pushed to GitHub).
+- Generated code runs only in a sandbox without network: Docker if Docker Desktop is running, otherwise WSL
+  Ubuntu with bubblewrap (no Windows drives visible). Without either, coding benchmarks are refused.
+  `sandbox-setup --datasci` adds pandas, scipy, scikit-learn and matplotlib for DS-1000.
+- Open-answer and picture-graded sets (GeneTuring, HealthBench, CADBench, BioCoder, BigCodeBench) are downloaded
+  but not scored; `run` says why.
+
 ## Step 6: use the model
 
 ```

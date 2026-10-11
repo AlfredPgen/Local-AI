@@ -37,6 +37,9 @@ Last updated 11 October 2026.
       Needs approval to install: `python -m pip install bitsandbytes`.
 - [ ] **Dashboard for big models:** use fewer text windows for the CPU forward-pass panels in `view_pt.py`
       when the model has 1B+ parameters.
+- [ ] **Benchmark suite** (`benchmark.py`, 21 free benchmarks in `benchmarks\`): only a 50-question trial of
+      tinyGPT_best.pt was run (all near chance). Still to do: run the coding benchmarks end to end through the WSL
+      sandbox (or Docker when Docker Desktop is running), and run the full suite on the next, larger model.
 - [ ] **Post-training at the real size:** `python run_pipeline.py posttrain` once a new pre-trained model exists
       (fine-tuning now accumulates micro-batches, so it fits).
 
