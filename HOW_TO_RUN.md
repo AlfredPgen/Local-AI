@@ -378,10 +378,10 @@ python compare_models.py A_best.pt B_best.pt --device cpu    # is A really bette
   on different datasets. If it cannot check this, it prints a WARNING and gives no verdict, unless you add
   `--allow-different-datasets`.
 
-`experiments.csv` (opens in Excel) has one row per training run, benchmark, comparison and fine-tune, with the full
+`results\experiments.csv` (opens in Excel) has one row per training run, benchmark, comparison and fine-tune, with the full
 recipe: model shape, batch, optimizer, learning-rate schedule, weight decay, clipping, dropout, precision and the
 memory settings. When a new version adds columns, the old file is kept as a backup and rewritten once with the
-new header. A copy goes to GitHub as `results\experiments.csv`.
+new header. It is the file pushed to GitHub, so paths show your home folder as `~`.
 
 ### Public benchmarks: benchmark.py
 

@@ -384,7 +384,8 @@ def main(argv=None):
     r, epochs, unique = opts.tokens_per_param, opts.max_epochs, total_tokens
     data_tokens = epochs * unique
     flops, source = (opts.tflops * 1e12, f"--tflops {opts.tflops:g}") if opts.tflops else \
-        measured_speed(os.path.join(HERE, "experiments.csv"))
+        measured_speed(tiny_gpt.experiments_path(HERE) if os.path.isfile(tiny_gpt.experiments_path(HERE))
+                       else os.path.join(HERE, "experiments.csv"))
 
     def ctx_of(c):  # tiny_gpt's rule: long documents (books) take the width's maximum context
         return 256 if c.d_model <= 192 else (512 if c.d_model <= 512 else 1024)

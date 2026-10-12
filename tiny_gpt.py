@@ -1947,7 +1947,10 @@ def sustained_speed(out_dir, device):
     if device.type != "cuda":
         return None, "not a CUDA device"
     try:
-        with open(os.path.join(out_dir, "experiments.csv"), encoding="utf-8-sig", newline="") as handle:
+        path = experiments_path(out_dir)
+        if not os.path.isfile(path):  # a table from before results/ was its only home
+            path = os.path.join(out_dir, "experiments.csv")
+        with open(path, encoding="utf-8-sig", newline="") as handle:
             rows = [r for r in csv.DictReader(handle) if r.get("event") == "training run"
                     and (r.get("device") or "cuda").startswith("cuda")]
     except OSError:
@@ -3384,24 +3387,46 @@ def publish_to_github(rel, message, content=None, src=None, wait=True):
         return f"not published ({type(exc).__name__}: {exc})"
 
 
-def publish_experiments(path, row):
-    """The experiments table of this folder's runs, on GitHub as results/experiments.csv,
-    with the home folder shown as ~ (the local file keeps full paths)."""
-    with open(path, encoding="utf-8-sig") as handle:
-        text = handle.read()
+def experiments_path(out_dir):
+    """The one experiments table: <out_dir>/results/experiments.csv (for this
+    folder's runs, the file in the repository that is pushed to GitHub)."""
+    return os.path.join(out_dir, "results", "experiments.csv")
+
+
+def _hide_home(value):
+    """Text with the home folder shown as ~ (the table is published as it is)."""
+    if not isinstance(value, str):
+        return value
     home = os.path.expanduser("~")
     for variant in {home, home.replace("\\", "/")}:
-        text = re.sub(re.escape(variant), "~", text, flags=re.IGNORECASE)
+        value = re.sub(re.escape(variant), "~", value, flags=re.IGNORECASE)
+    return value
+
+
+def publish_experiments(path, row):
+    """Push the experiments table (results/experiments.csv) to GitHub."""
+    with open(path, encoding="utf-8-sig") as handle:
+        text = _hide_home(handle.read())  # rows are written with ~ already; older rows are covered too
     what = " ".join(str(row.get(k)) for k in ("event", "name", "status") if row.get(k))
     status = publish_to_github("results/experiments.csv", f"Experiments: {what}", content=text, wait=False)
     print(f"experiments.csv on GitHub (results/experiments.csv): {status}")
 
 
 def record_experiment(out_dir, row):
-    """Append one row to <out_dir>/experiments.csv (opens in Excel): a
-    permanent record of every run, benchmark and comparison."""
+    """Append one row to <out_dir>/results/experiments.csv (opens in Excel), the
+    single permanent record of every run, benchmark and comparison; paths show
+    the home folder as ~. A table left by older versions directly in <out_dir>
+    is moved there first (lose nothing)."""
     import csv
-    path = os.path.join(out_dir, "experiments.csv")
+    path = experiments_path(out_dir)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    legacy = os.path.join(out_dir, "experiments.csv")
+    if os.path.isfile(legacy) and not os.path.exists(path):
+        with open(legacy, encoding="utf-8-sig") as handle:
+            text = _hide_home(handle.read())
+        with open(path, "w", encoding="utf-8-sig", newline="") as handle:
+            handle.write(text)
+        os.remove(legacy)
     new = not os.path.exists(path)
     if not new:
         try:
@@ -3433,7 +3458,7 @@ def record_experiment(out_dir, row):
             writer = csv.DictWriter(handle, fieldnames=columns, extrasaction="ignore")
             if new:
                 writer.writeheader()
-            writer.writerow({"time": now_iso(), **{k: v for k, v in row.items() if v is not None}})
+            writer.writerow({"time": now_iso(), **{k: _hide_home(v) for k, v in row.items() if v is not None}})
     except PermissionError:
         print(f"Note: {path} is open in another program (Excel?); this row was not recorded: {row}")
         return

@@ -472,7 +472,7 @@ class TestPipeline(unittest.TestCase):
         self.assertNotEqual(code, 0, "export must refuse a non-empty folder")
         # bits per byte in the metrics line, and a permanent experiments table
         self.assertRegex(out, r"\| bpb \d+\.\d{3} \|")
-        with open(os.path.join(self.runs, "experiments.csv"), encoding="utf-8-sig") as f:
+        with open(os.path.join(self.runs, "results", "experiments.csv"), encoding="utf-8-sig") as f:
             table = f.read()
         self.assertIn("training run", table)
         self.assertIn("benchmark", table)
@@ -1117,7 +1117,7 @@ class TestPipeline(unittest.TestCase):
         kinds = [sorted(k for k in s if k != "step") for s in ck["optimizer"]["state"].values()]
         self.assertEqual(sum(k == ["momentum_buffer"] for k in kinds), 14)
         self.assertEqual(sum(k == ["exp_avg", "exp_avg_sq"] for k in kinds), 6)
-        with open(os.path.join(self.runs, "experiments.csv"), encoding="utf-8-sig", newline="") as handle:
+        with open(os.path.join(self.runs, "results", "experiments.csv"), encoding="utf-8-sig", newline="") as handle:
             row = [r for r in csv.DictReader(handle) if r["name"] == "N" and r["event"] == "training run"][-1]
         self.assertEqual((row["optimizer"], row["schedule"], row["decay_shape"], row["betas"], row["micro_batch"]),
                          ("Muon + AdamW", "WSD", "1-sqrt", "0.9/0.95", "8"))
@@ -1212,7 +1212,7 @@ class TestPipeline(unittest.TestCase):
         order = [out.find(s) for s in ("retrying with the loss computed", "retrying with micro-batch 4 x 2",
                                        "retrying with activation checkpointing")]
         self.assertTrue(all(i >= 0 for i in order) and order == sorted(order), out)
-        with open(os.path.join(self.runs, "experiments.csv"), encoding="utf-8-sig", newline="") as handle:
+        with open(os.path.join(self.runs, "results", "experiments.csv"), encoding="utf-8-sig", newline="") as handle:
             row = [r for r in csv.DictReader(handle) if r["name"] == "O1" and r["event"] == "training run"][-1]
         self.assertEqual((row["activation_checkpointing"], row["loss_chunk_tokens"], row["micro_batch"]),
                          ("on", str(tiny_gpt.LOSS_CHUNK_TOKENS), "4"))

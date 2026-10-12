@@ -52,7 +52,7 @@ answerer. **e**, tools to inspect, compare, export and use checkpoints.](figures
 | probes_biology.tsv | The fact benchmark: 336 questions in 16 categories, with near-miss wrong answers |
 | calibrate_probes.py | Sets the benchmark's difficulty labels from how open reference models score it |
 | finetune_examples/ | Format templates: 20 SFT examples and 12 DPO pairs |
-| experiments.csv | A permanent table with one row per training run, benchmark, comparison or fine-tune; copied to GitHub as results/experiments.csv |
+| results/experiments.csv | A permanent table with one row per training run, benchmark, comparison or fine-tune; pushed to GitHub |
 | log.txt | Everything the scripts print, appended |
 
 ## Everyday commands
@@ -1173,7 +1173,7 @@ first data splits new-field words into more pieces (slightly less efficient, sti
 
 ## The experiments table
 
-`experiments.csv`, next to the checkpoints, gets one row for every training run (when it ends or is stopped),
+`results/experiments.csv` gets one row for every training run (when it ends or is stopped),
 benchmark, comparison and fine-tune.
 
 - **Columns include:** time, event, name, status, step, parameters, shape, context, vocabulary, tokens seen, learning
@@ -1186,8 +1186,8 @@ benchmark, comparison and fine-tune.
 - **Opening it:** it opens directly in Excel. The scripts only ever append, and nothing deletes it. When a newer
   version adds columns, the file is copied to `experiments.csv.before-columns-<date>` and rewritten once with the
   new header; no row is lost.
-- **On GitHub:** every new row also updates `results/experiments.csv` in the repository, with your home folder
-  shown as `~`. Test runs in other folders are not published.
+- **On GitHub:** it is the only copy, and every new row is pushed to the repository as it is; paths show your home
+  folder as `~`. Test runs in other folders are not published.
 - **Why keep it:** yes, storing the parameters in a table is useful. It is the only reliable way to know, months
   later, which settings gave which result. Add your own comments in the *notes* column.
 
