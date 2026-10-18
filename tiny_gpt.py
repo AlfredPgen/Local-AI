@@ -3172,13 +3172,15 @@ def _train(args):
             if do_progress or heartbeat:
                 ptrain = (progress_loss / max(progress_micro, 1)).item()
                 per_step = interval_train_time / max(step - interval_start_step, 1)
+                next_eval = min(total_steps, (step // args.eval_every + 1) * args.eval_every)
                 # progress only: the latest validation (with the step it was measured at), the share done and the
                 # tokens seen so far; learning rate, whole-run time and ETA are on the validation lines
                 val_text = f"val {last_eval['loss']:.3f} @{last_eval['step']}" if last_eval else "val -"
                 print(f"{'  ... ' if heartbeat else ''}step {step:>6}/{total_steps} | {step / total_steps:5.1%} | "
                       f"train {ptrain:.3f} | {val_text} | "
                       f"{interval_tokens / max(interval_train_time, 1e-9):,.0f} tok/s | {per_step:.2f} s/step | "
-                      f"{tokens_seen:,} tokens | elapsed {fmt_hms(now - t_run)}")
+                      f"{tokens_seen:,} tokens | elapsed {fmt_hms(now - t_run)} | "
+                      f"next val in {fmt_dur(per_step * (next_eval - step))}")
                 progress_loss.zero_()
                 progress_micro = 0
                 last_print = time.perf_counter()

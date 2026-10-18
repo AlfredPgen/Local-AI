@@ -1103,8 +1103,8 @@ step 400/11870 | train 4.912 | val 4.470 @400 [md 4.51 wiki 4.43] | ppl 87.36
   25:58:47 of it training, 9.81 kWh, 1,226 g CO2e, £2.61`.
 - **Heartbeat:** a progress line starting with `...` appears every 2 minutes between evaluations, so a slow step never
   looks like a hang. It shows the share of the run done, the training loss since the previous line, the latest
-  validation loss with the step it was measured at (no new validation is run), speed, the total tokens seen and the
-  session's time. The learning rate, whole-run time and ETA are on the validation lines.
+  validation loss with the step it was measured at (no new validation is run), speed, the total tokens seen, the
+  session's time and the time to the next validation. The learning rate, whole-run time and ETA are on the validation lines.
 - **Why the sample always starts with "Genetic drift is":** the prompt (`--sample-prompt`) and the random seed are
   fixed on purpose, so samples from different steps differ only because the model has learnt more. Choose another
   prompt with `--sample-prompt "Linkage disequilibrium is"` when starting or resuming a run.
