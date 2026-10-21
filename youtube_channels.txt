@@ -46,3 +46,119 @@ Google DeepMind                     # AlphaFold and research talks
 Ninja Nerd                          # physiology, pathology, medicine
 Khan Academy Medicine
 The Royal Institution               # science lectures
+
+# Added 2026-10-21 after checking each name against YouTube (exact channel IDs)
+https://www.youtube.com/channel/UC0KoEZJH__bnfKLFZ1gsk3Q   # Wellcome Sanger Institute
+https://www.youtube.com/channel/UCcB2FFeJkF4LBxToiD-guNQ   # The Francis Crick Institute
+https://www.youtube.com/channel/UC6z7j9Ycp-HuiCcp9LKcbFg   # Salk Institute
+https://www.youtube.com/channel/UCpasZs-GSrQtOJW7WuAlq9Q   # The Jackson Laboratory
+https://www.youtube.com/channel/UCnWBh22UKMHF4VRKdsQvZqg   # Fred Hutch
+https://www.youtube.com/channel/UCWAAJ_zX4xqodZZ5W_qXY7g   # Gladstone Institutes
+https://www.youtube.com/channel/UCFdv1dXRMwv_CWj3Z4kwnZg   # Arc Institute
+https://www.youtube.com/channel/UCZVjCmJOQRpAQ_EruAIPqXg   # Simons Foundation
+https://www.youtube.com/channel/UC9rHXgUE9pikzYcGrAujMXQ   # Santa Fe Institute
+https://www.youtube.com/channel/UCYZkc-c8pRYOb-45g52Gegg   # Scripps Research
+https://www.youtube.com/channel/UCDt2f_5HBWQEklwTDyN0lsw   # MaxPlanckSociety
+https://www.youtube.com/channel/UC7o7xRfm-MEAMMwES2crk5Q   # Institut Pasteur
+https://www.youtube.com/channel/UCK2SSKURq_Lg1Nd5m5qSZPA   # Karolinska Institutet
+https://www.youtube.com/channel/UCmch4I_DXyRMH7ypNWYHfUw   # Weizmann Institute of Science
+https://www.youtube.com/channel/UCRNo2gqj3GiHlmT_OnqkouA   # ETH Zürich
+https://www.youtube.com/channel/UClMJeVIVyGp-3_kWtspkS0Q   # EPFL
+https://www.youtube.com/channel/UCcllgyYUiBwgYEWJ-HjyORA   # European Society of Human Genetics
+https://www.youtube.com/channel/UCrTKPW4VomrnZrf5a0J2DlQ   # Society for Molecular Biology and Evolution
+https://www.youtube.com/channel/UC5cQFOgHykizLpxvaSdpe4Q   # UK Biobank
+https://www.youtube.com/channel/UCFVzGiIYp-nRxsOTjjNUqOg   # Genomics England
+https://www.youtube.com/channel/UC5MOW8BO3dH38Fo3Rau17KQ   # The Royal Society
+https://www.youtube.com/channel/UCGG23t12yb96Qye6FGnLFSA   # Royal Society of Biology
+https://www.youtube.com/channel/UCL4AYjgN-yiqJUDzZwfTNXQ   # Biochemical Society
+https://www.youtube.com/channel/UCv0aU2eKry3kdSTnFa8QAWA   # Science Magazine
+https://www.youtube.com/channel/UClSV2Tk7x-wBBXP6-VCNbNw   # Cell Press
+https://www.youtube.com/channel/UCO6TjHHXNjHZP1b3XcZauhg   # ELife
+https://www.youtube.com/channel/UC4p6bEngiRCN7TyTxZVJ3OQ   # JAMA Network
+https://www.youtube.com/channel/UCrkhryqZABVzsGvfeAp0uIw   # The BMJ
+https://www.youtube.com/channel/UCQnUJepyNOw0p8s2otX4RYQ   # UCSC Genome Browser
+https://www.youtube.com/channel/UCwoMMZPbz1L9AZzvIvrvqYA   # GalaxyProject
+https://www.youtube.com/channel/UCqaMSQd_h-2EDGsU6WDiX0Q   # Bioconductor
+https://www.youtube.com/channel/UCfdY8g6eA6IuYZ8oyyNsabQ   # nf-core
+https://www.youtube.com/channel/UC6S-TJHOZnwXRhvBd8Ol_1A   # Kavli Institute for Theoretical Physics
+https://www.youtube.com/channel/UCGoxKRfTs0jQP52cfHCyyRQ   # MITCBMM
+https://www.youtube.com/channel/UC_NQ14VoXhmabaSZ4RWgKWw   # National Institutes of Health (NIH)
+https://www.youtube.com/channel/UCRVdFy0DLWhIApG8LWDzV1w   # National Cancer Institute
+https://www.youtube.com/channel/UCgyzPgagPZxXM8dOAjE9B2w   # NIH VideoCast
+https://www.youtube.com/channel/UCiMg06DjcUk5FRiM3g5sqoQ   # Centers for Disease Control and Prevention (CDC)
+https://www.youtube.com/channel/UC07-dOwgza1IguKA86jqxNA   # World Health Organization (WHO)
+https://www.youtube.com/channel/UC8fQzKHIhSoZeSq3bwQx4mw   # Mayo Clinic
+https://www.youtube.com/channel/UCxyiSz4m161Z6frOsFxJpgw   # Cleveland Clinic
+https://www.youtube.com/channel/UCATNzbTbfeoMhNonZGZmrhA   # Johns Hopkins Medicine
+https://www.youtube.com/channel/UCDrQaGaHpOav5y7m1SCSJRg   # Stanford Medicine
+https://www.youtube.com/channel/UCjG-bUhM813LndEDNOJNCcw   # Harvard Medical School
+https://www.youtube.com/channel/UCmo02peDKZvgpJj3TT2Jt_A   # Dana-Farber Cancer Institute
+https://www.youtube.com/channel/UC7CfDrRVN3yMVq7gq17hZdQ   # Memorial Sloan Kettering Cancer Center
+https://www.youtube.com/channel/UCxr_bGdhkdyyFo5V3qDBwGg   # American Association for Cancer Research
+https://www.youtube.com/channel/UCLv7Gzc3VTO6ggFlXY0sOyw   # Harvard University
+https://www.youtube.com/channel/UClGTZDyz3CSl92TgDqIr0nw   # caltech
+https://www.youtube.com/channel/UCcBYSgQTxc126-lj_gdrO8Q   # Princeton University
+https://www.youtube.com/channel/UCK8f1CUe8y403u3b0gCINww   # University of Oxford
+https://www.youtube.com/channel/UCLnGGRG__uGSPLBLzyhg8dQ   # Oxford Mathematics
+https://www.youtube.com/channel/UCc5vZEM1MLUzCrg_aZIJdeA   # Cambridge University
+https://www.youtube.com/channel/UCcRV5FPxxWFdS4Fjnk9FQvA   # Imperial College London
+https://www.youtube.com/channel/UCZAXKyvvIV4uU4YvP5dmrmA   # UC Berkeley
+https://www.youtube.com/channel/UChzhFUxUZFAQSJZ_Tp4B1fA   # Columbia University
+https://www.youtube.com/channel/UC8aRaZ6_0weiS50pvCmo0pw   # Institute for Advanced Study
+https://www.youtube.com/channel/UCSzx-qTK2639JBWgrb6mTmw   # Fields Institute
+https://www.youtube.com/channel/UCKJyv_uNh3LhYFKmwaB63bA   # Harvard Online
+https://www.youtube.com/channel/UCcabW7890RKJzL968QWEykA   # CS50
+https://www.youtube.com/channel/UCtslD4DGH6PKyG_1gFAX7sg   # Alexander Amini
+https://www.youtube.com/channel/UCEik-U3T6u6JA0XiHLbNbOw   # Bozeman Science
+https://www.youtube.com/channel/UC0cd_-e49hZpWLH3UIwoWRA   # Professor Dave Explains
+https://www.youtube.com/channel/UCesNt4_Z-Pm41RzpAClfVcg   # Armando Hasudungan
+https://www.youtube.com/channel/UCNI0qOojpkhsUtaQ4_2NUhQ   # Osmosis from Elsevier
+https://www.youtube.com/channel/UCbYmF43dpGHz8gi2ugiXr0Q   # Lecturio Medical
+https://www.youtube.com/channel/UCG-iSMVtWbbwDDXgXXypARQ   # MedCram - Medical Lectures Explained CLEARLY
+https://www.youtube.com/channel/UCqKiDBaeIA61KZxUqWHNb6w   # Neural Academy
+https://www.youtube.com/channel/UCEPMCywJ6FPZpQ_aPEZt5JA   # Shomu's Biology
+https://www.youtube.com/channel/UCZYTClx2T1of7BRZ86-8fow   # SciShow
+https://www.youtube.com/channel/UCsooa4yRKGN_zEE8iknghZA   # TED-Ed
+https://www.youtube.com/channel/UCHnyfMqiRRG1u-2MsSQLbXA   # Veritasium
+https://www.youtube.com/channel/UC_cznB5YZZmvAmeq7Y3EriQ   # Stated Clearly
+https://www.youtube.com/channel/UCzR-rom72PHN9Zg7RML9EbA   # PBS Eons
+https://www.youtube.com/channel/UCeiYXex_fwgYDonaTcSIk6w   # MinuteEarth
+https://www.youtube.com/channel/UCBbnbBWJtwsf0jLGUwX5Q3g   # Journey to the Microcosmos
+https://www.youtube.com/channel/UCsXVk37bltHxD1rDPwtNM8Q   # Kurzgesagt – In a Nutshell
+https://www.youtube.com/channel/UCEWpbFLzoYGPfuWUMFPSaoA   # The Organic Chemistry Tutor
+https://www.youtube.com/channel/UCFJyaHVyWKb2y-HkIAEPIdA   # Andrey K
+https://www.youtube.com/channel/UCGqQrz8HUV98ii7A_Pz1X_Q   # Biology with Animations
+https://www.youtube.com/channel/UCH6Oc4MAJzzmK0SM805ZnjQ   # Dr Matt & Dr Mike
+https://www.youtube.com/channel/UCbfYPyITQ-7l4upoX8nvctg   # Two Minute Papers
+https://www.youtube.com/channel/UCMLtBahI5DMrt0NPvDSoIRQ   # Machine Learning Street Talk
+https://www.youtube.com/channel/UCcIXc5mJsHVYTZR1maL5l9w   # DeepLearningAI
+https://www.youtube.com/channel/UCfzlCWGWYyIQ0aLC5w48gBQ   # sentdex
+https://www.youtube.com/channel/UCX7Y2qWriXpqocG97SFW2OQ   # Jeremy Howard
+https://www.youtube.com/channel/UCtAcpQcYerN8xxZJYTfWBMw   # Umar Jamil
+https://www.youtube.com/channel/UCobqgqE4i5Kf7wrxRxhToQA   # AI Coffee Break with Letitia
+https://www.youtube.com/channel/UCXZCJLdBC09xxGZ6gcdrc6A   # OpenAI
+https://www.youtube.com/channel/UCrDwWp7EBBv4NwvScIpBDOA   # Anthropic
+https://www.youtube.com/channel/UCCb9_Kn8F_Opb3UCGm-lILQ   # Microsoft Research
+https://www.youtube.com/channel/UCoxcjq-8xIDTYp3uz647V5A   # Numberphile
+https://www.youtube.com/channel/UC1_uAIS3r8Vu6JjXWvastJg   # Mathologer
+https://www.youtube.com/channel/UCSju5G2aFaWMqn-_0YBtq5A   # Stand-up Maths
+https://www.youtube.com/channel/UConVfxXodg78Tzh5nNu85Ew   # Welch Labs
+https://www.youtube.com/channel/UCUcpVoi5KkJmnE3bvEhHR0Q   # ritvikmath
+https://www.youtube.com/channel/UCcAtD_VYwcYwVbTdvArsm7w   # mathematicalmonk
+https://www.youtube.com/channel/UCiHi6xXLzi9FMr9B0zgoHqA   # jbstatistics
+https://www.youtube.com/channel/UCFrjdcImgcQVyFbK04MBEhA   # Brandon Foltz
+https://www.youtube.com/channel/UC9-y-6csu5WGm29I7JiwpnA   # Computerphile
+https://www.youtube.com/channel/UC8butISFwT-Wl7EV0hUK0BQ   # freeCodeCamp.org
+https://www.youtube.com/channel/UCCezIgC97PvUuR4_gbFUs5g   # Corey Schafer
+https://www.youtube.com/channel/UCVhQ2NnY5Rskt6UjCUkJ_DA   # ArjanCodes
+https://www.youtube.com/channel/UCaiL2GDNpLYH6Wokkk1VNcg   # mCoding
+https://www.youtube.com/channel/UC3xfbCMLCw1Hh4dWop3XtHg   # Posit PBC
+https://www.youtube.com/channel/UC_R5smHVXRYGhZYDJsnXTwg   # R Consortium
+https://www.youtube.com/channel/UCOjD18EJYcsBog4IozkF_7w   # PyData
+https://www.youtube.com/channel/UCkhm72fuzkS9fYGlGpEmj7A   # Enthought
+https://www.youtube.com/channel/UCSHZKyawb77ixDdsGog4iWA   # Lex Fridman
+https://www.youtube.com/channel/UCtYLUTtgS3k1Fg4y5tAhLbw   # StatQuest with Josh Starmer
+https://www.youtube.com/channel/UCNJK6_DZvcMqNSzQdEkzvzA   # Richard McElreath
+https://www.youtube.com/channel/UCzL_0nIe8B4-7ShhVPfJkgw   # Data Science Dojo
+https://www.youtube.com/channel/UCCcrR0XBH0aWbdffktUBEdw   # Mutual Information
+https://www.youtube.com/channel/UCIxertsVDip8QHpnhinkAow   # Ari Seff
