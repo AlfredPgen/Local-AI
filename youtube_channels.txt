@@ -10,7 +10,9 @@ Genetics Society of America         # 470 videos, 241 hours
 Bioinformatics DotCa                # 735 videos, 755 hours: Canadian Bioinformatics Workshops
 Sanger Institute Scientific Training and Events   # 245 videos, 172 hours
 Human Cell Atlas                    # 667 videos, 572 hours
-@IBiologyvideos                     # talks by leading biologists
+https://www.youtube.com/channel/UCsvqEZBO-kNmwuDBbKbfL6A   # Science Communication Lab (formerly iBiology): talks by leading biologists
+https://www.youtube.com/channel/UCimxROEIlNsiRqT9X5tg2XQ   # iBiology Techniques
+https://www.youtube.com/channel/UCIWTT30C_MXMgz1A_S81t2g   # iBiology Science Stories
 National Human Genome Research Institute
 EMBL-EBI
 @YaleCourses                        # Open Yale Courses (CC BY-NC-SA), incl. evolution, ecology and behaviour
