@@ -29,3 +29,20 @@ Ben Lambert                         # 497 videos: Bayesian statistics, econometr
 @mitocw                             # 8,112 videos, 5,474 hours: MIT OpenCourseWare (CC BY-NC-SA)
 @stanfordonline
 @khanacademy
+
+# Added 2026-10-21: more genetics, medicine, statistics and ML (names are looked up like the ones above)
+Wellcome Connecting Science         # genomics courses and conferences
+Cold Spring Harbor Laboratory       # CSHL Leading Strand: research talks
+Allen Institute                     # cell and brain science
+@BioInteractive                     # HHMI BioInteractive: evolution, genetics, ecology
+Simons Institute                    # theory of computing, statistics, learning theory
+Institute for Pure & Applied Mathematics   # IPAM: maths of biology and ML
+Isaac Newton Institute for Mathematical Sciences
+Neuromatch Academy                  # computational neuroscience and deep learning courses
+@zedstatistics                      # statistics and econometrics
+@VeryNormal                         # statistics explained
+Yannic Kilcher                      # machine-learning papers explained
+Google DeepMind                     # AlphaFold and research talks
+Ninja Nerd                          # physiology, pathology, medicine
+Khan Academy Medicine
+The Royal Institution               # science lectures
