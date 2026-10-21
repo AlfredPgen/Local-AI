@@ -4,6 +4,10 @@ Last updated 11 October 2026.
 
 ## Data
 
+- [ ] **Before the next `data_prep.py` run:** compress `ai_training_data` with NTFS compression (about 2x less
+      space; scripts keep working): `compact /c /s:"$env:USERPROFILE\ai_training_data" /i /q`
+      (undo: `compact /u /s:"$env:USERPROFILE\ai_training_data" /i /q`).
+
 - [ ] **Rebuild the dataset.** `datasets\` is empty (bio_all is gone). Rebuild with `python run_pipeline.py build`
       (about 2 h) once the downloads below have added more text. It picks up the 4,527-term `keywords.txt`.
 - [ ] **arXiv download** is running (21 subject areas, `--wait 8-12`). Rerun the same command to continue;
