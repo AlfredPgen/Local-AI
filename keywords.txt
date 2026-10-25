@@ -407,118 +407,292 @@ variant calling
 whole-genome sequencing
 
 # genotyping, imputation and sequencing
+=Affymetrix Axiom
 ANNOVAR
 =ATAC-seq
+=AVITI
 base calling
 base quality
 basecalling
+Beagle 5
+=BGISEQ
+=Bionano
 bisulfite sequencing
 =CADD
 =ChIP-seq
 coverage depth
 de novo assembly
+=DNBSEQ
+Eagle phasing
+=exome array*
+=Exome Chip
+=Flongle
+gene panel*
 genome assembly
 genotype call rate*
 genotype calling
 genotype likelihood*
 genotyping rate
+=GLIMPSE
+=GLIMPSE2
+=Global Screening Array
 GRCh37
 GRCh38
+=GridION
+=GSA array
+=HapCUT2
+Haplotype Reference Consortium
 heterozygosity rate
 =hg19
 =hg38
 =Hi-C
 HiFi reads
 high-coverage sequencing
+=HiSeq
+=HRC panel
+=Illumina HumanOmni*
+=Illumina NovaSeq
+=ImmunoChip
 imputation accuracy
 imputation quality
 imputation server*
+=IMPUTE4
+=Infinium Omni*
 INFO score*
 insert size
+=Ion Torrent
+=iSeq
 k-mer*
 liftOver
+linked-read*
 long-read RNA
 low-coverage sequencing
 low-pass sequencing
 =MAF
 mapping quality
+=Metabochip
 methylation array*
+=MGISEQ
+=Minimac3
+=MinION
+=MiniSeq
 minor allele frequenc*
+=MiSeq
 nanopore sequencing
+=NextSeq
+=NovaSeq
+=OmniExpress
+optical genome mapping
+optical mapping
+=PacBio HiFi
 paired-end
 pangenome*
 PCR duplicate*
 Phred
 PolyPhen
+=PromethION
+=QUILT imputation
 read alignment
 read depth
+read-backed phasing
 reference genome*
+=Revio
 =RNA-seq
 sample QC
+=Sequel II
 sequencing coverage
 sequencing depth
+=SHAPEIT2
+=SHAPEIT4
+=SHAPEIT5
 short-read
 short-read sequencing
+single-molecule real-time sequencing
+=SMRT sequencing
 SNP call rate*
 spatial transcriptomics
+statistical phasing
+=Strand-seq
 =T2T
+targeted panel*
+targeted sequencing
 telomere-to-telomere
+=UK Biobank Axiom
 variant effect predictor
 variant QC
 =VEP
+=WES
+=WGS
+=WhatsHap
 
 # single-cell genomics
+=10x Chromium
 =10x Genomics
+=10x Multiome
+=alevin
+=alevin-fry
 ambient RNA
+=AnnData
+=ArchR
+=ASAP-seq
 batch correction
 batch effect*
+=BayesPrism
+=BayesSpace
+=BBKNN
 cell atlas
 cell clustering
 Cell Ranger
+cell segmentation
 cell state*
 cell type annotation
 cell-cell communication
 cell-type deconvolution
+cell-type enrichment
 cell-type-specific
+=cell2location
+=CellBender
+=CellChat
+=CellPhoneDB
 CellRanger
+=CellTypist
+=Chromium Single Cell
+=chromVAR
+=CIBERSORT
+=CIBERSORTx
 =CITE-seq
 CITE-seq
+CODEX multiplexed imaging
+=CosMx
 =CRISPR screen*
+=CyTOF
+=DBiT-seq
+=DOGMA-seq
 doublet detection
 doublet*
+=Drop-seq
 droplet-based
+=EpiDISH
+=fastMNN
+=GeoMx
+=h5ad
 =Harmony integration
+=HDST
 highly variable gene*
 Human Cell Atlas
+imaging mass cytometry
+=inDrop
+=kb-python
+Leiden clustering
+=LIANA
+=LIGER
+Louvain clustering
 marker gene*
+mass cytometry
+=MCP-counter
 =MERFISH
+=Monocle3
 multiome
+=MuSiC deconvolution
+mutual nearest neighbo*
+=NicheNet
+=PAGA
 Perturb-seq
 pseudobulk
 pseudotime
+=pySCENIC
+=quanTIseq
+=RCTD
 RNA velocity
 =sc-eQTL
 Scanpy
+=scANVI
+=scArches
 =scATAC-seq
 scATAC-seq
+=scater
+=SCAVENGE
+=scDblFinder
+=scDRS
+=SCENIC
+=sci-ATAC-seq
+=sci-RNA-seq
+=scNMT-seq
+=scran
 =scRNA-seq
+=Scrublet
+=SCTransform
+=scVelo
+=scVI
+=scvi-tools
+=seqFISH
 =Seurat
 Seurat object*
 Seurat package
+=SHARE-seq
+single-cell ATAC-seq
+single-cell atlas
+single-cell chromatin accessibility
 single-cell eQTL
+single-cell methylation
+single-cell multi-omic*
+single-cell multiomic*
+single-cell proteomic*
 single-cell RNA sequencing
+single-cell transcriptomic*
 single-nucleus
+=SingleCellExperiment
+=SingleR
+=Slide-seq
+=Slide-seqV2
+Slingshot trajectory
+=Smart-seq2
+=Smart-seq3
+=SnapATAC
+=SnapATAC2
+=SNARE-seq
 =snRNA-seq
 snRNA-seq
+=SoupX
+spatial deconvolution
+spatial domain*
 spatial omics
+=SpatialDE
+spatially resolved transcriptomic*
+=SPLiT-seq
+=SPOTlight
+=Squidpy
+=STARsolo
+=Stereo-seq
+=Symphony reference
+=Tangram mapping
+=TEA-seq
+=totalVI
 trajectory inference
 =UMI
 =UMIs
 unique molecular identifier*
+=velocyto
 =Visium
+=Visium HD
+=xCell
+=Xenium
 
 # genomics software and file formats
+activity-by-contact
+=ALDEx2
+=Aldy
+=AlphaDIA
+=AlphaPept
+=ANCOM
+=ANCOM-BC
+=ANCOM-BC2
+=AnVIL
+=ARACNe
+=Bakta
 =BAM
+=Basenji
+=BBMap
 =BCF
 bcftools
 =Beagle
@@ -527,173 +701,894 @@ bedtools
 =BGEN
 bgzip
 bim file*
+=Bioconda
 Bioconductor
+=BioContainers
 =Biopython
+=Bismark
 =BLAST
+=Bowtie
+=Bowtie 2
 bowtie2
+=BPNet
+=BRAKER
+=bsseq
+=bumphunter
+=BUSCO
 =BWA
+=Canu
+=ChAMP
+=CheckM
+=CheckM2
+=CHiCAGO
+=ChIPseeker
+=ChromBPNet
+=ChromHMM
+=Clair3
+=Clustal Omega
+=ClustalW
+=clusterProfiler
+=CNVkit
+=CNVnator
+=ComBat
+=ComBat-seq
+Common Workflow Language
+=Compound Discoverer
 =CRAM
+Cromwell engine
+Cromwell workflow
+=CSI:FingerID
 cutadapt
+=CWL
+=DADA2
+=DAVID Bioinformatics
+=Deblur
+=decoupleR
+=DeepSEA
+=deepTools
+=DeepTrio
+=DELLY
 DESeq2
+=DIA-NN
+=DIABLO
+=DIAMOND aligner
+=DiffBind
+=DMRcate
+=DoRothEA
 edgeR
+=eggNOG
+=eggNOG-mapper
+=eigenMT
+=Enformer
+=ENmix
+=Enrichr
 =Ensembl VEP
+=Exomiser
+=ExPecto
 fam file*
 =FASTA
+=fastp
 =FASTQ
 FastQC
+=FastQTL
 featureCounts
+=fgsea
+=FIMO
+=FitHiC
+=Flye
+=FragPipe
+=FreeBayes
 =FUSION
+=g:Profiler
+=Galaxy platform
+=Galaxy Project
 =GATK
+=Gblocks
 =GCTB
+=GDS file*
+=GENESIS package
+=GENIE3
 =GFF
+=GNPS
+=goseq
+=Greengenes
+=Greengenes2
+=GSVA
+=GTDB-Tk
 =GTF
 gzip
 =Hail
+=HiC-Pro
+=HiCExplorer
+=hifiasm
+=HISAT
 HISAT2
+=HMMER
+=HOCOMOCO
+HOMER motif
+=HTSeq
+htseq-count
 =HTSlib
+=HUMAnN
+=HUMAnN2
+=HUMAnN3
+=iCluster
+=iClusterPlus
+=IGV
+=inStrain
+Integrative Genomics Viewer
+=InterProScan
+=Juicebox
 kallisto
+=Kraken2
+=LEfSe
+=LIMIX
 limma
+=LOFTEE
+=LUMPY
+=MaAsLin
+=MaAsLin2
+=MACS2
+=MACS3
+=MAFFT
+=MarkDuplicates
+=Mascot search
+=mashr
+Matrix eQTL
+=MatrixEQTL
+=MaxQuant
+=meffil
+=MEGAHIT
+=MEME suite
+=MEME-ChIP
+=MetaBAT
+=MetaBAT2
+=MetaboAnalyst
+=MetaboAnalystR
 =METAL
+=MetaPhlAn
+=MetaPhlAn3
+=MetaPhlAn4
+=metaSPAdes
+=MethylDackel
+=methylKit
 =Michigan Imputation Server
+=minfi
 =minimap2
+=mixOmics
+=MOFA
+=mosdepth
+=mothur
+=MS-DIAL
+=MSFragger
+=MSstats
+Multi-Omics Factor Analysis
+=MultiAssayExperiment
 MultiQC
+=MUMmer
+=mummichog
+=MUSCLE aligner
+=MuTect
+=Mutect2
+=MZmine
+=Nextclade
 Nextflow
+=Nextstrain
+=nf-core
+=OpenMS
+=OrthoFinder
+=Panaroo
+=pangolin lineage*
+=PC-AiR
+=PC-Relate
+=PEAKS Studio
+=PEER factors
+=PennCNV
+Perseus software
+=PGEN
+pgen file*
+=PharmCAT
+=phyloseq
+=Picard tools
+=PICRUSt
+=PICRUSt2
 PLINK
 PLINK2
+probabilistic estimation of expression residuals
+=PROGENy
+=Prokka
+=Proteome Discoverer
 =PRS-CS
+=PyPGx
+=PyRadiomics
 qctool
+=QIIME
+QIIME 2
+=QIIME2
+=Qualimap
+=QuantiSNP
+=QUAST
+RDP classifier
+=RepeatMasker
+=REVEL
+=RnBeads
+=Roary
+=RSEM
+=Rsubread
+=RUVSeq
 =S-PrediXcan
+=Salmon
+salmon quant
 SAM file*
+=Sambamba
 samtools
+=SeqArray
+=SEQUEST
+=SeSAMe
+similarity network fusion
+=Skyline software
 Snakemake
+=Sniffles2
 =SnpEff
+=SNPRelate
+=SnpSift
+=sourmash
+=SPAdes
+=Spectronaut
+=SpliceAI
+=ssGSEA
+=STAR 2-pass
+STAR aligner
+STAR alignment
+=Stargazer genotyping
+=StrainPhlAn
+=Strelka2
+=StringTie
+=Subread
+sva package
 tabix
+=TopHat
+=TopHat2
 =TOPMed imputation
+=TreeTime
+=trimAl
 Trimmomatic
+=tximport
+=UPARSE
+=USEARCH
+usegalaxy
+=VarScan
+=VarScan2
 =VCF
 =VCFs
 vcftools
+vegan package
+=Verkko
+=VSEARCH
+=wateRmelon
+=WDL
+=WGCNA
+Workflow Description Language
+=XCMS
 
 # GWAS, fine-mapping, colocalisation, MR, PGS and TWAS software
+=ACAT-O
+=BayesR
+=BGENIE
+=bigsnpr
+=bigstatsr
 BOLT-LMM
+=BOLT-REML
+=CARMA fine-mapping
+=CAUSE method
 =CAVIAR
+=CAVIARBF
+=CMplot
 =coloc
+=coloc.susie
+=ColocBoost
+=CPASSOC
+=cS2G
+=CT-SLEB
+=DAP-G
 DeepVariant
+=DEPICT
 Eagle2
+=EasyQC
 eCAVIAR
+=EMMAX
+=ENLOC
+=EpiXcan
+=FaST-LMM
+=fastBAT
+=fastENLOC
 fastGWA
+=fastGWA-GLMM
 =FINEMAP
+=FINEMAP-inf
+FOCUS TWAS
 =FUMA
 FUSION TWAS
 =GCTA
+=GCTA-COJO
+=GCTA-fastBAT
+=GCTA-GREML
+=GCTA-mtCOJO
+=GEMMA
+Genomic SEM
 GLnexus
+=GMMAT
+=GNOVA
+=GREML
+=GSMR
 =GWAMA
+=GWAS-PW
+=GWASinspector
+=GWASLab
 Haploview
 =HEIDI
 HyPrColoc
 IMPUTE2
 IMPUTE5
 inverse-variance weighted
+=JLIM
 lassosum
+=lassosum2
+latent causal variable
+LAVA local genetic correlation
 LD score regression
+=LDAK
 LDpred
+=LDpred-funct
 LDpred2
+=LDpred2-auto
 =LDSC
+=LDstore
+=LDstore2
+=LHC-MR
+=LocusCompare
 LocusZoom
+=locuszoomr
 =MAGMA
+=MegaPRS
 MendelianRandomization
+=MESuSiE
+=Meta-SAIGE
+=MetaSKAT
+=METASOFT
 MetaXcan
 Michigan Imputation Server
 Minimac
 Minimac4
+=MiXeR
 moloc
+=MR-APSS
 =MR-Base
+=MR-Clust
+=MR-cML
 MR-Egger
+=MR-Hevo
 MR-MEGA
 MR-PRESSO
+=MR-RAPS
+=MR-Steiger
+=MRClust
+=MRlap
+=MRlink
+=MRMix
+=MsCAVIAR
+=MTAG
+=mtCOJO
+multivariable Mendelian randomisation
+multivariable Mendelian randomization
+=MultiXcan
+=MungeSumstats
+=MVMR
+=OneSampleMR
 =PAINTOR
+=PASCAL gene scoring
+=pgsc_calc
+=PheWeb
 PolyFun
+=PolyPred
+=PoPS gene prioritisation
+=PredictDB
 PrediXcan
 PRS-CS
 PRScs
+=PRScsx
 PRSice
+=PRSice-2
+=PWCoCo
+=qqman
+=RadialMR
+=RAREMETAL
 =REGENIE
+=rho-HESS
+=S-MultiXcan
 S-PrediXcan
 =SAIGE
+=SAIGE-GENE
+=SAIGE-QTL
+=SBayesC
 SBayesR
+=SBayesRC
+=SBayesS
 =SHAPEIT
+=SharePro
 =SMR
+=SMR-HEIDI
+=snpnet
+=SNPTEST
+=STAAR
+Steiger filtering
+=StructLMM
+=SumHer
+=SUPERGNOVA
 =SuSiE
+=SuSiE-inf
+=SuSiE-PCA
+=SuSiE-RSS
 susieR
+=SuSiEx
+=TIGAR
 TOPMed imputation
+=TWMR
 TwoSampleMR
+=UTMOST
 weighted median
 
 # biobanks, platforms and companies
 100,000 Genomes Project
 10x Genomics
 23andMe
+Abbott Laboratories
+Abcam
+AbCellera
+Abivax
+Ablynx
+Absci
+AC Immune
+Acadia Pharmaceuticals
+Actelion
+Acuitas Therapeutics
+Adamed
+Adaptimmune
 Affymetrix
+AGC Biologics
 Agilent
+Agios Pharmaceuticals
+Akeso
+Alexion
+Alfasigma
+ALK-Abelló
+Alkem Laboratories
+Alkermes
 All of Us Research Program
+Allogene Therapeutics
+Almirall
+Alnylam
 =ALSPAC
+Alteogen
+Amarin
+Ambry Genetics
+AncestryDNA
+Angelini Pharma
+Apellis Pharmaceuticals
+Apotex
+Applied Biosystems
+Arbutus Biopharma
+Arcturus Therapeutics
+argenx
 =ARIC
+Arrowhead Pharmaceuticals
+Arvinas
+Ascendis Pharma
+Astellas
+Asymchem
+Atomwise
+Aurinia Pharmaceuticals
+Aurobindo Pharma
+Autolus
+Aventis
 Avon Longitudinal
+Axsome Therapeutics
+Bachem
+Barinthus Bio
+Basilea Pharmaceutica
+Bausch Health
+Bavarian Nordic
+Baxter International
 Bayer
+Beam Therapeutics
+Becton Dickinson
+BeiGene
+BenevolentAI
+BeOne Medicines
 =BGI
+Bharat Biotech
+Bicycle Therapeutics
+Bio-Manguinhos
+Bio-Rad
+BioArctic
 Biobank Japan
+Biocad
+Biocon
 Biogen
+Biohaven
+BiolineRx
+Biomapas
+BioMarin
 =BioMe
+bioMerieux
+bioMérieux
+Bionano Genomics
 BioVU
+bluebird bio
+Blueprint Medicines
 Boehringer Ingelheim
+Bruker
+Burroughs Wellcome
+C4 Therapeutics
+Cadila Healthcare
 Calico Life Sciences
+Cambrex
+Camurus
+CanSino Biologics
+Caribou Biosciences
+Caszyme
+Catalent
+Celgene
+Cellectis
+Celltrion
+Centogene
+Cephalon
+Charles River Laboratories
+Chiesi
 China Kadoorie Biobank
+Chugai
+Ciba-Geigy
+Cipla
+Clinuvel
+Compass Pathways
+Complete Genomics
+Compugen
+Congenica
+Covance
+CRISPR Therapeutics
+Crucell
+CSL Behring
+CSL Limited
+CSL Vifor
+CSPC Pharmaceutical
+CureVac
+Cytiva
+Daewoong Pharmaceutical
+Daiichi Sankyo
+Danaher
 Danish National Biobank
+DBV Technologies
+Debiopharm
 =deCODE
 DeepMind
+Denali Therapeutics
+DiaSorin
+Dicerna
 DiscovEHR
+Divi's Laboratories
 DNAnexus
+Dr. Reddy's
+Dynavax
+Editas Medicine
+Egis Pharmaceuticals
+Eisai
+Elanco
 Element Biosciences
+Emergent BioSolutions
 EPIC-Norfolk
+Eppendorf
 Estonian Biobank
+Eurofarma
+Eurofins
+Evotec
+Exact Sciences
+Exelixis
+Exscientia
+Fate Therapeutics
+Ferentis
+Fermentas
+Ferring Pharmaceuticals
+Fiocruz
+Fluidigm
+Formycon
+Fortrea
+Fosun Pharma
+Foundation Medicine
 Framingham Heart Study
+Fresenius Kabi
+Fujifilm Diosynth
+Galapagos NV
+Galderma
+Gamaleya
+Gamida Cell
+GC Biopharma
+Gedeon Richter
 Geisinger
+GeneDx
 Genentech
+Generate Biomedicines
 Generation Scotland
 Genes & Health
+Genfit
 Genomics England
 Genomics plc
+GenScript
+Genus plc
+Genzyme
+Geropharm
 Gilead Sciences
+Glaxo Wellcome
+Glenmark
+Grifols
+Grindeks
+Grunenthal
+Grünenthal
 =GSK
+Guardant Health
 =H3Africa
+Halozyme
+Hanmi Pharmaceutical
+Hansa Biopharma
+Hansoh Pharma
+Helsinn
+Hemofarm
+Hengrui Medicine
+Henlius
+Hetero Labs
+Hikma
+Hoechst
+Hoffmann-La Roche
+Horizon Discovery
+Horizon Therapeutics
 HUNT study
+Hutchmed
+Hypera Pharma
+ICON plc
+Icosagen
+Idorsia
+Immatics
+Immunocore
+ImmunoGen
+Immutep
+Incyte
+Indivior
+Innate Pharma
+Innovent Biologics
+Insilico Medicine
 Insitro
+Insmed
+Instituto Butantan
+Intas Pharmaceuticals
+Integrated DNA Technologies
+Intellia Therapeutics
+Intra-Cellular Therapies
+Invitae
+Ion Torrent
+Ionis Pharmaceuticals
+Iovance Biotherapeutics
+Ipca Laboratories
+Ipsen
 iPSYCH
+IQVIA
 Isomorphic Labs
+Janssen Pharmaceutica
+Janssen Pharmaceuticals
+Jazz Pharmaceuticals
+JCR Pharmaceuticals
+Jiangsu Hengrui
 Johnson & Johnson
+Juno Therapeutics
+Junshi Biosciences
 Kaiser Permanente
+Karuna Therapeutics
+Karyopharm
+Kelun-Biotech
+Kite Pharma
+Krystal Biotech
+Kymera Therapeutics
+Kyowa Kirin
+Labcorp
+Laurus Labs
+Legend Biotech
+Lek Pharmaceuticals
+LEO Pharma
+Life Technologies
 Lifelines cohort
+Lonza
+Lundbeck
+Lupin Limited
+Madrigal Pharmaceuticals
+Mallinckrodt
+Mankind Pharma
+MedImmune
+Medpace
+Meiji Seika
+Menarini
 Merck
+Merck KGaA
+Merck Sharp & Dohme
+Mersana Therapeutics
+Merus NV
+Mesoblast
 Mexico City Prospective Study
 MGI Tech
 Michigan Genomics Initiative
 Million Veteran Program
+MilliporeSigma
+Miltenyi Biotec
+Mirati Therapeutics
+Mitsubishi Tanabe
+Molecular Partners
+Monte Rosa Therapeutics
+MorphoSys
+Mylan
+Myriad Genetics
+Nanobiotix
+NanoString
+Natco Pharma
+Natera
+Neuren Pharmaceuticals
+Neurocrine Biosciences
+New England Biolabs
+Nippon Shinyaku
+Northway Biotech
+Novavax
+Novonesis
+Novozymes
 Nurses' Health Study
+Nykode Therapeutics
+Octapharma
+Olainfarm
+Ono Pharmaceutical
+Organon & Co
+Orion Pharma
+Otsuka Pharmaceutical
 Our Future Health
+Oxford Biomedica
 Oxford Nanopore
+Pacific Biosciences
+Parexel
+Patheon
+PeptiDream
+PerkinElmer
+Perrigo
+Pharmacia
+PharmaEssentia
+PharmaMar
+Pharmaron
+Pharmathen
+Pharming
+Pharmstandard
+Pierre Fabre
+Piramal Pharma
+Pliva
+Polpharma
+PRA Health Sciences
+Prime Medicine
+Promega
+Protalix
+Prothena
+Purdue Pharma
 Qatar Biobank
 Qiagen
+Quanterix
+R-Pharm
+Recipharm
+Recordati
 Recursion Pharmaceuticals
+REGENXBIO
+Relay Therapeutics
+RemeGen
+Revolution Medicines
+Revvity
+Rhône-Poulenc
+Rocket Pharmaceuticals
+Ryvu Therapeutics
+Sage Therapeutics
+Samsung Bioepis
+Samsung Biologics
+Sandoz
+Sangamo Therapeutics
+Sanofi Pasteur
+Santen Pharmaceutical
+Sarepta Therapeutics
+Sartorius
+Schering-Plough
+Seagen
+Seattle Genetics
+Selvita
+Seqirus
+Serum Institute of India
+Servier
 Seven Bridges
+Shionogi
+Shire Pharmaceuticals
+Siegfried Holding
+Siemens Healthineers
+Sigma-Aldrich
+Silence Therapeutics
+Sino Biopharmaceutical
+Sinopharm
+Sinovac
+SK Biopharmaceuticals
+SK bioscience
+SmithKline Beecham
+SomaLogic
+Sopharma
+Spark Therapeutics
+Stada Arzneimittel
+Standard BioTools
+Sumitomo Pharma
+Sun Pharma
+Sun Pharmaceutical*
+Swedish Orphan Biovitrum
+Syneos Health
+Syngene
+Taisho Pharmaceutical
 Taiwan Biobank
+Takara Bio
+Taro Pharmaceutical*
+Telix Pharmaceuticals
+Tempus AI
 Terra platform
+Teva Pharmaceutical*
 Thermo Fisher
+Thermo Fisher Scientific Baltics
+Tigermed
+Torrent Pharmaceuticals
 TwinsUK
+Twist Bioscience
+=UCB
 UK Biobank Research Analysis Platform
 =UKB-RAP
 Ultima Genomics
+Ultragenyx
+uniQure
+United Therapeutics
+Upjohn
+Vaccitech
+Valeant
+Valneva
+Valo Health
+Veracyte
+Verona Pharma
+Vertex Pharmaceuticals
+Verve Therapeutics
+Viatris
+Vifor Pharma
+Viking Therapeutics
+Vir Biotechnology
+Walvax
+Warner-Lambert
+Wellcome Sanger Institute
 Whitehall II
+Wockhardt
 Women's Health Initiative
+WuXi AppTec
+WuXi Biologics
+Wyeth
+Xaira Therapeutics
+Xenon Pharmaceuticals
+XtalPi
+Yuhan Corporation
+Zai Lab
+Zambon
+Zealand Pharma
+Zeneca
+Zentiva
+Zoetis
+Zydus Lifesciences
+Zymeworks
 
 # databases
 AlphaFold DB
@@ -920,125 +1815,312 @@ spermatozoa
 white blood cell*
 
 # genes
+=ABAT
 =ABCA1
 =ABCA4
 =ABCA7
 =ABCB1
+=ABCB11
+=ABCB4
+=ABCC2
+=ABCC6
+=ABCC8
+=ABCC9
+=ABCD1
 =ABCG2
 =ABCG5
 =ABCG8
 =ABI3
 =ABL1
 =ABO
+=ACACA
+=ACAD9
+=ACADM
+=ACADVL
+=ACAN
+=ACAT1
+=ACE
 ACE inhibitor*
 =ACE2
+=ACMSD
+=ACSL4
+=ACTA1
+=ACTA2
 =ACTB
 =ACTC1
 =ACTN3
 =ACVR1
+=ACVRL1
+=ADAM10
+=ADAM17
+=ADAMTS13
+=ADCY3
+=ADCY5
+=ADGRV1
 =ADH1B
 =ADH1C
 =ADIPOQ
+=ADRA2A
+=ADRB1
+=ADRB2
+=ADRB3
+AGAMOUS
+=AGL
+=AGO2
+agouti
+=AGRP
+=AGT
+=AGTR1
+=AGXT
+=AHI1
 =AHR
+=AIP
 =AIRE
 =AKT1
+=AKT2
+=AKT3
+=ALB
 =ALDH1A1
 =ALDH2
+=ALDH5A1
+=ALDH7A1
+=ALDOB
 =ALK
+=ALOX15
+=ALOX5
+=ALPL
+=ALS2
+=AMH
+=AMHR2
 =AMY1
 androgen receptor*
+=ANGPT1
+=ANGPT2
 =ANGPTL3
 =ANGPTL4
 =ANGPTL8
 =ANK1
+=ANKK1
+=ANO5
+Antennapedia
+=Antp
 =APC
+APETALA
 =APOA1
+=APOA2
+=APOA4
 =APOA5
 =APOB
+=APOC1
+=APOC2
 =APOC3
 =APOE
 =APOL1
+=APOM
 =APP
+=AQP2
+=AQP4
+=ARG1
+=ARHGAP11B
+=ARID1A
 =ARID1B
+=ARID2
 =ARMS2
 =ARNT
+=ARSA
+=ARX
 =ASCL1
 =ASIP
+=ASPM
+=ASS1
 =ASXL1
+=ATF4
+=ATF6
 =ATG16L1
+=ATG5
+=ATG7
+=ATL1
 =ATM
+=ATN1
+=ATP1A2
+=ATP1A3
+=ATP2A2
+=ATP6V1B1
 =ATP7A
 =ATP7B
 =ATR
+=ATRX
 =ATXN1
 =ATXN2
 =ATXN3
+=ATXN7
+=ATXN8OS
 =AURKA
 =AURKB
+=AVPR2
 =AXIN2
 =B2M
 =BACH2
+=BAK1
+=BAP1
 =BARD1
+=BAX
+=BBS1
+=BBS10
+=BCHE
+=BCKDHA
+=BCKDHB
 =BCL11A
 =BCL2
+=BCL2L11
+=BCL6
+=BCO1
 =BCR-ABL
 =BDNF
+=BEST1
+bicoid
 =BIN1
+bithorax
+=blaCTX-M
+=blaKPC
+=blaNDM
+=blaTEM
+=BLM
 =BMI1
+=BMP15
 =BMP2
 =BMP4
+=BMPR1A
 =BMPR2
 =BRAF
 =BRCA1
 =BRCA2
+=BRD4
 =BRIP1
 =BTK
+=BTNL2
 =BUB1
+=c-Myc
 C-reactive protein
+=C1QA
+=C1QTNF6
 =C4A
 =C4B
 =C9orf72
 =CACNA1A
 =CACNA1C
+=CACNA1D
+=CACNA1H
 =CACNA1S
+=CACNB2
+=CALM1
+=CALM2
 =CALR
+=CAMK2A
 =CAPN3
 =CARD9
+=CASP8
 =CASQ2
+=CASR
+=CAV1
+=CAV3
+=CBL
+=CCDC22
+=CCL2
+=CCL5
 =CCND1
+=CCND2
 =CCNE1
+=CCR2
 =CCR5
+=CCR6
+=CCR7
+=CD14
 =CD19
 =CD274
 =CD28
+=CD2AP
 =CD33
+=CD34
+=CD36
+=CD38
 =CD3E
 =CD4
 =CD40
+=CD40LG
+=CD44
+=CD45
+=CD47
+=CD55
+=CD59
+=CD68
+=CD79A
+=CD79B
 =CD8
 =CD80
 =CD86
+=cdc2
+=CDC20
+=CDC25A
+=CDC28
+=CDC42
 =CDH1
+=CDH13
+=CDH2
+=CDH23
+=CDH5
 =CDK1
 =CDK12
 =CDK2
 =CDK4
+=CDK5
 =CDK6
+=CDK7
+=CDK9
 =CDKAL1
 =CDKL5
 =CDKN1A
+=CDKN1B
+=CDKN1C
 =CDKN2A
 =CDKN2B
 =CDX2
+=CEACAM5
+=CEBPA
+=CEBPB
+=ced-3
+=ced-4
+=ced-9
+=CELSR1
+=CENPA
 =CEP290
 =CETP
+=CFB
 =CFH
+=CFHR1
+=CFI
 =CFTR
+=CHD2
+=CHD7
 =CHD8
 =CHEK1
 =CHEK2
+=CHRNA3
+=CHRNA4
+=CHRNA5
+=CHRNA7
+=CHRNB4
+=CIITA
 =CLCN1
+=CLDN1
+=CLEC16A
+=CLN3
+=CLU
 =CNBP
+=CNR1
+=CNTNAP2
+=COL11A1
+=COL17A1
 =COL1A1
 =COL1A2
 =COL2A1
@@ -1048,14 +2130,43 @@ C-reactive protein
 =COL4A5
 =COL5A1
 =COL6A1
+=COL7A1
 =COMT
+=COQ2
 =COX-1
 =COX-2
+=COX10
+=CPS1
+=CPT1A
+=CPT2
 =CR1
+=CR2
+=CREB1
 =CREBBP
+=CRH
+=CRHR1
+=CRP
+=CRX
+=CRY1
+=CRY2
+=CSF1R
+=CSF2
+=CSF3R
+=CSMD1
 =CTCF
 =CTLA4
+=CTNNA1
 =CTNNB1
+=CTSK
+=CUBN
+=CUL4B
+=CX3CR1
+=CXCL12
+=CXCL8
+=CXCR4
+=CYBB
+=CYP11A1
+=CYP11B1
 =CYP11B2
 =CYP17A1
 =CYP19A1
@@ -1064,701 +2175,1954 @@ C-reactive protein
 =CYP1B1
 =CYP21A2
 =CYP24A1
+=CYP26A1
+=CYP27A1
+=CYP27B1
 =CYP2A6
 =CYP2B6
 =CYP2C19
+=CYP2C8
 =CYP2C9
 =CYP2D6
 =CYP2E1
+=CYP2R1
 =CYP3A4
+=CYP3A5
+=CYP4F2
 =CYP7A1
+=daf-16
+=daf-2
+=DAXX
+=DAZ1
+=DAZL
+=DCC
+=DCTN1
+=DDB2
+=DDR2
+=DDX3X
+=DDX4
+=DDX41
+decapentaplegic
+=DEPDC5
+=DGAT2
+=DGCR8
+=DGUOK
+=DHCR7
+=DHFR
 =DICER1
+=DIO1
+=DIO2
 =DISC1
+=DKK1
+=DLG4
+=DLK1
+=DLL1
+=DLL3
+=DLL4
+=DMC1
 =DMD
 =DMPK
+=DMRT1
+=dnaA
+=DNAH11
+=DNAH5
+=DNAI1
+=DNM2
 =DNMT1
 =DNMT3A
 =DNMT3B
+=DNMT3L
+=dpp
+=DPP4
 =DPYD
+=DRD1
 =DRD2
+=DRD3
 =DRD4
+=DROSHA
+=DSC2
+=DSG2
+=DSP
+=DUOX2
+=DUX4
 =DYRK1A
 =DYSF
+=E2F1
 =EDAR
+=EDN1
+=EDNRB
 =EEF1A1
+=EGF
 =EGFR
 =EGLN1
+=EGR1
+=EHMT1
+=EIF2AK3
+=EIF4E
+=ELANE
+=ELN
 =ELOVL2
+=EMD
+=EML4
+=EN1
+engrailed
 =EP300
 =EPAS1
+=EPCAM
+=EPHA2
+=EPHB2
+=EPO
 =EPOR
 =ERAP1
 =ERBB2
 =ERBB3
 =ERBB4
+=ERCC1
+=ERCC2
+=ERCC6
+=ERG
 =ESR1
 =ESR2
+=ESRRB
+=ETFDH
+=ETV6
+even-skipped
+=EWSR1
+=EYA1
 =EZH1
 =EZH2
+=F13A1
+=FAAH
+=FABP4
 =FADS1
 =FADS2
+=FAH
+=FAM83H
 =FANCA
 =FANCC
+=FANCD2
+=FAS
+=FASLG
+=FASN
 =FBN1
 =FBXW7
+=FCER1A
 =FCGR2A
+=FCGR2B
 =FCGR3A
+=FGB
 =FGF10
+=FGF19
+=FGF2
+=FGF21
+=FGF23
 =FGF8
 =FGFR1
 =FGFR2
 =FGFR3
 =FGFR4
+=FGG
+=FHL1
+=FIGLA
+=FKBP5
 =FKRP
+=FKTN
+=FLCN
+=FLG
+=FLI1
+=FLNA
+=FLT1
 =FLT3
+=FLT4
 =FMR1
+=FN1
+=FOLH1
+=FOS
+=FOSB
 =FOXA1
 =FOXA2
+=FOXC1
+=FOXE1
 =FOXG1
+=FOXL2
+=FOXO1
+=FOXO3
 =FOXP2
 =FOXP3
+=FSHB
+=FSHR
 =FTO
+=ftsZ
+=FUS
+fushi tarazu
+=FUT2
 =FXN
+=FZD4
 =G protein*
 =G6PD
+=GAA
+=GABRA1
+=GABRA2
+=GABRB3
+=GABRG2
+=GAD1
+=GAD2
+=GAL4
+=GALC
+=GALNS
+=GALT
 =GAPDH
 =GATA1
 =GATA2
 =GATA3
 =GATA4
+=GATA6
 =GBA1
+=GBA2
+=GBE1
+=GCDH
+=GCG
+=GCH1
 =GCK
 =GCKR
+=GDF15
 =GDF5
+=GDF9
+=GFAP
+=GFM1
 =GFP
+=GHR
+=GHRL
+=GHSR
+=GIP
 =GIPR
+=GJA1
+=GJB1
 =GJB2
 =GJB6
+=GLA
+=GLB1
+=GLDC
+=GLI1
+=GLI2
+=GLI3
+=GLIS3
 =GLP1R
 glucocerebrosidase
+=GNAI2
+=GNAO1
 =GNAQ
 =GNAS
+=GNB1
+=GNB3
+=GNRH1
+=GNRHR
+=GPC3
 =GPCR
 =GPCRs
+=GPR35
+=GPX1
+=GPX4
+=GREM1
+=GRIA1
+=GRIA2
+=GRIK2
+=GRIN1
 =GRIN2A
 =GRIN2B
+=GRIN2D
 =GRM3
+=GRM5
+=GSK3B
 =GSTM1
+=GSTP1
 =GSTT1
+=GUCY2C
+=gyrA
+=H19
+=H3-3A
+=H3F3A
+=HADHA
 =HAMP
 =HAND2
+=HAVCR2
 =HBA1
 =HBA2
 =HBB
+=HBD
+=HBE1
 =HBG1
 =HBG2
 =HBS1L
+=HCN1
+=HCN4
+=HCRT
+=HCRTR2
 =HDAC1
 =HDAC2
+=HDAC3
+=HDAC4
+=HDAC6
+=HECW2
 =HER2
 =HERC2
+=HES1
+=HEXA
+=HEXB
 =HFE
+=HGD
+=HGF
 =HHEX
 =HIF1A
+=HJV
+=HK1
 =HLA
+=HMBS
 =HMGA2
+=HMGCL
 =HMGCR
+=HMOX1
 =HNF1A
 =HNF1B
 =HNF4A
+=HNRNPA1
+=HNRNPU
+=HORMAD1
+=HOTAIR
+Hox gene*
 =HOXA1
+=HOXA10
 =HOXA13
 =HOXA9
 =HOXB13
+=HOXB4
 =HOXD13
+=HPD
+=HPGD
 =HPRT1
 =HRAS
 =HSD11B1
 =HSD17B13
+=HSD3B2
+=HSF1
+=HSP90AA1
+=HSPA5
+=HTR1A
 =HTR2A
+=HTR2C
+=HTR3A
 =HTRA1
 =HTT
+=ICAM1
+=ID2
 =IDH1
 =IDH2
+=IDO1
+=IDUA
 =IFIH1
+=IFNA1
+=IFNAR1
+=IFNB1
 =IFNG
+=IFNGR1
+=IFNL3
+=IFNL4
 =IGF1
 =IGF1R
 =IGF2
 =IGF2BP2
+=IGF2R
+=IGHM
+=IGLL1
 =IHH
+=IKBKB
+=IKBKG
 =IKZF1
 =IKZF3
 =IL10
+=IL12A
 =IL12B
 =IL13
+=IL15
 =IL17A
+=IL17F
 =IL18
+=IL1A
 =IL1B
 =IL1RL1
+=IL1RN
 =IL2
+=IL21
+=IL22
+=IL23A
 =IL23R
+=IL27
 =IL2RA
 =IL2RG
+=IL3
+=IL31
 =IL33
+=IL4
+=IL4R
+=IL5
 =IL6
+=IL6R
+=IL7
 =IL7R
+=ILK
+Indian hedgehog
+=INHA
+=INHBA
+=INPP5E
+=INS
+=INSIG2
 =INSR
+=IRAK4
+=IRF1
+=IRF3
 =IRF4
 =IRF5
+=IRF7
+=IRF8
 =IRGM
 =IRS1
+=ISL1
+=ITGA2B
+=ITGAM
+=ITGB2
+=ITGB3
+=ITPR1
+=JAG1
 =JAK1
 =JAK2
 =JAK3
+=JUNB
+=KAT2B
+=KAT6A
+=KCNA1
+=KCNB1
 =KCNE1
+=KCNE2
 =KCNH2
+=KCNJ10
 =KCNJ11
+=KCNJ2
+=KCNJ5
+=KCNK3
+=KCNMA1
 =KCNQ1
 =KCNQ2
 =KCNQ3
+=KCNT1
+=KDM1A
+=KDM5C
 =KDM6A
 =KDR
 =KEAP1
+=KIF1A
+=KIF5A
+=KIR2DL1
+=KIR3DL1
+=KISS1
+=KISS1R
+=KIT
 =KITLG
+=KLB
 =KLF1
+=KLF14
+=KLF2
 =KLF4
+=KLF5
+=KLK3
+=KLRC1
+=KLRK1
 =KMT2A
+=KMT2B
+=KMT2C
 =KMT2D
 =KRAS
 =KSR2
+=L1CAM
+=lacI
+=lacZ
 =LAMA2
+=LAMB2
+=LAMP2
+=LARS2
+=LBR
 =LCT
+=LDHA
+=LDHB
 =LDLR
+=LDLRAP1
 =LEP
 =LEPR
+=let-7
+=LGALS3
+=LGR5
+=LHB
+=LHCGR
+=LHX2
+=LIF
+=LIG4
+=lin-12
+=lin-4
+=LIN28
 =LIN28A
 =LIN28B
+=LIPA
 =LIPC
 =LMNA
+=LMNB1
+=LOX
+=LPA
 =LPL
+=LRP1
+=LRP2
 =LRP5
 =LRP6
+=LRRC8A
 =LRRK2
+=LTA
+=LTB4R
+=LYZ
+=MAFA
+=MAFB
+=MAGEA4
 =MAOA
 =MAP2K1
+=MAP2K2
 =MAP3K1
+=MAP3K14
 =MAPK1
+=MAPK14
+=MAPK3
+=MAPK8
 =MAPT
+=MAT1A
+=MBD2
 =MBL2
 =MBOAT7
 =MC1R
+=MC2R
 =MC3R
 =MC4R
+=MCCC1
 =MCM6
+=MCOLN1
+=MCPH1
+=mcr-1
+=MCT1
 =MDM2
 =MDM4
+=mecA
 =MECP2
+=MED12
+=MED13L
+=MEF2C
 =MEFV
+=MEN1
+=MERTK
 =MET
 =MFN2
+=MFSD8
+=MGMT
+=MICA
+=MICB
+=MIR155
+=MIR21
 =MITF
 =MKI67
+=MLC1
 =MLH1
 =MLH3
+=MMACHC
+=MMP1
+=MMP2
+=MMP3
+=MMP9
+=MMUT
+=MOCS1
+=MPL
+=MPO
+=MPV17
+=MPZ
+=MRAP
+=MRE11
 =MS4A1
+=MS4A4A
 =MS4A6A
 =MSH2
+=MSH3
 =MSH6
+=MSLN
+=MSR1
 =MSTN
 =MSX1
+=MSX2
+=MT-ATP6
+=MT-ATP8
+=MT-CO1
+=MT-CO3
+=MT-CYB
+=MT-ND1
+=MT-ND2
+=MT-ND3
+=MT-ND4
+=MT-ND4L
+=MT-ND5
+=MT-ND6
+=MT-RNR1
+=MT-RNR2
+=MT-TK
+=MT-TL1
+=MTHFD1
 =MTHFR
 =MTNR1B
 =MTOR
+=MTR
+=MTRR
 =MTTP
+=MUC1
+=MUC16
+=MUC5AC
+=MUC5B
 =MUTYH
 =MYB
 =MYBPC3
 =MYC
+=MYCL
 =MYCN
+=MYD88
 =MYF5
+=MYH11
 =MYH6
 =MYH7
+=MYH9
 =MYL2
+=MYO15A
+=MYO6
 =MYO7A
+=MYOC
 =MYOD1
 =MYOG
+=NAA10
+=NAGLU
+=NAGS
 =NANOG
+=NAT1
 =NAT2
+=NBN
+=NCF1
+=NCOA3
+=NCOR1
+=NDUFAF2
 =NDUFS1
+=NDUFV1
+=NEB
+=NEFL
 =NEGR1
+=NES
 =NEUROD1
 =NEUROG2
 =NF1
 =NF2
+=NFATC1
 =NFE2L2
 =NFKB1
+=NFKBIA
+=NGF
+=NGFR
+=NIPBL
+=NKX2-1
 =NKX2-5
+=NKX3-1
 =NLGN3
+=NLRC4
+=NLRP1
 =NLRP3
+=NNAT
+=NOBOX
 =NOD2
 =NODAL
+=NOG
 =NOS1AP
+=NOS2
 =NOS3
 =NOTCH1
 =NOTCH2
 =NOTCH3
+=NOTCH4
+=NOX2
+=NOX4
+=NPC1
 =NPC1L1
+=NPC2
+=NPHP1
 =NPHS1
 =NPHS2
 =NPM1
 =NPPA
 =NPPB
+=NPPC
+=NPR1
+=NPRL2
+=NPRL3
+=NPY
+=NR0B1
 =NR1H3
 =NR1H4
+=NR2E3
+=NR2F1
+=NR2F2
 =NR3C1
+=NR4A1
+=NR5A1
 =NRAS
+=NRF1
 =NRG1
+=NRL
 =NRXN1
+=NSD1
+=NTF3
 =NTRK1
 =NTRK2
 =NTRK3
+=NUDT15
+=NUP98
+=OAS1
 =OCA2
+=OCLN
+=Oct4
+=OGG1
 =OLIG2
+=ompA
 =OPA1
+=OPRD1
+=OPRK1
+=OPRM1
 =OPTN
+=OSMR
 =OTOF
 =OTX2
 =OXTR
+=P2RX7
+=P2RY12
 =P450
 =PABPN1
+=PADI4
 =PAH
+=PAK1
 =PALB2
 =PARK7
+=PARP1
 =PAX2
 =PAX3
+=PAX5
 =PAX6
 =PAX7
+=PAX8
+=PAX9
+=PBRM1
+=PCCA
+=PCCB
+=PCDH19
 =PCNA
 =PCSK1
+=PCSK2
 =PCSK9
 PD-1
 PD-L1
 =PDCD1
+=PDE4D
+=PDE5A
+=PDGFB
 =PDGFRA
+=PDGFRB
+=PDHA1
+=PDK1
+=PDSS2
 =PDX1
+=PDYN
+=PEG10
+=PEG3
+=PER1
+=PER2
+=PER3
+=PEX1
+=PEX7
+=PFKM
 =PGK1
 =PGR
+=PHEX
+=PHOX2B
 =PICALM
+=PIEZO1
+=PIEZO2
+=PIGA
 =PIK3CA
+=PIK3CD
+=PIK3CG
 =PIK3R1
 =PINK1
+=PITX1
 =PITX2
+=PIWIL1
 =PKD1
 =PKD2
+=PKHD1
 =PKLR
 =PKP2
+=PLA2G6
+=PLA2G7
+=PLAU
+=PLCB1
 =PLCG2
+=PLEKHG5
+=PLG
+=PLIN1
 =PLK1
+=PLN
+=PLP1
 =PML
+=PMP22
 =PMS2
+=PNPLA2
 =PNPLA3
+=PNPO
 =POLD1
+=POLE
 =POLG
+=POLH
+=POLR2A
+=POLR3A
 =POMC
+=POT1
+=POU3F2
 =POU5F1
 =PPARA
 =PPARD
 =PPARG
 =PPARGC1A
+=PPARGC1B
+=PPM1D
+=PPP1R3A
+=PPP2R1A
+=PRDM1
+=PRDM16
+=PRDM9
 =PRF1
+=PRKAA1
+=PRKAG2
+=PRKAR1A
+=PRKCB
+=PRKDC
 =PRKN
 =PRNP
+=PROM1
+=PROP1
 =PROS1
+=PRPF31
+=PRRT2
+=PRSS1
 =PSEN1
 =PSEN2
+=PSMB8
+=PSMB9
 =PTCH1
 =PTEN
 =PTF1A
+=PTGS1
+=PTGS2
+=PTH
+=PTH1R
 =PTPN11
 =PTPN2
 =PTPN22
+=PTPRC
+=PYGL
+=PYGM
+=QDPR
+=RAB7A
+=RAC1
+=RAD50
 =RAD51
 =RAD51C
 =RAD51D
 =RAF1
 =RAG1
 =RAG2
+=RANBP2
+=RANKL
 =RARA
+=RASA1
 =RB1
+=RB1CC1
 =RBFOX1
+=RBM20
+=RBPJ
+=recA
+=RELA
+=RELN
 =RET
+=RHD
+=RHO
+=RHOA
+=RIPK1
+=RIPK3
+=RIT1
+=RNASEL
+=RNF213
 =RNF43
+=ROBO1
+=ROBO2
+=ROR2
+=RORA
+=RORC
 =ROS1
 =RPE65
+=RPGR
+=RPL11
+=RPL5
 =RPLP0
+=rpoB
+=rpoS
+=RPS19
+=RPS6KA3
+=RRM1
+=RRM2B
+=RSPO1
 =RUNX1
+=RUNX2
 =RUNX3
 =RXRA
 =RYR1
 =RYR2
+=S100A8
+=S100A9
+=SAA1
 =SALL4
+=SAMHD1
+=SATB2
+=SBDS
+=SCARB1
 =SCN10A
 =SCN1A
+=SCN1B
 =SCN2A
+=SCN3A
 =SCN4A
 =SCN5A
 =SCN8A
+=SCN9A
+=SCNN1A
+=SCNN1B
+=SCNN1G
+=SCO1
+=SCO2
+=SDHA
 =SDHB
+=SDHC
 =SDHD
+=SELE
+=SELP
+=SEMA3A
 =SERPINA1
 =SERPINC1
+=SERPINE1
+=SERPING1
+=SETBP1
+=SETD2
+Sex-lethal
 =SF3B1
 =SGCA
+=SGCB
+=SGCD
+=SGCG
+=SGK1
 =SH2B1
 =SH2B3
+=SH3TC2
 =SHANK3
+=SHH
+=SHOX
+=SIR2
 =SIRT1
+=SIRT2
 =SIRT3
 =SIRT6
+=SIX1
+=SIX3
+=SLC11A1
+=SLC12A1
 =SLC12A3
+=SLC13A5
+=SLC16A11
+=SLC17A5
+=SLC19A1
+=SLC1A2
 =SLC22A1
+=SLC22A12
+=SLC22A2
+=SLC22A6
 =SLC24A5
+=SLC25A13
+=SLC25A15
+=SLC25A4
+=SLC26A4
 =SLC2A1
 =SLC2A2
 =SLC2A4
+=SLC2A9
+=SLC30A10
 =SLC30A8
 =SLC34A1
+=SLC39A14
+=SLC39A8
 =SLC40A1
 =SLC45A2
+=SLC4A1
+=SLC52A2
 =SLC5A2
+=SLC6A1
+=SLC6A19
+=SLC6A2
 =SLC6A3
 =SLC6A4
+=SLC6A8
+=SLC6A9
+=SLC7A11
+=SLC9A3
 =SLCO1B1
 =SLCO1B3
+=SLCO2B1
+=SMAD1
 =SMAD2
 =SMAD3
 =SMAD4
+=SMAD5
 =SMAD7
+=SMARCA2
 =SMARCA4
 =SMARCB1
+=SMC1A
+=SMC3
 =SMN1
 =SMN2
+=SMPD1
 =SNAI1
 =SNAI2
+=SNAP25
 =SNCA
+=SNORD116
+=SNRPN
+=SOCS1
+=SOCS3
 =SOD1
+=SOD2
+sonic hedgehog
 =SORL1
 =SORT1
+=SOS1
+=SOST
+=SOX10
+=SOX17
 =SOX2
+=SOX4
 =SOX9
+=SP1
+=SPAST
+=SPINK1
+=SPO11
 =SPOP
+=SPP1
 =SPTA1
+=SPTAN1
+=SPTB
+=SQSTM1
+=SRC
+=SRD5A2
 =SREBF1
 =SREBF2
 =SRSF2
+=SRY
+=SSTR2
 =STAG2
 =STAT1
+=STAT2
 =STAT3
 =STAT4
+=STAT5A
 =STAT5B
+=STAT6
+=STIM1
+=STING1
 =STK11
+=STRA8
+=STX1A
+=STXBP1
+=SUCLA2
 =SUFU
 =SURF1
 =SUZ12
+=SYCP3
+=SYK
+=SYN1
 =SYNGAP1
+=SYP
+=SYT1
+=SZT2
+=TAC1
+=TACR1
+=TAF1
+=TAL1
+=TAP1
+=TAP2
 =TARDBP
+=TAS2R38
+=TAZ
+=TBK1
 =TBP
+=TBX1
+=TBX21
+=TBX3
 =TBX5
+=TBXA2R
 =TBXT
+=TCF3
 =TCF4
 =TCF7L2
+=TCIRG1
+=TCOF1
+=TDP1
+=TEAD1
+=TECTA
+=TEK
 =TERC
+=TERF1
+=TERF2
 =TERT
 =TET1
 =TET2
+=TET3
 =TFAM
+=TFE3
+=TFEB
+=TFF3
 =TFRC
 =TGFB1
 =TGFB2
+=TGFB3
+=TGFBI
 =TGFBR1
 =TGFBR2
+=TGM2
 =THBD
 =THPO
+=THRA
 =THRB
+=TIA1
+=TICAM1
+=TIGIT
+=TIMP1
+=TINF2
+=TJP1
+=TK2
+=TLR1
 =TLR2
+=TLR3
 =TLR4
+=TLR5
 =TLR7
+=TLR8
 =TLR9
 =TM6SF2
 =TMC1
+=TMEM127
+=TMEM173
 =TMEM18
+=TMEM43
 =TMPRSS2
 =TMPRSS6
 =TNF
 =TNFAIP3
+=TNFRSF11A
+=TNFRSF11B
+=TNFRSF13B
 =TNFRSF1A
+=TNFSF11
+=TNFSF13B
+=TNNC1
 =TNNI3
+=TNNT1
 =TNNT2
+=TNPO3
+=TOP1
+=TOP2A
+=TOR1A
 =TP53
+=TP53BP1
 =TP63
 =TP73
+=TPH1
+=TPH2
+=TPM1
 =TPMT
+=TPO
 =TRAF1
+=TRAF6
+=TRAPPC9
 =TREM2
+=TRH
+=TRPA1
+=TRPC6
+=TRPM7
+=TRPM8
+=TRPV1
+=TRPV4
 =TSC1
 =TSC2
+=TSFM
+=TSHB
+=TSHR
+=TSHZ3
+=Tsix
+=TSPO
+=TTC7A
 =TTN
 =TTR
+=TUBA1A
 =TUBB
+=TUBB3
+=TUT4
 =TWIST1
+=TWNK
+=TXNIP
 =TYK2
+=TYMP
+=TYMS
+=TYR
+=TYROBP
 =TYRP1
 =U2AF1
+=UBE3A
 =UBQLN2
+=UCP1
+=UCP2
+=UCP3
 =UGT1A1
+=UGT2B17
+=UGT2B7
+=ULK1
+Ultrabithorax
 =UMOD
+=unc-13
+=UPF1
 =USH2A
+=USP7
+=USP9X
+=UTRN
+=UTY
+=VAMP2
+=vanA
+=VANGL2
+=VAPB
+=VCAM1
 =VCP
 =VDR
 =VEGFA
+=VEGFC
 =VHL
 =VKORC1
+=VLDLR
+=VPS13A
+=VPS13B
 =VPS35
 =VWF
+=WFS1
+=WHSC1
+=WNK1
+=WNK4
+=Wnt
 =WNT1
+=WNT10A
 =WNT3A
+=WNT4
 =WNT5A
+=WNT7A
+=WRN
 =WT1
+=XBP1
 =XIST
+=XPA
+=XPC
+=XPO1
 =XRCC1
+=XRCC4
+=XRN1
 =YWHAZ
 =YY1
+=ZAP70
+=ZBTB16
 =ZEB1
 =ZEB2
 =ZFHX3
+=ZFP57
+=ZIC2
+=ZIC3
+=ZNF423
+=ZNF750
 =ZNF804A
+=ZNRF3
+=ZP3
 
 # proteins and enzymes
+ABC transporter*
 acetylcholinesterase
+acetyltransferase*
+aconitase
 actin
 actinin
 active site*
+activin*
+=ADAMTS
+adaptin*
+adenylate cyclase*
+adenylyl cyclase*
+adrenoceptor*
+adrenocorticotropic hormone
+adrenomedullin
+aggrecan
+agrin
 albumin
 aldolase
 aldosterone
 allosteric
 alpha helices
 alpha helix
+alpha-1 antitrypsin
+alpha-catenin
+alpha-fetoprotein
 alpha-synuclein
+ameloblastin
+amelogenin
+aminopeptidase*
 aminotransferase*
+amphiphysin
 amylase
+amylin
 amyloid
+anaphylatoxin*
 angiotensin*
 anhydrase*
 ankyrin
+annexin*
+anti-Mullerian hormone
+anti-Müllerian hormone
+antiplasmin
+antithrombin
+apelin
+APOBEC*
+apoptosome
 aquaporin*
+archaerhodopsin
+arginase
+argonaute*
+armadillo repeat*
+aromatase
+Arp2/3 complex
+arrestin
+arrestins
+arylsulfatase*
+ataxin*
 ATPase*
+avidin
+base editor*
+basic helix-loop-helix
+Bcl-2 family
+bestrophin*
 beta sheet*
 beta strand*
 beta-barrel
+beta-catenin
+beta-hairpin*
+beta-propeller*
+beta-secretase
+BH3-only
+biglycan
 binding pocket*
 binding site*
+=BiP
+bone sialoprotein
 bradykinin
+brain-derived neurotrophic factor
+brevican
+bromodomain*
+butyrylcholinesterase
 cadherin*
 calbindin
+calcineurin
 calcitonin
 calmodulin
+calnexin
+calpain*
+calprotectin
+calreticulin
+calretinin
+calsequestrin
+cap-binding protein*
 carboxylase*
+carboxylesterase*
+carboxypeptidase*
 Cas12*
 Cas13*
 Cas9
 caspase*
 catalase
+cathelicidin*
+cathepsin*
 caveolin*
+CCCTC-binding factor
 cellulase*
+ceramidase*
 ceruloplasmin
+channelrhodopsin*
+chaperone*
 chaperonin*
+chemerin
 chemokine*
 chitinase*
+cholecystokinin
 cholinesterase*
+chromodomain*
+chymase
 chymotrypsin*
 clathrin
 claudin*
+cluster of differentiation
+clusterin
 cofilin
+cohesin
 coiled-coil
 collagen*
+collectin*
+colony-stimulating factor*
+complement component*
+complement factor*
+complexin*
+condensin*
 connexin*
+connexon*
+contactin*
+copeptin
+cortactin
+corticosteroid-binding globulin
 corticotropin
+Cpf1
+crystallin*
+cubilin
+cullin*
 cyclin
 cyclin-dependent
 cyclins
 cyclooxygenase*
+cystatin*
+cytidine deaminase
 cytochrome*
+cytoglobin
+cytokeratin*
 cytokine*
+dCas9
 de novo design
+deacetylase*
+death domain*
 decarboxylase*
+decorin
+defensin*
+dehydratase*
 dehydrogenase*
+demethylase*
+deoxyribonuclease*
+desaturase*
 desmin
+desmocollin*
+desmoglein*
+desmoplakin
 deubiquitinase*
+Dicer
 directed evolution
 disulfide bond*
 disulphide bond*
+DNase I
+doublecortin
+drebrin
 drug transporter*
+dynamin*
 dynein
+dysferlin
+dystrobrevin*
+dystroglycan*
 dystrophin
 E3 ligase*
+EF-hand*
+=EGFP
+elastase*
 elastin
+elongase*
 elongation factor*
+emerin
+enamelin
 endonuclease*
+endopeptidase*
 endothelin*
 enolase
+enterokinase
+enteropeptidase
+ephrin*
+epimerase*
+erythroferrone
 erythropoietin
+exopeptidase*
 exportin*
+ezrin
+factor IX
+factor V Leiden
+factor VIII
+fascin
+ferredoxin*
 ferritin
+ferroportin
+fetuin*
+fibrillarin
 fibrillin*
 fibrin*
 fibronectin
+fibulin*
+ficolin*
+filaggrin
+filamin*
+flavodoxin*
+flotillin*
+fluorescent protein*
 follicle-stimulating hormone
+forkhead box
+formin
+formins
+frataxin
+fructokinase
+fumarase
+furin
+galactokinase
 galactosidase*
+galectin*
+gamma-secretase
+gasdermin*
+gastrin
 gelsolin
+gephyrin
+gliadin*
 glucokinase
 glucose transporter*
 glucosidase*
+glucuronidase*
+glutaredoxin*
+glutenin*
 gonadotropin*
+granulin*
+granulysin
+granzyme*
 green fluorescent protein
 growth factor*
 growth hormone
 GTPase*
+guanylate cyclase*
+guanylin
+guanylyl cyclase*
 gyrase
 haemagglutinin
+haemocyanin*
 haemoglobin
+haemojuvelin
+halorhodopsin
+haptocorrin
 haptoglobin
+harmonin
+heat shock factor*
 heat shock protein*
 helicase*
+helix-loop-helix
+helix-turn-helix
 hemagglutinin
+hemerythrin
+hemocyanin*
 hemoglobin
+hemojuvelin
 hemopexin
+hepatokine*
 hepcidin
+hephaestin
+heterogeneous nuclear ribonucleoprotein*
+heterotrimeric G protein*
 hexokinase
+hexosaminidase*
+high-mobility group
+hirudin
 homeobox
 homeodomain*
+Hsp70
+Hsp90
 huntingtin
+hyaluronidase*
+hydratase*
 hydrolase*
 hydrophilic*
 hydrophobic*
 hydroxylase*
+hypoxia-inducible factor*
+iduronidase
 immunoglobulin*
 importin*
+incretin*
+inflammasome*
+inhibin
 initiation factor*
 insulin receptor
+integrase*
 integrin*
 interferon*
 interleukin*
+intrinsic factor
+invertase
+involucrin
+irisin
+=ISG15
+kallikrein*
+karyopherin*
 keratin*
+KH domain*
 kinesin
+kininogen*
+kisspeptin*
+klotho
+kringle*
+laccase*
+lactalbumin
 lactase
 lactoferrin
+lactoglobulin
+lactoperoxidase
 lamin A
 laminin
+lamins
+leghemoglobin
 leucine zipper*
 ligase*
+light-harvesting complex*
 lipase*
+lipocalin*
 lipoxygenase*
+loricrin
 luciferase*
+lumican
 luteinising hormone
 luteinizing hormone
+lyase*
+lymphotoxin*
 lysozyme
+major histocompatibility complex
 maltase
+mCherry
+megalin
 melanopsin
+membrane attack complex
 membrane transporter*
+metalloproteinase*
+metallothionein*
+methyltransferase*
+microglobulin*
+midkine
+moesin
 molecular chaperone*
 monooxygenase*
+motilin
 mucin*
+multidrug resistance protein*
 mutase*
+myelin-associated glycoprotein
+myeloperoxidase
+myoferlin
 myoglobin
+myokine*
+myomesin
 myosin
+myotilin
 natriuretic peptide*
+nebulin
+nephrin
+neprilysin
+nesfatin*
+nesprin*
+nestin
+netrin*
 neuraminidase
+neuregulin*
+neurexin*
+neurocan
+neurofascin
+neurofibrillary
+neurofilament*
+neuroglobin
+neuroligin*
+neuromedin*
 neuropeptide Y
+neuropilin*
+neuroserpin
+neurotrophin*
+NF-kappaB
+NF-κB
+nidogen*
 nitrogenase
+nitroreductase*
+nuclear factor kappa B
 nuclear lamina
+nuclear localisation signal*
+nuclear localization signal*
 nuclear receptor*
 nuclease*
+nucleolin
+nucleophosmin
 nucleoporin*
+obscurin
 occludin
+omentin
 opsin*
+opsonin*
 orexin*
+organic anion transporter*
+organic cation transporter*
+ornithine transcarbamylase
+osteocalcin
+osteonectin
+osteopontin
+osteoprotegerin
+otoferlin
+ovalbumin
 oxidase*
+oxidoreductase*
 oxygenase*
+oxyntomodulin
+P-glycoprotein
 p53
+pannexin*
+paraoxonase*
 parathyroid hormone
+parkin
+parvalbumin
 paxillin
 PDZ domain*
+pendrin
+pentraxin*
 pepsin*
 peptidase*
+perforin
+periaxin
 perilipin*
+periostin
+peripherin
+perlecan
 peroxidase*
+peroxiredoxin*
+phosducin
+phosphodiesterase*
+phosphoenolpyruvate carboxykinase
 phosphofructokinase
+phosphoglucomutase
+phospholamban
 phospholipase*
 phosphorylase*
+photosystem*
+phycocyanin
+phycoerythrin
+Piezo channel*
+placental lactogen
+plakoglobin
+plakophilin*
+plasmin
 plasminogen
+plastocyanin
+pleckstrin*
+plectin
+plexin*
+podocin
+Polycomb*
+postsynaptic density protein*
 presenilin*
+presepsin
+prestin
+primase
+prime editor*
+procalcitonin
 profilin
+progranulin
+prokineticin*
 prolactin
+properdin
+proprotein convertase*
 protamine
 protease*
 protein complex*
 protein design
 protein domain*
 protein engineering
+proteinase K
+prothrombin
+proton pump*
+=PSD-95
 quaternary structure
+racemase*
+radixin
+rapsyn
+Ras protein*
+recombinase*
+recoverin
 reductase*
+reelin
+relaxin
 renin
 resistin
+retinoschisin
 reverse transcriptase
 rhodopsin
 ribonuclease*
 ribosomal protein*
+=RIG-I
+RNase A
+RNase H
 Rossmann fold
 rubisco
+rubredoxin
+S100 protein*
+sarcoglycan*
+sclerostin
 secondary structure
+secretin
 selectin*
+semaphorin*
 septin*
+=SERCA
+sericin
+serpin*
+sex hormone-binding globulin
 SH2 domain*
 SH3 domain*
+sialidase*
+=Siglec
+Siglecs
+signal recognition particle
+silk fibroin
+sirtuin*
+small nuclear ribonucleoprotein*
+=SNARE
+SNARE protein*
+=SNAREs
+solute carrier*
+somatomedin*
 somatostatin
+somatotropin
+sortase*
+sortilin
 spectrin
+sphingomyelinase*
 spike protein*
+squalene epoxidase
+stanniocalcin*
+stathmin
+streptavidin
 sucrase
+sulfotransferase*
+sulphotransferase*
+=SUMO
+SUMOylation
 superoxide dismutase
 surfactant protein*
+syntaxin*
 synthase*
 synthetase*
+syntrophin*
+synuclein*
+=TALEN
+=TALENs
 talin
 tau protein
+=TDP-43
+tdTomato
+telethonin
+ten-eleven translocation
+tenascin*
 tertiary structure
+thioesterase*
+thioredoxin*
 thrombin
 thrombopoietin
+thrombospondin*
+thymosin*
+thyroglobulin
+thyroid-stimulating hormone
 thyrotropin
 TIM barrel
+tissue factor
 titin
 topoisomerase*
+=TRAIL
+transaldolase
 transaminase*
+transcobalamin*
 transcription factor
+transducin
 transferase*
 transferrin
+transglutaminase*
+transketolase
+translocon
+transpeptidase*
+transposase*
 transthyretin
+trichohyalin
+Trithorax
+tropomodulin
 tropomyosin
 troponin
+TRP channel*
 trypsin*
+tryptase
 tubulin
 tumor necrosis factor
 tumour necrosis factor
 tyrosinase
+UDP-glucuronosyltransferase*
 urease
+uricase
+urocortin*
+uroguanylin
+urokinase
+uromodulin
+uroplakin*
+urotensin*
+usherin
+utrophin
+versican
+vesicular monoamine transporter*
 vimentin
 vinculin
+visfatin
+vitronectin
+voltage-gated
+WD40 repeat*
+whirlin
+WW domain*
+xanthine oxidoreductase
+=YFP
+zein
 zinc finger*
 
 # immunology, neuroscience, development and ecology
@@ -2676,6 +5040,9 @@ antibiotic*
 AstraZeneca
 biomarker*
 BioNTech
+biosimilar*
+brand-name drug*
+breakthrough therapy designation
 Bristol-Myers Squibb
 carcinogen*
 cardiovascular
@@ -2687,6 +5054,8 @@ clinical trial*
 ClinVar
 cohort stud*
 companion diagnostic*
+conditional marketing authorisation
+controlled substance*
 dbSNP
 diabetes
 diagnos*
@@ -2700,7 +5069,12 @@ DrugBank
 Eli Lilly
 Ensembl
 epidemiolog*
+essential medicine*
+fast track designation
 FinnGen
+first-in-class
+generic drug*
+generic medicine*
 Gilead
 GlaxoSmithKline
 gnomAD
@@ -2709,6 +5083,8 @@ GWAS Catalog
 inhibitor*
 KEGG
 ligand*
+marketing authorisation
+marketing authorization
 medical
 medicine
 Moderna
@@ -2718,6 +5094,10 @@ Novo Nordisk
 OMIM
 oncolog*
 Open Targets
+orphan designation
+orphan drug*
+over-the-counter drug*
+over-the-counter medicine*
 pathogen*
 personalised medicine
 personalized medicine
@@ -2731,6 +5111,8 @@ phase II trial*
 phase III trial*
 polygenic risk prediction
 precision medicine
+prescription drug*
+prescription-only medicine*
 Protein Data Bank
 public health
 PubMed
@@ -2750,109 +5132,1590 @@ UniProt
 vaccin*
 
 # drugs and drug classes
+5-alpha reductase inhibitor*
+5-HT3 antagonist*
+AAV vector*
+abaloparatide
+abatacept
+Abecma
+abemaciclib
+Abilify
+abiraterone
+Abrysvo
+acamprosate
+acarbose
 acetaminophen
+acetazolamide
+acetylcholinesterase inhibitor*
+acetylcysteine
+acitretin
+aclidinium
+acoramidis
+Actemra
+adagrasib
+adapalene
+Adcetris
+Adderall
+Aduhelm
+Advil
+afamitresgene autoleucel
+aficamten
+aflibercept
+agalsidase alfa
+agalsidase beta
+agomelatine
+Aimovig
+albendazole
+albiglutide
+albuterol
+aldesleukin
+Alecensa
+alendronate
+alendronic acid
+alfacalcidol
+alfentanil
+alfuzosin
+alglucosidase alfa
+ALK inhibitor*
+alkylating agent*
 allopurinol
+almotriptan
+alogliptin
+alpelisib
+alpha blocker*
+alpha-glucosidase inhibitor*
+alprazolam
+alprostadil
+alteplase
+amantadine
+Ambien
+ambrisentan
+amfetamine
+amikacin
+amiloride
+aminoglycoside*
+aminophylline
 amiodarone
+amisulpride
+amitriptyline
+amlodipine
+amodiaquine
 amoxicillin
+amphetamine
+amphotericin B
+Amvuttra
+anabolic steroid*
+anakinra
+anastrozole
+andexanet alfa
+androgen deprivation therap*
+androgen receptor inhibitor*
+angiotensin receptor blocker*
+angiotensin receptor-neprilysin inhibitor*
+anidulafungin
+anthelmintic*
+anthracycline*
+anti-amyloid antibod*
+anti-seizure medication*
+anti-TNF
+antiandrogen*
+antiarrhythmic*
 antibacterial*
+antibody fragment*
+antibody-drug conjugate*
+anticholinergic*
 anticoagulant*
 anticonvulsant*
 antidepressant*
+antiemetic*
+antiepileptic*
 antifungal*
+antihistamine*
 antihypertensive*
+antimalarial*
+antimetabolite*
+antiparasitic*
+antiplatelet*
 antipsychotic*
+antiresorptive*
+antiretroviral*
+antiseizure medication*
 antisense oligonucleotide*
+antiseptic*
+antithyroid drug*
+antitoxin*
+antivenom*
 antiviral*
+anxiolytic*
+apalutamide
+apixaban
+apomorphine
+apremilast
+aprepitant
+Apretude
+aprocitentan
+=ARBs
+Arexvy
+argatroban
+Aricept
+arimoclomol
+armodafinil
+=ARNI
+aromatase inhibitor*
+arsenic trioxide
+artemether
 artemisinin
+artesunate
+articaine
+asenapine
+asfotase alfa
+=ASO
+=ASOs
+asparaginase
 aspirin
+atacicept
+ataluren
+atidarsagene autotemcel
+Ativan
+atogepant
+atomoxetine
 atorvastatin
+atovaquone
+atracurium
+atrasentan
+atropine
+atypical antipsychotic*
+avacincaptad pegol
+avacopan
+avalglucosidase alfa
+avanafil
+Avastin
+avatrombopag
+avibactam
+axicabtagene ciloleucel
+azacitidine
+azathioprine
+azole antifungal*
+aztreonam
+baclofen
+bacteriophage therap*
+balsalazide
+Bavencio
+bazedoxifene
+BCL-2 inhibitor*
+beclometasone
+bedaquiline
+belatacept
+belinostat
+belzutifan
+bempedoic acid
+benazepril
+bendamustine
+benserazide
+benznidazole
+benzocaine
 benzodiazepine*
+benzoyl peroxide
+beremagene geperpavec
+berotralstat
+beta blocker*
 beta-lactam*
+beta-lactamase inhibitor*
+betamethasone
+betibeglogene autotemcel
+bexarotene
+Bexsero
+Beyfortus
+bezafibrate
+bicalutamide
+biguanide*
+Biktarvy
+bile acid sequestrant*
+bimatoprost
+biologic drug*
+biologics
+bisacodyl
+bispecific antibod*
+bisphosphonate*
+bivalirudin
+Blincyto
+BNT162b2
+bortezomib
+bosentan
+Botox
 botulinum
+BRAF inhibitor*
+bremelanotide
+brexanolone
+brexucabtagene autoleucel
+Breyanzi
+Brilinta
+brimonidine
+brinzolamide
+brivaracetam
+bromocriptine
+bronchodilator*
+Brukinsa
+BTK inhibitor*
+budesonide
+bulevirtide
+bumetanide
+bupivacaine
+buprenorphine
+bupropion
+buspirone
+busulfan
+cabazitaxel
+cabergoline
+Cabometyx
+cagrilintide
+calcimimetic*
+calcineurin inhibitor*
+calcium channel blocker*
+Calquence
+Camzyos
+canagliflozin
+cancer vaccine*
+cangrelor
+cannabidiol
+capecitabine
+capivasertib
+captopril
+CAR T cell*
+CAR-NK
 =CAR-T
+carbamazepine
+carbetocin
+carbidopa
+carbimazole
+carbonic anhydrase inhibitor*
 carboplatin
+cardiac glycoside*
+cardiac myosin inhibitor*
+carfentanil
+carfilzomib
+carglumic acid
+cariprazine
+carmustine
+carvedilol
+Carvykti
+Casgevy
+casimersen
+caspofungin
+CDK4/6 inhibitor*
+cefaclor
+cefadroxil
+cefalexin
+cefazolin
+cefepime
+cefiderocol
+cefixime
+cefotaxime
+cefoxitin
+cefpodoxime
+ceftaroline
+ceftazidime
+ceftobiprole
+ceftolozane
+ceftriaxone
+cefuroxime
+celecoxib
+Celexa
 cell therap*
+cenobamate
+cephalexin
 cephalosporin*
+Cerezyme
+cerliponase alfa
+Cervarix
+cetirizine
+CETP inhibitor*
+CGRP receptor antagonist*
+ChAdOx1
+Champix
+Chantix
+chelating agent*
 chemotherap*
+chimeric antigen receptor*
+chlorambucil
+chlordiazepoxide
+chlorhexidine
 chloroquine
+chlorphenamine
+chlorpromazine
+chlorthalidone
+cholestyramine
+cholinesterase inhibitor*
+Cialis
+ciclesonide
 ciclosporin
 *cillin
+cilostazol
+ciltacabtagene autoleucel
+cimetidine
+cinacalcet
+cipaglucosidase alfa
+cisatracurium
 cisplatin
 citalopram
+cladribine
+clavulanic acid
+clobazam
+clofarabine
+clofazimine
+clomifene
+clomiphene
+clomipramine
+clonazepam
+clonidine
 clopidogrel
+clotrimazole
 clozapine
+co-trimoxazole
+cobicistat
 codeine
 colchicine
+colesevelam
+combination therap*
+Comirnaty
+complement inhibitor*
+conivaptan
+conjugate vaccine*
+conjugated estrogens
+convalescent plasma
+copanlisib
+Copaxone
+corticosteroid*
+Cosentyx
+Coumadin
+COX-2 inhibitor*
+coxib*
+Crestor
+crinecerfont
+crisaborole
+Crysvita
+CTLA-4 inhibitor*
+cyclopentolate
+cyclophosphamide
+cycloserine
 cyclosporine
+Cymbalta
+cyproterone
+cysteamine
+cytarabine
+cytisine
+dabigatran
+dacarbazine
+dalbavancin
+dalfampridine
+dalteparin
+danicopan
+dantrolene
+dapagliflozin
+daprodustat
+dapsone
+darbepoetin alfa
+daridorexant
+darifenacin
+darolutamide
+Darzalex
+dasiglucagon
+daunorubicin
+decitabine
+deferasirox
+deferiprone
+deferoxamine
+degarelix
+delamanid
+delandistrogene moxeparvovec
+Dengvaxia
+Depakote
+Descovy
+desferrioxamine
+desflurane
+desipramine
+desloratadine
+desmopressin
+desogestrel
+desvenlafaxine
+deutetrabenazine
+deutivacaftor
 dexamethasone
+dexamfetamine
+dexmedetomidine
+dexmethylphenidate
+dexrazoxane
+diamorphine
 diazepam
+diazoxide
+diclofenac
+didanosine
+dienogest
+diethylcarbamazine
+difelikefalin
 digoxin
+dihydroartemisinin
+diltiazem
+dimercaprol
+dimethyl fumarate
+dinoprostone
+diphenhydramine
+dipyridamole
+direct oral anticoagulant*
+direct-acting antiviral*
+diroximel fumarate
+disease-modifying antirheumatic drug*
+disease-modifying therap*
+disulfiram
+diuretic*
+divarasib
+=DMARD
+=DMARDs
+=DOAC
+=DOACs
+dobutamine
+docetaxel
+dofetilide
+domperidone
 donepezil
+donidalorsen
+dopamine agonist*
+doravirine
+doripenem
+dornase alfa
+dorzolamide
+doxazosin
+doxepin
 doxorubicin
 doxycycline
+DPP-4 inhibitor*
+dronedarone
+drospirenone
+dulaglutide
+duloxetine
+Dupixent
+durlobactam
+dutasteride
+duvelisib
+ecallantide
+echinocandin*
+econazole
+edaravone
+edoxaban
+efavirenz
+Effexor
+efgartigimod
+eflornithine
+EGFR inhibitor*
+elacestrant
+eladocagene exuparvovec
+elafibranor
+eletriptan
+Elevidys
+elexacaftor
+eliglustat
+elinzanetant
+Eliquis
+elivaldogene autotemcel
+elosulfase alfa
+Elrexfio
+eltrombopag
+emergency contraception
+Emgality
+empagliflozin
+emtricitabine
+enalapril
+Enbrel
+endocrine therap*
+endothelin receptor antagonist*
+enflurane
+enfuvirtide
+Enhertu
+enoxaparin
+ensifentrine
+entacapone
+Entresto
+Entyvio
+enzalutamide
+enzyme replacement therap*
+Epclusa
+ephedrine
+epirubicin
+eplerenone
+eplontersen
+epoetin alfa
+epoprostenol
+eptifibatide
+eravacycline
+eribulin
+Erleada
+ertapenem
+ertugliflozin
+Ervebo
+erythropoiesis-stimulating agent*
 escitalopram
+esketamine
+eslicarbazepine
+eszopiclone
+etanercept
+etelcalcetide
+eteplirsen
+ethambutol
+ethinyl estradiol
+ethinylestradiol
+ethionamide
+ethosuximide
+etodolac
+etomidate
+etonogestrel
+etoposide
+etoricoxib
+etranacogene dezaparvovec
+etrasimod
+etravirine
+everolimus
+Evrysdi
+exagamglogene autotemcel
+exemestane
+exenatide
+extended-release
+Eylea
+ezetimibe
+Fabrazyme
+factor Xa inhibitor*
+famotidine
+fampridine
+Farxiga
+febuxostat
+felodipine
+fenfluramine
+fenofibrate
 fentanyl
+ferric carboxymaltose
+ferric derisomaltose
+ferrous sulfate
+fesoterodine
+fexinidazole
+fexofenadine
+fezolinetant
+fibrates
+fidanacogene elaparvovec
+fidaxomicin
+filgrastim
+finasteride
+finerenone
+fingolimod
+fitusiran
+fixed-dose combination*
+flecainide
+flibanserin
+fluconazole
+flucytosine
+fludarabine
+fludrocortisone
+flumazenil
+fluoroquinolone*
+fluorouracil
 fluoxetine
+flupentixol
+fluphenazine
+flutamide
+fluticasone
+fluvoxamine
+folinic acid
+follitropin alfa
+fomepizole
+fondaparinux
+formoterol
+Forxiga
+fosaprepitant
+foscarnet
+fosinopril
+fosmanogepix
+fosphenytoin
+frovatriptan
+fulvestrant
 furosemide
+fusidic acid
+fusion protein*
 gabapentin
+galantamine
+galsulfase
+ganaxolone
+Gardasil
+Gazyva
+gemcitabine
+gemfibrozil
 gene therap*
+general anaesthetic*
+general anesthetic*
+gentamicin
+gepants
+gepotidacin
+Gilenya
+GIP receptor agonist*
+givinostat
+Givlaari
+givosiran
+glasdegib
+glatiramer acetate
+Gleevec
+glibenclamide
+gliclazide
+glimepiride
+glipizide
+Glivec
+GLP-1 agonist*
+GLP-1 receptor agonist*
+glucocorticoid*
+Glucophage
+glyburide
+glycerol phenylbutyrate
+glyceryl trinitrate
+glycopeptide antibiotic*
+glycopyrrolate
+glycopyrronium
+GnRH agonist*
+GnRH antagonist*
+golodirsen
+goserelin
+granisetron
+griseofulvin
+guanfacine
+H2 receptor antagonist*
+=HAART
 haloperidol
+halothane
+Harvoni
+HDAC inhibitor*
+Hemgenix
+Hemlibra
 heparin
+Herceptin
+hormone replacement therap*
+Humalog
+Humira
+hydralazine
+hydrochlorothiazide
+hydrocodone
 hydrocortisone
+hydromorphone
+hydroxocobalamin
+hydroxycarbamide
 hydroxychloroquine
+hydroxyurea
+hydroxyzine
+hyoscine
+hypnotics
+hypomethylating agent*
+ibandronate
+Ibrance
+ibrexafungerp
 ibuprofen
+ibutilide
+icatibant
+icosapent ethyl
+idarubicin
+idecabtagene vicleucel
+idelalisib
+idursulfase
+ifosfamide
+IL-17 inhibitor*
+IL-23 inhibitor*
+IL-6 inhibitor*
+iloperidone
+iloprost
+Imbruvica
+Imdelltra
+imetelstat
+Imfinzi
+imiglucerase
+imipenem
+imipramine
+immune checkpoint blockade
+immunomodulatory drug*
+immunosuppressant*
 immunotherap*
+inactivated vaccine*
+inavolisib
+inclisiran
+indacaterol
+indapamide
+indometacin
+indomethacin
+inhaled corticosteroid*
+inotersen
+inotrope*
+insulin analog
+insulin analogs
+insulin analogue*
+insulin aspart
+insulin degludec
+insulin detemir
+insulin glargine
+insulin glulisine
+insulin icodec
+insulin lispro
+integrase inhibitor*
+integrase strand transfer inhibitor*
+interferon alfa
+interferon beta
+intravenous immunoglobulin
+ipratropium
+iptacopan
+Iressa
+irinotecan
+iron chelator*
+iron sucrose
+isavuconazole
+isoflurane
 isoniazid
+isoprenaline
+isosorbide dinitrate
+isosorbide mononitrate
+isotretinoin
+istradefylline
+itraconazole
+ivabradine
+ivacaftor
 ivermectin
+=IVIG
+ixabepilone
+ixazomib
+JAK inhibitor*
+Jakafi
+Januvia
+Jardiance
+Jynneos
+Kadcyla
+Kaftrio
+Kalydeco
+Keppra
+Kerendia
+Kesimpta
 ketamine
+ketoconazole
+ketoprofen
+ketorolac
+ketotifen
+Keytruda
+kinase inhibitor*
+Kisqali
+Kisunla
+KRAS inhibitor*
+Krazati
+Kymriah
+Kyprolis
+labetalol
+lacosamide
+Lagevrio
+Lamictal
+lamivudine
+lamotrigine
+lanreotide
+lanthanum carbonate
+Lantus
+laronidase
+Lasix
+lasmiditan
+latanoprost
+laxative*
+lefamulin
+leflunomide
+lemborexant
+Lemtrada
+lenalidomide
+lenograstim
+lentiviral vector*
+Lenvima
+Leqembi
+Leqvio
+lercanidipine
+lesinurad
+letrozole
+leucovorin
+leuprolide
+leuprorelin
+levacetylleucine
+levalbuterol
+levetiracetam
+levobupivacaine
+levocetirizine
 levodopa
+levoketoconazole
+levomilnacipran
+levonorgestrel
+levosimendan
 levothyroxine
+Lexapro
+Libtayo
+lidocaine
+lifileucel
+lifitegrast
+lignocaine
+linaclotide
+linagliptin
+lincosamide*
+linezolid
+liothyronine
+Lipitor
 liraglutide
+lisdexamfetamine
 lisinopril
+lisocabtagene maraleucel
 lithium carbonate
+live attenuated vaccine*
+lixisenatide
+local anaesthetic*
+local anesthetic*
+lofexidine
+lomitapide
+lomustine
+lonapegsomatropin
+long-acting beta agonist*
+long-acting injectable*
+loop diuretic*
+loperamide
+loratadine
 lorazepam
+Lorbrena
+lorcaserin
+lovotibeglogene autotemcel
+loxapine
+lubiprostone
+Lucentis
+lumacaftor
+Lumakras
+lumasiran
+lumateperone
+lumefantrine
+Lumizyme
+lurasidone
+lurbinectedin
+luspatercept
+Luxturna
+Lyfgenia
+Lynparza
+Lyrica
 *mab
+=mAbs
+macitentan
+macrogol
+macrolide*
+=MAOI
+=MAOIs
+maralixibat
+maraviroc
+mavacamten
+mavorixafor
+Mavyret
+mazdutide
+mebendazole
+mecasermin
+medroxyprogesterone
+mefenamic acid
+mefloquine
+megestrol
+MEK inhibitor*
+Mekinist
+melarsoprol
+meloxicam
+melphalan
 memantine
+meperidine
+mepivacaine
+mercaptopurine
+meropenem
+mesalamine
+mesalazine
+mesna
+metamizole
 metformin
+methadone
+methenamine
+methimazole
 methotrexate
+methoxsalen
+methyldopa
+methylphenidate
+methylprednisolone
+metoclopramide
+metreleptin
+metronidazole
+metyrapone
+micafungin
+miconazole
+midazolam
+mifepristone
+migalastat
+miglitol
+miglustat
+milnacipran
+milrinone
+miltefosine
+mineralocorticoid receptor antagonist*
+mineralocorticoid*
+minocycline
+minoxidil
+mipomersen
+mirabegron
+mirtazapine
+misoprostol
+mitapivat
+mitotane
+mitoxantrone
+moclobemide
+modafinil
+modified-release
+molecular glue*
+mometasone
+monoamine oxidase inhibitor*
 monoclonal antibod*
+montelukast
+mood stabiliser*
+mood stabilizer*
 morphine
+Mosquirix
+Motrin
+Mounjaro
+moxidectin
+moxonidine
+mRNA-1273
+mTOR inhibitor*
+mupirocin
+muscarinic antagonist*
 *mycin
+mycophenolate mofetil
+mycophenolic acid
+Myozyme
+nabumetone
+nadofaragene firadenovec
+nalmefene
 naloxone
+naltrexone
+Namenda
+nandrolone
+nanobod*
+naproxen
+naratriptan
+Narcan
+nateglinide
+nedosiran
+nelarabine
+neostigmine
+nerandomilast
+netarsudil
+netupitant
+neuraminidase inhibitor*
+neuromuscular blocking agent*
+nevirapine
+Nexavar
+Nexium
 *nib
+nicardipine
+niclosamide
+nicorandil
+nifedipine
+nifurtimox
+nilutamide
+nimodipine
+niraparib
+nitazoxanide
+nitisinone
+nitrazepam
+nitrofurantoin
+nitroglycerin
+NK1 receptor antagonist*
+=NNRTI
+=NNRTIs
+non-nucleoside reverse transcriptase inhibitor*
+norethisterone
+nortriptyline
+=NRTI
+=NRTIs
 =NSAID
 =NSAIDs
+Nubeqa
+nucleoside reverse transcriptase inhibitor*
+Nurtec
+nusinersen
+Nuvaxovid
+obecabtagene autoleucel
+obeticholic acid
+obicetrapib
+Ocrevus
+octreotide
+odevixibat
 olanzapine
+olaparib
+olezarsen
+olipudase alfa
+olodaterol
 *olol
+olorofim
+olpasiran
+olsalazine
+omadacycline
+omaveloxolone
+onasemnogene abeparvovec
+oncolytic virus*
+ondansetron
+Onpattro
+Opdivo
+opicapone
 opioid*
+oral contraceptive*
+orforglipron
+oritavancin
+Orkambi
+orlistat
+osilodrostat
+ospemifene
+oteseconazole
+Otezla
 *oxacin
+oxaliplatin
+oxandrolone
+oxazepam
+oxazolidinone*
+oxcarbazepine
+Oxlumo
+oxybutynin
+oxycodone
+OxyContin
+oxymorphone
+ozanimod
+Ozempic
+P2Y12 inhibitor*
 paclitaxel
+Padcev
+palbociclib
+paliperidone
+palonosetron
+palopegteriparatide
+palovarotene
+pamidronate
+pancuronium
+panobinostat
 paracetamol
+paricalcitol
+paroxetine
+PARP inhibitor*
+pasireotide
+patiromer
+patisiran
+Paxil
+Paxlovid
+PCSK9 inhibitor*
+PD-1 inhibitor*
+PD-L1 inhibitor*
+PDE4 inhibitor*
+PDE5 inhibitor*
+pegaspargase
+pegcetacoplan
+pegfilgrastim
+peginterferon
+pegloticase
+pegunigalsidase alfa
+pegvaliase
+pegvisomant
+pelacarsen
+pemetrexed
+penicillamine
 penicillin
+pentamidine
+peptide therapeutic*
+perampanel
+perindopril
+permethrin
+perphenazine
+pethidine
+phage therap*
+pharmacological chaperone*
+phenelzine
+phenobarbital
+phentermine
+phenylephrine
+phenytoin
+phosphate binder*
+phosphodiesterase inhibitor*
+physostigmine
+phytomenadione
+pilocarpine
+pimavanserin
+pimecrolimus
+pioglitazone
+piperaquine
+pirfenidone
+piroxicam
+pitolisant
+platinum-based chemotherapy
+Plavix
+plazomicin
+plecanatide
+Pneumovax
+polymyxin*
+polypill*
+pomalidomide
+Pomalyst
+ponesimod
+posaconazole
+post-exposure prophylaxis
+potassium binder*
+povidone-iodine
+Pradaxa
+pralatrexate
+pralidoxime
+Praluent
+pramipexole
+pramlintide
+prasugrel
+praziquantel
 *prazole
+prazosin
 prednisolone
 prednisone
+pregabalin
+=PrEP
+pretomanid
+Prevnar
+prilocaine
+Prilosec
+primaquine
+primidone
+probenecid
+procaine
+procarbazine
+prodrug*
+progestin*
+progestogen*
+proguanil
+Prolia
+promethazine
+propafenone
+propofol
+propylthiouracil
+prostaglandin analogue*
 PROTAC*
+protamine sulfate
+protease inhibitor*
+proteasome inhibitor*
+protein degrader*
+prothrombin complex concentrate
+proton pump inhibitor*
+Prozac
+prucalopride
+psychostimulant*
+pyrantel
+pyrazinamide
+pyridostigmine
+pyrimethamine
+Qdenga
+quetiapine
+quinapril
+quinine
+quinolone*
+radioligand therap*
+radiopharmaceutical*
+raloxifene
+ramelteon
 ramipril
+ranitidine
+ranolazine
+rasagiline
+rasburicase
+relebactam
+relugolix
+Remicade
+remifentanil
+remimazolam
+repaglinide
+Repatha
+resmetirom
+retapamulin
+retatrutide
+reteplase
+Revlimid
+Rexulti
+rezafungin
+ribavirin
+ribociclib
+rifabutin
 rifampicin
+rifampin
+rifapentine
+rifaximin
+rilonacept
+rilpivirine
+riluzole
+rimantadine
+rimegepant
+rimonabant
+Rinvoq
+riociguat
+risdiplam
+risedronate
+Risperdal
 risperidone
+Ritalin
+Rituxan
+rivaroxaban
+rivastigmine
+rizatriptan
+RNAi therapeutic*
+Roctavian
+rocuronium
+rofecoxib
+roflumilast
+romidepsin
+romiplostim
+ropinirole
+ropivacaine
+rosiglitazone
+rotigotine
+roxadustat
+rucaparib
+rufinamide
+Rybelsus
+S1P receptor modulator*
+sacubitril
+safinamide
+salbutamol
+salmeterol
+sapropterin
+sarecycline
 *sartan
+saxagliptin
+Saxenda
+scopolamine
+sebelipase alfa
+sebetralstat
+sedative*
+seladelpar
+selective estrogen receptor degrader*
+selective estrogen receptor modulator*
+selective oestrogen receptor modulator*
+selective serotonin reuptake inhibitor*
+selegiline
+selexipag
+selinexor
 semaglutide
+sepiapterin
+=SERM
+=SERMs
+Seroquel
+serotonin-norepinephrine reuptake inhibitor*
 sertraline
+setmelanotide
+sevelamer
+sevoflurane
+SGLT2 inhibitor*
+Shingrix
+sibutramine
 sildenafil
+silodosin
+single-domain antibod*
+siponimod
+sipuleucel-T
+sirolimus
+sitagliptin
+Skyrizi
+small interfering RNA*
 small molecule*
+=SNRI
+=SNRIs
+sodium cromoglicate
+sodium oxybate
+sodium phenylbutyrate
+sodium valproate
+sodium zirconium cyclosilicate
+solifenacin
+Soliris
+solriamfetol
+soluble guanylate cyclase stimulator*
+somapacitan
+somatostatin analogue*
+somatropin
+sonidegib
+sotagliflozin
+sotalol
+sotatercept
+sotorasib
+Sovaldi
+sparsentan
+Spikevax
+Spinraza
+spironolactone
+splice-switching oligonucleotide*
+Spravato
+Sprycel
 =SSRI
 =SSRIs
 *statin
+statins
+stavudine
+Stelara
+stiripentol
+Strensiq
+streptokinase
+strontium ranelate
+Suboxone
+substrate reduction therap*
+subunit vaccine*
+succimer
+succinylcholine
+sucralfate
+sucroferric oxyhydroxide
+sufentanil
+sugammadex
+sulbactam
+sulfadiazine
+sulfadoxine
+sulfamethoxazole
+sulfasalazine
 sulfonamide*
+sulfonylurea*
+sulopenem
+sulpiride
+sumatriptan
+Sunlenca
+suramin
+survodutide
+sustained-release
+Sutent
+suvorexant
+suxamethonium
+suzetrigine
+Symdeko
+sympathomimetic*
+Synagis
+Synthroid
+T-cell engager*
+tabelecleucel
 tacrolimus
+tadalafil
+tafamidis
+tafenoquine
+Tafinlar
+Tagrisso
+talazoparib
+taliglucerase alfa
+talimogene laherparepvec
+Tamiflu
 tamoxifen
+tamsulosin
+tapentadol
+tapinarof
+Tarceva
+targeted protein degradation
+targeted therap*
+Tasigna
+taxane*
+tazarotene
+tazemetostat
+tazobactam
+=TCR-T
+tebentafusp
+tebipenem
+Tecartus
+Tecentriq
+Tecfidera
+tecovirimat
+Tecvayli
+tedizolid
+tegafur
+Tegretol
+teicoplanin
+telavancin
+telitacicept
+temazepam
+temozolomide
+temsirolimus
+tenapanor
+tenecteplase
+terazosin
+terbinafine
+terbutaline
+teriflunomide
+teriparatide
+tesamorelin
+tetrabenazine
+tetracaine
 tetracycline*
+tezacaftor
 thalidomide
+theophylline
+thiazide*
+thiazolidinedione*
+thioguanine
+thiopental
+thrombolytic*
+tiagabine
+tibolone
+ticagrelor
+tigecycline
+tinidazole
+tinzaparin
+tiotropium
+tirofiban
 tirzepatide
+tisagenlecleucel
+tizanidine
+=TKI
+=TKIs
+TNF inhibitor*
+tofersen
+tolcapone
+tolterodine
+tolvaptan
+topiramate
+topoisomerase inhibitor*
+topotecan
+torasemide
+toremifene
+torsemide
+toxoid*
+trabectedin
 tramadol
+trandolapril
+tranexamic acid
+transdermal patch*
+transthyretin stabiliser*
+tranylcypromine
+travoprost
+trazodone
+Tremfya
+treprostinil
+Tresiba
+tretinoin
+triamcinolone
+triamterene
+tricyclic antidepressant*
+trientine
+trifluridine
+triheptanoin
+Trikafta
+trimetazidine
+trimethoprim
+triptans
+triptorelin
+Trodelvy
+trofinetide
+tropicamide
+trospium
+Trulicity
+Truvada
+tumor-infiltrating lymphocyte*
+tumour-infiltrating lymphocyte*
+Tylenol
+tyrosine kinase inhibitor*
+Tysabri
+ubrogepant
+ulipristal
+Ultomiris
+umeclidinium
+urate-lowering therap*
+uricosuric*
+ursodiol
+vaborbactam
+vadadustat
+valbenazine
+Valium
+valoctocogene roxaparvovec
+valproate
+valproic acid
+vamorolone
+vanzacaftor
+vardenafil
+varenicline
+Vascepa
+vasodilator*
+vasopressin receptor antagonist*
+vasopressor*
+Vaxzevria
+vecuronium
+Veklury
+velaglucerase alfa
+Velcade
+velmanase alfa
+Venclexta
+venetoclax
+venlafaxine
+verapamil
+vericiguat
+verteporfin
+Verzenio
+vestronidase alfa
+Viagra
+vibegron
+Victoza
+vigabatrin
+vilanterol
+vilazodone
+vildagliptin
+viloxazine
+viltolarsen
+vinblastine
+vinca alkaloid*
+vincristine
+vinorelbine
 *vir
+viral vector vaccine*
+vismodegib
+vitamin K antagonist*
+voclosporin
+volanesorsen
+vonoprazan
+vorapaxar
+voretigene neparvovec
+voriconazole
+vorinostat
+vortioxetine
+vosoritide
+Voxzogo
+Vraylar
+vutrisiran
+Vyndaqel
+Vyvanse
 warfarin
+Wegovy
+Wellbutrin
+Xalkori
+Xanax
+xanomeline
+xanthine oxidase inhibitor*
+Xarelto
+Xeljanz
+Xofluza
+Xtandi
+Yervoy
+Yescarta
+zafirlukast
+zaleplon
+Zantac
+zavegepant
+Zejula
+Zepbound
+ziconotide
+zidovudine
+zilebesiran
+zilucoplan
+ziprasidone
+Zocor
+zoledronic acid
+Zolgensma
+zoliflodacin
+zolmitriptan
+Zoloft
+zolpidem
+zonisamide
+zopiclone
+zuclopenthixol
+zuranolone
+Zurzuvae
+Zynteglo
+Zyprexa
+Zytiga
 
 # treatment and prevention
 adverse event*
@@ -2916,272 +6779,1087 @@ treatment effect*
 
 # epidemiology
 absolute risk
+=ACNU
+active surveillance
+additive interaction
+adjustment set*
+administrative censoring
+admission rate bias
+aetiologic fraction
+age-adjusted
+age-period-cohort
+age-specific incidence
+age-specific mortality
+age-specific rate*
 age-standardised
 age-standardized
+=AIPW
 alcohol consumption
+all-cause mortality
+=AMSTAR
+=ARRIVE guidelines
+ascertainment bias
 attack rate*
+attenuation bias
+attributable fraction*
+attributable proportion due to interaction
 attributable risk
+attrition bias
+average causal effect*
+back-door criterion
+back-door path*
+backdoor criterion
+backdoor path*
+balancing score*
+Baron and Kenny
+basic reproductive number
+Behavioral Risk Factor Surveillance System
+Berkson bias
+Berkson's bias
+Berkson's paradox
+bias analyses
+bias analysis
+bibliographic database*
 blood pressure
 =BMI
 body mass index
+Bradford Hill
+=BRFSS
+butterfly bias
+Campbell Collaboration
+=CARE guidelines
+cascade screening
 case fatality
 case series
 case-cohort
 case-control
+causal contrast*
+causal DAG*
 causal diagram*
+causal graph*
+causal mediation
+causal model*
+causal pie*
+causal triangulation
+cause-specific mortality
+=CENTRAL register
+certainty of evidence
+channeling bias
+channelling bias
+=CHEERS
+=CINAHL
+clone-censor-weight
+cloning, censoring and weighting
+=CMH test
+co-twin control
+Cochran-Armitage
+Cochrane Central Register of Controlled Trials
+Cochrane Collaboration
+Cochrane Handbook
+Cochrane review*
+cohort effect*
+cohort entry
+cohort profile
 cohort studies
 cohort study
 collider bias
+collider stratification
+comparator group*
 competing risk*
+complex survey design*
+component cause*
+consensus statement*
+consistency assumption
 contact tracing
+controlled direct effect*
+convenience sampl*
+cotwin control
+covariate balance
 Cox model
 Cox proportional hazards
+=CPRD
+critical appraisal
 cross-sectional stud*
 cross-sectional study
+crude mortality
+cumulative exposure
 cumulative incidence
+d-separation
+=DAG
+=DAGitty
+=DAGs
 =DALY
 =DALYs
+Danish registr*
+data linkage
+Delphi consensus
+Delphi method
+Delphi process
+Delphi study
+depletion of susceptibles
 deprivation index
+detection bias
+=DiD
+difference-in-difference
 difference-in-differences
+differential misclassification
+directly standardised
+directly standardized
+discordant twin*
+disproportionality analys*
+double robust estimat*
+doubly robust
+drug utilisation
+drug utilization
+dual screening
+=E-value
+E-values
+=EBM
 ecological study
+effect measure modification
 effect modification
+effect modifier*
 =EHR
 =EHRs
 electronic health record*
+=Embase
+emulated trial*
+environment-wide association stud*
 epidemic curve
+EQUATOR Network
+etiologic fraction
+EudraVigilance
+event-study
+evidence hierarchy
+evidence pyramid
+evidence synthesis
+evidence-based healthcare
+evidence-based practice
+excess fraction
 excess mortality
+excess risk
+exchangeability
+exposed group
+exposed individuals
+exposome
+exposomics
+exposure assessment
+exposure misclassification
+exposure window*
+exposure-response
+=ExWAS
+=FAERS
+falsification endpoint*
+falsification test*
+family-based design*
+first-stage F
+follow-up period
+follow-up time
 forest plot*
+four-way decomposition
+frequency matching
+front-door criterion
+full-text screening
 funnel plot*
+g-computation
+g-estimation
+g-formula
+g-methods
+=GBD 2019
+=GBD 2021
+=GBD study
 generalised estimating equation*
 generalized estimating equation*
+generation interval
+=GRADE approach
+=GRADE assessment
+=GRADE certainty
+GRADE evidence profile*
+=GRADE working group
+=GRADEpro
+gray literature
+grey literature
+guideline development
+guideline panel*
+=hdPS
 health inequalit*
+health survey*
+healthy adherer bias
+healthy adherer effect
+healthy user bias
+healthy user effect
+healthy worker effect
+healthy worker survivor effect
+=HES data
+hierarchy of evidence
+Hill criteria
+Hill's criteria
+immortal time
 immortal time bias
+incidence density
+incidence proportion
 incidence rate*
+incidence trend*
+incident case*
+incorporation bias
+incubation period*
+index date*
+index event bias
+indirectly standardised
+indirectly standardized
+individual matching
+induction period
+infant mortality
 infection fatality
 information bias
+informative censoring
+instrument strength
+interaction on the additive scale
+interaction on the multiplicative scale
 interaction term*
 interrupted time series
+interval-censored
+interventional direct effect*
+interventional indirect effect*
+interviewer bias
 inverse probability weighting
+=IPCW
+=IPTW
 =IPW
+Jadad scale
+Jadad score
+Joanna Briggs Institute
+joinpoint
+lagged exposure
+lead-time bias
+left-truncat*
+length bias
+length-time bias
+life course approach
 life expectancy
+life table*
+lifecourse
+lifetime risk
+literature search*
+living guideline*
 log-rank test
+look-back period
+lookback period
+Lord's paradox
+M-bias
+Mantel-Haenszel
+marginal causal effect*
+marginal structural model*
+MarketScan
+mass screening
 matched controls
+matched pairs
+maternal mortality
+mean follow-up
+measurement bias
+median follow-up
+mediation analys*
+mediation effect*
+mediation model*
+mediator variable*
+Medicaid claims
+Medicare claims
+=MEDLINE
 meta-analysis
 meta-regression
+misclassification bias
+modifiable risk factor*
+modified Delphi
+monotonicity assumption
+=MOOSE
+mortality rate*
+mortality trend*
+=MSM
+=MSMs
 multilevel model*
+multiplicative interaction
+narrative review*
+nationwide cohort*
+nationwide register*
+nationwide registry
+nationwide stud*
+natural direct effect*
 natural experiment*
+natural indirect effect*
+negative control*
 nested case-control
+new user design*
+Newcastle-Ottawa
+Neyman bias
+=NHANES
+=NNH
+=NNT
+nominal group technique
+nondifferential misclassification
+noninformative censoring
+nonresponse bias
+Nordic registr*
+number needed to harm
+number needed to screen
 observational studies
 observational study
+observer bias
+=OHDSI
+=OMOP
+=OpenSAFELY
+opportunistic screening
+=Optum
 outcome measure*
+outcome misclassification
+over-adjustment
+overadjustment
+overdiagnosed
+overdiagnosis
+overlap weight*
+overmatching
+overtreatment
+=P for trend
+P-trend
+pack-years
+=PAF
+=PAFs
+parallel trends
+participation bias
+passive surveillance
+=PCORI
+=PCORnet
+=PECO
+period effect*
+person-time
 person-years
 pharmacoepidemiology
 pharmacovigilance
 physical activity
+physician preference instrument*
+=PICO
+=PICOS
+=PICOT
+population at risk
 population attributable fraction
+population register*
+population registr*
+population screening
+positive control outcome*
+positivity assumption
+positivity violation*
+preference-based instrument*
+premature mortality
+prescriber preference
+prescribing pattern*
+prescription database*
+prescription record*
+prescription registr*
 prevalence
+prevalent case*
+prevalent user*
+preventable fraction
+prevented fraction
 primary endpoint*
+=PRISMA
+PRISMA flow diagram
+PRISMA statement
+probabilistic bias analys*
+=PROBAST
+product of coefficients
+propensity matching
+propensity-matched
+proportion mediated
+proportional mortality ratio*
+proportional reporting ratio*
 prospective cohort
+=PROSPERO
+PROSPERO registration
+protopathic bias
+=PsycINFO
 publication bias
+pure direct effect*
 =QALY
 =QALYs
+=QResearch
+=QUADAS
+quantitative bias analys*
+quintile*
+=QUIPS
+=R0
+rapid review*
+rate difference*
+rate ratio*
 =RCT
 =RCTs
+=RDD
 real-world evidence
 recall bias
+record linkage
+=RECORD statement
+=RECORD-PE
+referral bias
 regression discontinuity
+reporting bias
+reporting checklist*
+reporting guideline*
+reproduction number
+=RERI
 residual confounding
+respondent-driven sampling
+response bias
 retrospective cohort
+reverse causal*
 reverse causation
+right-censored
+risk difference*
+risk of bias
 risk prediction
 risk ratio*
 risk score*
+risk set*
+=RoB 2
+=RoB2
+=ROBINS-E
+=ROBINS-I
+=ROBIS
+=RRR
+=Rt
+=SAIL Databank
+sampling weight*
+scoping review*
+screening interval*
+screening test*
+screening uptake
+secular trend*
 sedentary behavior
 sedentary behaviour
 selection bias
 sensitivity analys*
+Sentinel Initiative
+sentinel surveillance
+serial interval*
+sibling analys*
+sibling comparison*
+sibling control*
+sick stopper*
+signal of disproportionate reporting
+Simpson's paradox
+single world intervention graph*
+small-area estimation
 smoking status
+=SMRs
+snowball sampling
+social desirability bias
 social determinants of health
 socioeconomic status
+spectrum bias
+spontaneous reporting system*
+=SQUIRE
+stabilised weight*
+stabilized weight*
+stable unit treatment value assumption
+staggered adoption
+standardised incidence ratio*
 standardised mortality ratio
+standardised mortality ratios
+standardized incidence ratio*
+standardized mortality ratio*
+=STARD
+stratified analys*
+=STROBE
+STROBE statement
+structural nested mean model*
+structural nested model*
+subgroup analys*
+subgroup effect*
+sufficient cause model
+summary of findings table*
+super learner
+SuperLearner
 surrogate endpoint*
+surveillance bias
+survey weight*
+survivor bias
+survivorship bias
+=SUTVA
+Swedish National Patient Register
+Swedish registr*
+=SWIG
+=SWIGs
+syndromic surveillance
+synergy index
+systematic literature review*
+table 2 fallacy
+target trial
 target trial emulation
+targeted learning
+targeted minimum loss
+targeted screening
+tertile*
+test for trend
+test-negative design*
+=THIN database
+time-related bias*
 time-to-event
+time-window bias
+tipping point analys*
+title and abstract screening
+=TMLE
+total indirect effect*
+treatment-by-covariate interaction
+=TREND statement
+trial emulation
+triangulation of evidence
+=TriNetX
+=TRIPOD
+umbrella review*
+under-five mortality
+unexposed group
+unexposed individuals
+=VA health care
+=VAERS
+verification bias
+Veterans Health Administration
+=VigiBase
+volunteer bias
 waist circumference
+wastewater surveillance
+web of causation
+weight truncation
+within-sibling
+work-up bias
+workup bias
+years lived with disability
 years of life lost
+Yellow Card scheme
+=YLD
+=YLDs
+=YLL
+=YLLs
 
 # chemistry and molecules
+1,3-bisphosphoglycerate
+11-deoxycortisol
+=13C
+=15N
+17-hydroxyprogesterone
+2,3-bisphosphoglycerate
+2-arachidonoylglycerol
+2-mercaptoethanol
+2-oxoglutarate
+25-hydroxyvitamin D
+3-hydroxybutyrate
+3-methoxy-4-hydroxyphenylglycol
+3-phosphoglycerate
+=32P
+4-hydroxynonenal
+4-hydroxytamoxifen
+5-ethynyl-2'-deoxyuridine
+5-hydroxyindoleacetic acid
+5-hydroxymethylcytosine
+5-hydroxytryptamine
+5-methylcytosine
+5-methyltetrahydrofolate
+8-oxoguanine
+acetaldehyde
+acetate
 acetic acid
+acetoacetate
 acetone
 acetyl-CoA
 acetylcholine
+acrylamide
 adenine
 adenosine
+adenosylcobalamin
 =ADP
 adrenaline
+advanced glycation end product*
+agarose
 alanine
 alkaloid*
+alpha-ketoglutarate
+alpha-linolenic acid
 ammonia
 ammonium
+=AMP
+=AMPA
+anandamide
+androstenedione
+anserine
 anthocyanin*
 antioxidant*
+aprotinin
+arabinose
+arachidonic acid
 arginine
+argininosuccinate
 ascorbic acid
 asparagine
 aspartate
 aspartic acid
 =ATP
+atrazine
+benzo[a]pyrene
+beta-hydroxybutyrate
+beta-mercaptoethanol
+betaine
 bilirubin
+biliverdin
 biotin
+bisphenol A
+blasticidin
+=BrdU
+brefeldin A
+bromodeoxyuridine
+=BSA
+butyrate
+cadaverine
 caffeine
+calcein
+calcidiol
 calcitriol
+=cAMP
 capsaicin
 carbohydrate*
 carbon dioxide
+carbon monoxide
+carbon-14
+cardiolipin
 carnitine
+carnosine
 carotene
 carotenoid*
 catalysis
 catalyst*
+catecholamine*
 cellulose
+cerebroside*
+=cGMP
+=CGRP
 chemical*
 chemistry
+chenodeoxycholic acid
 chiral
 chitin
+chloramphenicol
+chloroform
+chlorpyrifos
 cholecalciferol
 cholesterol
+cholic acid
 choline
+cis-aconitate
 citrate
 citric acid
+citrulline
 =CO2
 cobalamin
 coenzyme*
 compound*
+Coomassie
+corticosterone
 cortisol
+cortisone
+cotinine
 creatine
 creatinine
+crystal violet
+=CTP
 curcumin
+cyclic AMP
+cyclic GMP
+cycloheximide
+cystathionine
 cysteine
+cytidine
+cytochalasin*
 cytosine
+=DAPI
+=DDT
+dehydroepiandrosterone
+deoxyadenosine
+deoxycholic acid
+deoxycytidine
+deoxyguanosine
+deoxynucleotide*
+deoxyribonucleotide*
 deoxyribose
+deuterated
+deuterium
+dextran
+=DHEA
+diacylglycerol
+dihydrotestosterone
+dimethyl sulfoxide
+dimethyl sulphoxide
+dimethylglycine
+dioxin*
+disaccharide*
+dispase
+dithiothreitol
+=DMEM
+=DMSO
+=dNTP
+=dNTPs
+docosahexaenoic acid
 dopamine
+=DTT
+dynorphin*
+=EDTA
+=EdU
+=EGTA
+eicosapentaenoic acid
+eicosatetraenoic acid
 enantiomer*
+endocannabinoid*
+endomorphin*
 endorphin*
+enkephalin*
 epinephrine
+ergothioneine
+erythritol
+estradiol
+estriol
 estrogen*
+estrone
 ethanol
+ethidium bromide
+eumelanin
+=FADH2
+farnesyl pyrophosphate
 fatty acid*
+=FDG
+Ficoll
+=FITC
+flavin mononucleotide
 flavonoid*
+fluorescein
+fluorodeoxyglucose
 folate
 folic acid
 formaldehyde
+formalin
+forskolin
+fructosamine
 fructose
+fucose
+fumarate
+Fura-2
+=G418
 =GABA
+gadolinium
+galactosamine
 galactose
+galanin
+gamma-aminobutyric acid
+ganglioside*
 ghrelin
 glucagon
+glucosamine
 glucose
 glutamate
 glutamic acid
 glutamine
+glutaraldehyde
 glutathione
 glycerol
 glycine
+glycocholic acid
 glycogen
+glycolipid*
+glycosaminoglycan*
+glyphosate
+=GSH
+=GSSG
+=GTP
+guanidine hydrochloride
+guanidinium thiocyanate
 guanine
 guanosine
 haem
+heavy water
 heme
+=HEPES
+hippuric acid
 histamine
 histidine
+Hoechst 33342
+homocysteine
+homovanillic acid
+hyaluronan
+hyaluronic acid
 hydrogen peroxide
+hydroxyl radical
+hydroxyproline
+hypochlorous acid
+hypocretin*
+hypoxanthine
 =InChI
+indole
+inosine
 inositol
 insulin
 inulin
+=IP3
+=IPTG
+isocitrate
 isoleucine
 isomer*
+isoprenoid*
+isopropanol
+isopropyl beta-D-1-thiogalactopyranoside
+kainic acid
+kynurenic acid
+kynurenine
+L-DOPA
 lactate
 lactic acid
 lactose
+lactulose
+lanosterol
+latrunculin*
 leucine
+leukotriene*
+leupeptin
 lignin
+linoleic acid
 lipid*
+lipofectamine
+lipoic acid
 lipophilicity
+lipoxin*
+lithocholic acid
 lycopene
 lysine
+lysophosphatidic acid
+lysophosphatidylcholine
+malate
+malondialdehyde
+malonyl-CoA
 maltose
+mannitol
+mannose
+Matrigel
 medicinal chemistry
+melanin*
+melanocortin*
 melatonin
+metanephrine*
 methane
 methanol
 methionine
+methylglyoxal
+methylmercury
+mevalonate
+microcystin*
 molecular weight
 molecule*
+monoacylglycerol
 monosaccharide*
+MTT assay
+mycolic acid*
+N-acetylglucosamine
+N-acetylneuraminic acid
+N6-methyladenosine
 =NADH
+=NADP+
 =NADPH
+neonicotinoid*
+neuromodulator*
+neuropeptide*
+neurotensin
 niacin
+nicotinamide
 nicotine
 nitric oxide
+nitrite
+nitrosamine*
 nitrous oxide
+=NMDA
+nocodazole
 noradrenaline
 norepinephrine
+=NP-40
 nucleic acid*
 nucleoside*
+ochratoxin*
+octopamine
+oestradiol
+oestriol
 oestrogen*
+oestrone
+okadaic acid
+oleic acid
 oligonucleotide*
+oligosaccharide*
 organic chemistry
+organophosphate*
+ornithine
+oxaloacetate
+oxysterol*
 oxytocin
+ozone
+p-cresol
+palmitate
+palmitic acid
 pantothenic acid
+paraformaldehyde
+PBS buffer
 pectin
+=PEG
+per- and polyfluoroalkyl substances
+Percoll
+perfluorooctane sulfonate
+perfluorooctanoic acid
+peroxynitrite
+=PFAS
+=PFOA
+=PFOS
+phalloidin
+phenethylamine
+phenol-chloroform
+phenylacetylglutamine
 phenylalanine
+pheomelanin
+phosphatidic acid
+phosphocreatine
+phosphoenolpyruvate
 phospholipid*
+phthalate*
 phylloquinone
+=PIP2
+=PIP3
+plasmalogen*
+=PMSF
+polyacrylamide
+polyamine*
+polychlorinated biphenyl*
+polyethylene glycol
+polyethylenimine
 polymer*
 polypeptide*
 polyphenol*
 polysaccharide*
+porphyrin*
+pregnenolone
 progesterone
 proline
+propidium iodide
+propionate
+prostacyclin
 prostaglandin*
+proteoglycan*
+protoporphyrin
+pseudouridine
 PubChem
+putrescine
 pyridoxine
+pyrrolysine
 pyruvate
+quinolinic acid
+radioisotope*
+radiolabel*
 reactive oxygen species
+resazurin
+resolvin*
 resveratrol
 retinoic acid
 retinol
+reverse T3
+rhamnose
+rhodamine*
 riboflavin
+ribonucleotide*
 ribose
+=RPMI
+S-adenosylhomocysteine
+S-adenosylmethionine
+sarcosine
+=SDS
+selenocysteine
 serine
 serotonin
+sialic acid*
+=SILAC
 =SMILES
 solubility
+sorbitol
+spermidine
+spermine
+sphingomyelin
+sphingosine
+squalene
 starch
+staurosporine
+stearic acid
+stercobilin
 steroid*
 sterol*
+substance P
+succinate
+succinyl-CoA
 sucrose
+superoxide
+SYBR Green
+TAE buffer
 tannin*
 taurine
+taurocholic acid
+taxol
+TBE buffer
+technetium-99m
+teichoic acid*
+=TEMED
 terpene*
 testosterone
+tetraethyl lead
+tetrahydrofolate
+tetramethylrhodamine
+thapsigargin
 thiamine
 threonine
+thromboxane*
+thymidine
 thymine
+thyroid hormone*
 thyroxine
+=TMAO
 tocopherol*
+toluene
 trehalose
+triacylglycerol*
 triglyceride*
+triiodothyronine
+trimethylamine
+Tris buffer
+Tris-HCl
+tritium
+Triton X-100
+=TRIzol
+trypan blue
+tryptamine
 tryptophan
+Tween 20
+tyramine
 tyrosine
 ubiquinone
 uracil
 urea
 uric acid
+uridine
+urobilinogen
+ursodeoxycholic acid
+=UTP
 valine
+vanillylmandelic acid
 vasopressin
 vitamin*
+wortmannin
+=X-gal
+xanthine
+xylitol
+xylose
 
 # molecular structure and computational chemistry
 ab initio
@@ -3656,170 +8334,769 @@ Weibull
 Wiener process
 
 # statistics
+2x2 table*
+5-year survival
+95% CI
+95% CIs
+a priori hypothes*
+a priori power
+Aalen-Johansen
+accelerated failure time
+adequately powered
+adjusted relative risk*
+=AFT model*
+age- and sex-adjusted
+Agresti-Coull
+=aHRs
 =AIC
 Akaike
+alternative hypothesis
 analysis of variance
+analytical sensitivity
+analytical specificity
+=ANCOVA
+Andersen-Gill
+Anderson-Darling
 ANOVA
+=aOR
+=aORs
+=APACHE II
+apparent performance
+area under the curve
 ARIMA
+=aRR
+=AUC
+=AUCs
+=AUPRC
+=AUROC
+=AUROCs
 autoregressive
+average precision
+balanced accuracy
+Bartlett's test
+baseline adjustment
+baseline hazard*
+baseline observation carried forward
+baseline risk
+baseline-adjusted
+=BCa
+Begg and Mazumdar
+Begg test
+Begg's test
+Benjamini and Hochberg
+Benjamini-Hochberg
+Benjamini-Yekutieli
+between-study heterogeneity
+=BHM
+bias-corrected and accelerated
 =BIC
 biostatistic*
+bivariate model*
+Bland and Altman
+Bland-Altman
+=BOCF
 Bonferroni
 bootstrap
+borrowing of information
+borrowing strength
+Brier score*
+Bucher method
+=C-index
+calibration belt
+calibration curve*
+calibration intercept*
+calibration plot*
+calibration slope*
+calibration-in-the-large
 causal inference
+cause-specific hazard*
+censored data
+censored observation*
+censoring distribution
+=CHA2DS2-VASc
+chained equations
+change from baseline
+change score*
+=CINeMA
+clinically important difference*
+clinically meaningful
+clinically relevant difference*
+Clopper-Pearson
 cluster analysis
+cluster-robust
+Cochran Q
+Cochran's Q
+Cohen's d
+Cohen's kappa
+commensurate prior*
+common-effect model*
+competing event*
+competing outcome*
+complete case analys*
 compositional data
+concordance index
 confidence interval*
+confidence limit*
+confirmatory analys*
+confirmatory stud*
+confirmatory trial*
 conformal prediction
 confounder*
 confounding
+confusion matrix
 conjugate prior*
+contingency table*
+control event rate*
+copy increments in reference
 correlation coefficient*
 counterfactual*
 covariance
 covariance matrix
+Cox PH
 Cox regression
 Cramer-Rao
 credible interval*
+Cronbach alpha
+Cronbach's alpha
+cross-validated
 cross-validation
+crossvalidation
+cumulative hazard*
+cumulative logit*
+=CURB-65
+cure fraction
 cure model*
+cut-off point*
+cut-off value*
+cut-point*
+cutoff point*
+cutoff value*
+cutpoint*
+data dredging
+data splitting
+decision curve*
+delta adjustment
+delta method
+delta-adjusted
 density estimation
+derivation cohort*
+derivation sample*
+derivation set*
+DerSimonian and Laird
+DerSimonian-Laird
+design-by-treatment interaction
+development cohort*
+development dataset*
+deviance residual*
 directed acyclic graph*
+discovery and replication
+discovery cohort*
+discovery dataset*
+discovery sample*
+discrete-time hazard
+discrete-time survival
+discrimination and calibration
+discriminative ability
+discriminative performance
+discriminatory ability
+discriminatory power
+Dunn's test
+Dunnett test
+Dunnett's test
+dynamic borrowing
+dynamic prediction*
+=E:O ratio
 econometric*
 effect size*
+Egger test
+Egger's test
 elastic net
 =EM algorithm
 EM algorithm
 empirical Bayes
+enthusiastic prior*
+=EPV
 estimator*
+=EuroSCORE
+event history analys*
+events per predictor
+events per variable
+exchangeable correlation
+=EXNEX
 expectation maximisation
 expectation-maximization
+expected-to-observed
+expected/observed ratio
+experiment-wise
+experimental event rate*
+experimentwise
+exploratory analys*
+extended Cox
+external validation
+externally validate
+externally validated
 extreme value
+F-beta
+F-measure
+F-score
 F-test
+F1 measure
+F1 score*
+F2 score
 factor analysis
+fail-safe N
+failed replication
+failed to replicate
+failsafe N
+failure to replicate
+false discovery proportion
 false discovery rate
+false negative rate*
+false negative result*
+false positive rate*
+false positive result*
+false-positive finding*
+false-positive screen*
+family-wise error
+familywise error
 =FDR
+Fieller method
+Fieller's method
+file drawer effect
+file drawer problem
+Fine and Gray
+Fine-Gray
+Fisher exact test
 Fisher information
+Fisher's exact
 Fisher's exact test
+five-year survival
 fixed effect*
 fixed effects
+fixed-sequence testing
+Fleiss' kappa
+flexible parametric model*
+=FNR
+=FPR
+frailty model*
+frailty term
+Framingham risk
+=FRAX
 frequentist
+Friedman test
+fully conditional specification
 functional data analysis
+=FWE
+=FWER
+Gail model
+gamma frailty
+garden of forking paths
+gatekeeping procedure*
+gatekeeping strateg*
+=GEE
+=GEEs
+Gehan-Breslow
 generalised additive model*
 generalised linear model*
 generalized additive model*
 generalized linear model*
+geographic validation
+geographical validation
 Gibbs sampl*
+Glass delta
+Glass's delta
+=GLM
+=GLMM
+=GLMMs
+=GLMs
+Gompertz distribution
+Gompertz model*
+=GRACE score
+graphical approach for multiple
+growth curve model*
+Gwet's AC1
 Hamiltonian Monte Carlo
+Harbord test
+=HARKing
+Harrell's C
+Harrell's concordance
+Hartung-Knapp
+=HAS-BLED
+hazard function*
+hazard rate*
 hazard ratio*
+=HEART score
+Hedges' g
+held-out data
+held-out set*
+held-out test set*
+heterogeneity test*
 heteroscedastic*
+heuristic shrinkage
 hidden Markov model*
 hierarchical clustering
 hierarchical model*
+hierarchical testing
+Higgins I
 high-dimensional
+historical borrowing
+=HKSJ
+Hochberg procedure
+Hochberg's step-up
+hold-out set*
+hold-out test set*
+hold-out validation
+holdout set*
+holdout validation
+Holm correction
+Holm procedure
+Holm's method
+Hommel procedure
+Hommel's method
 homoscedastic*
+Hosmer-Lemeshow
+=HSROC
+Huber-White
+hurdle model*
 hypothesis test*
+hypothesis-generating
+I-squared
+=IDI
+illness-death model*
+inconsistency in network
+independent replication
+independent test set*
+independent validation
+indirect comparison*
+individual participant data
+individual patient data
+influence analys*
 information criterion
+instantaneous hazard
 instrumental variable*
+integrated discrimination improvement
+inter-observer agreement
+inter-observer variability
+inter-rater agreement
+inter-rater reliability
+internal validation
+internally validated
+interobserver agreement
+interobserver variability
+interrater agreement
+interrater reliability
+interval censoring
+intra-observer variability
+intra-rater reliability
+intrarater reliability
+=IPD
+=IVW
+J-shaped
 jackknife
 James-Stein
+joint longitudinal and survival
+joint longitudinal-survival
+joint modeling
+joint modelling
+Jonckheere-Terpstra
+k-fold
 k-means
 Kalman filter*
 Kaplan-Meier
+kappa coefficient*
+Kendall tau
+Kendall's tau
 kernel density
+Knapp-Hartung
 Kolmogorov-Smirnov
 kriging
 Kruskal-Wallis
+landmark analys*
 lasso
+last observation carried forward
+latent class analys*
+latent class model*
+latent class trajector*
+latent growth curve*
+latent profile analys*
 latent variable*
 least squares
+leave-one-out
+left censoring
+Levene test
+Levene's test
 likelihood
 likelihood ratio test*
 likelihood ratio*
+limits of agreement
 linear mixed model*
 linear model*
+=LMMs
+local fdr
+=LOCF
 log-likelihood
+log-logistic model*
+log-rank
 logistic regression
+loglinear model*
+logrank
+longitudinal data
+=LOOCV
+=MANCOVA
 Mann-Whitney
+=MANOVA
+=MAR assumption
 Markov chain Monte Carlo
+Matthews correlation
 maximum a posteriori
 maximum likelihood
+=MCAR
+=MCID
 MCMC
+McNemar test
+McNemar's test
+=MDE
+mean difference*
 measurement error
+median survival
+mega-analys*
+=MELD score
 meta-analys*
+meta-analytic
+meta-analyze
+meta-analyzed
 Metropolis-Hastings
+=MICE
+mid-p
+minimal detectable difference
+minimal important difference*
+minimum detectable difference
+minimum detectable effect*
+minimum important difference*
+miscalibrated
+miscalibration
+missing at random
+missing completely at random
 missing data
+missing not at random
+missingness mechanism*
 mixed model*
+mixed treatment comparison*
 mixed-effects
 mixed-effects model*
+mixture cure
 mixture model*
+=MMRM
+=MNAR
+model calibration
+model discrimination
+model generalisability
+model generalizability
+multi-state model*
 multicollinearity
+multilevel analys*
 multiple comparison*
 multiple imputation
 multiple testing
+multiplicity adjustment*
+multiplicity correction*
+multistate model*
+multivariable
 multivariate
+Nelson-Aalen
+net reclassification
+network geometry
+network plot*
+Newcombe method
+Newcombe's method
+=NHST
+=NMA
+=NMAs
+node-splitting
+nominal significance
+nominally significant
+nomogram*
+non-linear association*
 non-parametric
+nonlinear association*
 nonparametric
+=NPV
+=NRI
+null hypotheses
+null hypothesis
+=O:E ratio
+observed power
+observed-to-expected
 odds ratio*
+offset term
+one-sided p
+one-sided test*
+one-tailed test*
+optimal cut-off*
+optimal cutoff*
+optimism correction
+optimism-adjusted
+optimism-corrected
 ordinary least squares
+=ORs
+over-fitted
+over-fitting
+overdispersed
+overdispersion
+overfit
+overfitted
+p-curve
+p-hacking
 p-value*
+parametric survival
+partial AUC
 path analysis
+=pAUC
+Paule-Mandel
 Pearson correlation
 penalised regression
 penalized regression
 permutation test*
+person-period
+Peters' test
+Peto-Peto
 Poisson regression
+pooled analys*
+pooled cohort equation
+pooled cohort equations
+pooled effect*
+pooled estimate*
+pooled relative risk*
+pooled sensitivity
+pooled specificity
+post hoc power
+post-hoc analys*
+post-hoc comparison*
+post-hoc test*
 posterior probabilit*
 power analysis
 power calculation
+power calculations
+power prior*
+=PPV
+pre-specified
+precision and recall
+precision-recall
+prediction interval*
+prediction model*
+predictive value*
+Prentice-Williams-Peterson
+prespecified
+=PREVENT equations
 principal component analysis
 prior probabilit*
 propensity score*
 proportional hazards
+proportional odds
+pseudo-observation*
+pseudo-value*
 psychometric*
+=Q-Q plot*
 q-value*
+=QQ plot*
+=QRISK
+=QRISK2
+=QRISK3
+=qSOFA
 quantile regression
+questionable research practice*
+random coefficient*
 random effect*
 random effects
+random intercept*
+random slope*
+rankogram*
+ratio of means
+=RCS
+recalibration
+recall and precision
+receiver operating characteristic*
+reclassification improvement
+reclassification table*
+recurrent event*
+registered report*
 regression
 regularisation
 regularization
 relative risk
+relative risks
+repeated measures
+replicated association*
+replicated finding*
+replication analys*
+replication cohort*
+replication crisis
+replication dataset*
+replication phase
+replication sample*
+replication set*
+replication stage
+replication stud*
+reproducibility crisis
+reproducibility project*
+required information size
 resampling
+researcher degrees of freedom
+retrospective power
 ridge regression
+right censoring
+risk equation*
+risk reclassification
+risk stratif*
+=RMST
+robust MAP prior*
 robust regression
+=ROC
+ROC analys*
+ROC curve*
+ROC space
+=ROCs
+Royston-Parmar
+sample size
 sample size calculation
 sample size calculation*
+sample sizes
+sceptical prior*
+Scheffe
+Scheffé
+Schoenfeld residual*
 score test*
+=SCORE2
+selection model*
+selective reporting
 semiparametric
 sensitivity analysis
+sensitivity and specificity
+Shapiro-Wilk
+shared frailty
+shared parameter model*
+=sHR
 shrinkage estimat*
 shrinkage estimator*
+shrinkage factor*
+Sidak correction
+significance level*
+significance testing
+significance threshold*
+skeptical prior*
+small-study effect*
+=SMD
+=SMDs
+=SOFA score
 sparse estimation
 spatial statistics
 Spearman
+specificity and sensitivity
 spline*
+split-sample
+=SROC
 standard deviation
 standard error*
 state space model*
 statistic*
 statistical inference
 statistical power
+Storey's q
+stratified Cox
 structural equation model*
 Student's t
+study-wide significance
+study-wide significant
+sub-distribution hazard*
+subdistribution hazard*
+substantial heterogeneity
+successful replication
+=SUCRA
+=SUCRAs
 sufficient statistic*
+summary effect*
+summary estimate*
+summary ROC
+surface under the cumulative ranking
 survival analysis
+survival curve*
+survival function*
 survival model*
+survival rate*
+survival time*
 systematic review*
 t-test*
+tau-squared
+temporal validation
+temporally validated
+test dataset*
+test for heterogeneity
+test of heterogeneity
+test-retest
 time series
+time-dependent AUC
+time-dependent covariate*
+time-dependent ROC
+time-varying coefficient*
+time-varying covariate*
+time-varying effect*
+time-varying exposure*
+=TNR
+=TPR
+training and test set*
+training cohort*
+training dataset*
+training set*
+trajectory model*
+transitivity assumption
+treatment ranking*
+trial sequential analys*
+trim-and-fill
+true negative rate*
+true positive rate*
+two-by-two table*
+two-sided p
+two-sided test*
+two-stage design*
+two-tailed p
+two-tailed test*
+type 1 error*
+type 2 error*
 type I error*
 type II error*
+U-shaped association
+U-shaped relationship
+underdispersion
+uniform shrinkage
+univariable
 univariate
+Uno's C
+validation cohort*
+validation dataset*
+validation sample*
+validation set*
+validation stud*
 variance
 variational inference
+Wald interval*
 Wald test*
+Wei-Lin-Weissfeld
+weighted kappa
+Welch test
+well powered
+=Wells score
 Wilcoxon
+Wilson interval
+Wilson score
+=WMD
+working correlation
+Youden index
+Youden J
+Youden's index
+Youden's J
+z-curve
+zero-inflated
+Šidák correction
 
 # Bayesian statistics
 approximate Bayesian computation
@@ -3868,6 +9145,8 @@ active learning
 Adam optimiser
 Adam optimizer
 =AdamW
+algorithmic bias
+algorithmic fairness
 anomaly detection
 artificial intelligence
 attention mechanism
@@ -3877,25 +9156,47 @@ batch normalisation
 batch normalization
 Bayesian optimisation
 Bayesian optimization
+benchmark dataset*
 =BERT
 byte-pair encoding
+calibration error
+=CLAIM checklist
+class imbalance
+classification accuracy
+classification performance
+classifier performance
 =CNN
 =CNNs
+concept drift
 contrastive learning
 convolutional neural network*
+covariate shift
 cross-entropy loss
 =CUDA
+data leakage
+dataset shift
+datasheets for datasets
+=DECIDE-AI
 deep learning
 denoising diffusion
 diffusion model*
 dimensionality reduction
 direct preference optimisation
 direct preference optimization
+distribution shift
+domain adaptation
+domain shift
 dropout regularisation
 dropout regularization
+early stopping
+=ECE
 embedding*
 emergent abilit*
+equalised odds
+equalized odds
 explainable AI
+fairness metric*
+feature importance
 federated learning
 few-shot
 fine-tuning
@@ -3910,31 +9211,55 @@ gradient boosting
 gradient checkpointing
 graph convolutional
 graph neural network*
+grid search
 hyperparameter*
+imbalanced class*
+imbalanced data
+imbalanced dataset*
 in-context learning
 instruction tuning
 interpretability
 knowledge distillation
+label leakage
 language model*
 large language model*
 layer normalisation
 layer normalization
 learning rate schedule*
 =LightGBM
+=LIME
+local interpretable model-agnostic explanation*
 =LoRA
 low-rank adaptation
 =LSTM
 machine learning
+macro F1
+macro-averaged
+=mAP
 message passing neural
+=MI-CLAIM
+micro F1
+micro-averaged
 mixed precision
 mixture of experts
+model card*
 model compression
+model drift
+model performance
 multi-task learning
 neural network*
 next-token prediction
 normalising flow*
 normalizing flow*
+=OOD
+out-of-distribution
+out-of-sample
 overfitting
+oversampling
+Platt scaling
+prediction accuracy
+predictive accuracy
+predictive performance
 protein language model*
 PyTorch
 quantisation
@@ -3954,45 +9279,88 @@ self-attention
 self-supervised
 semi-supervised learning
 =SHAP
+SHAP value*
+Shapley additive explanation*
+Shapley value*
+=SMOTE
 stochastic gradient descent
 supervised learning
 support vector machine*
 t-SNE
+target leakage
+temperature scaling
+test-set performance
 time series forecasting
 tokenisation
 tokeniser
 tokenization
 tokenizer
+top-1 accuracy
+top-5 accuracy
+train-test contamination
 transfer learning
 transformer model*
 =UMAP
+uncertainty quantification
+undersampling
 unsupervised learning
+variable importance
 variational autoencoder*
 vision transformer*
+weighted F1
+=XAI
 =XGBoost
 zero-shot
 
 # computer science and programming
+adjacency list*
+amortised analysis
+amortized analysis
+amortized time
+Apache Arrow
+Apache Avro
+Apache Parquet
 =API
 =APIs
 approximation algorithm*
 Apptainer
+arbitrary-precision
+=ASCII
+associative array*
+autodiff
+=autograd
 automatic differentiation
+AVL tree*
+=B-tree
+backtracking algorithm*
 bash script*
+BibTeX
+=Big O
+Big O notation
+binary heap*
 binary search
 binary tree*
 Bloom filter*
 Boost library
+branch and bound
+breadth-first search
+brute-force search
+bubble sort
 Burrows-Wheeler
 cache locality
+catastrophic cancellation
+character encoding
+checksum*
 Cholesky decomposition
 =Clang
 cloud computing
 cluster computing
 CMake
+comma-separated
 command line
 compiled language
 compiler*
+computability
 computational complexity
 conda environment*
 conjugate gradient
@@ -4000,6 +9368,9 @@ containerisation
 containerization
 continuous integration
 =CRAN
+cryptographic hash*
+=CSV
+CSV file*
 Cython
 data compression
 data sharing
@@ -4007,64 +9378,115 @@ data structure*
 data.frame
 debugger
 debugging
+depth-first search
 differential privacy
+=Dijkstra
 distributed computing
+divide-and-conquer algorithm*
 Docker
+double precision
 dplyr
+dynamic array*
 dynamic programming
 Eigen library
 =FAIR data
+Feather file*
 federated analysis
+=FIFO
 floating-point
+=FLOPS
 for loop*
 Fortran
 function call*
 =gcc
+=GFLOPS
 ggplot2
 =Git
 GitHub
 GitLab
 glmnet
+glob pattern*
 =GPU computing
 graph algorithm*
+graph traversal
+greedy algorithm*
+half precision
+halting problem
+hash collision*
+hash function*
+hash map*
 hash table*
+hashmap*
+=HDF5
 header file*
+heapsort
 high-performance computing
 homomorphic encryption
 =HPC
+IEEE 754
 import pandas
+insertion sort
 interpreted language
+interval tree*
 =JIT
 job scheduler
 =JSON
+JSON Lines
+JSON schema
+=JSONL
 Jupyter
 just-in-time compilation
+k-d tree*
+=KD-tree
 knitr
 Kubernetes
 lambda function*
+LaTeX document*
+=LIFO
 linked list*
 Linux
 list comprehension*
 =LLVM
 lme4
 locality-sensitive hashing
+log-sum-exp
 lossless compression
 machine code
+machine epsilon
 Makefile
+Markdown file*
+Markdown syntax
 MATLAB
 matplotlib
 matrix factorisation
 matrix factorization
+=MD5
+memoisation
+memoised
+memoization
+memoized
 memory bandwidth
 memory leak*
+merge sort
+mergesort
+MessagePack
 MinHash
 =MPI
 multi-threading
 multithreading
+=NaN
+=NaNs
+=NDJSON
+=NetCDF
 =NoSQL
+=NP-complete
+=NP-hard
+NP-hardness
+npz
 null pointer
 Numba
 numerical linear algebra
+numerical overflow
 numerical stability
 NumPy
 object-oriented
@@ -4072,63 +9494,102 @@ open-source software
 OpenMP
 operating system*
 pandas DataFrame
+Pandoc
 parallel computing
+Parquet file*
 =Perl
+petaflops
+pickle file*
 pip install
 PostgreSQL
+prefix tree*
+priority queue*
 privacy-preserving
 programming language*
+protobuf
+Protocol Buffers
 pthreads
 Python package*
 Python script*
+quicksort
 R Markdown
 R package*
+radix sort
 randomised algorithm*
 randomized algorithm*
 Rcpp
 re-identification
 recursion
 recursive function*
+red-black tree*
+regex
+regexes
+regexp
 regular expression*
 relational database*
 reproducible research
 =REST API
+round-off error*
+rounding error*
+roundoff error*
 RStudio
 SciPy
 seaborn
 secure multiparty computation
 segmentation fault
+SHA-256
 shell script*
 shortest path
 =SIMD
+single precision
 Singularity container*
 sketching algorithm*
 sklearn
 =SLURM
 software engineering
+sorting algorithm*
 source code
+space complexity
 sparse matrices
 sparse matrix
 =SQL
 SQLite
 stack trace
 std::vector
+string formatting
+string manipulation
+string matching
 suffix array*
 suffix tree*
+tab-separated
 template metaprogramming
+teraflops
 tidyverse
 time complexity
+=Timsort
+=TOML
+=TSV
+underflow
+Unicode
+union-find
 unit test*
 unit testing
 Unix
+=UTF-8
 vectorisation
+vectorise
+vectorised
 vectorization
+vectorize
+vectorized
 version control
 virtual environment*
 virtual machine*
 while loop*
 workflow manager*
+=XML
 =YAML
+=Zarr
 
 # 3D modelling, rendering and visualisation
 3D animation
@@ -4624,3 +10085,2238 @@ retinal imaging
 =UK Biobank imaging
 ultrasound imaging
 whole-slide image*
+
+# clinical trials and study design
+21 CFR
+21st Century Cures Act
+3+3 design
+accelerated approval
+accelerated titration
+active comparator*
+active run-in
+active-controlled
+adaptive design*
+adaptive enrichment
+adaptive randomi*
+adaptive trial*
+add-on therapy
+add-on trial*
+administrative claims
+administrative health data
+advanced therapy medicinal product*
+adverse drug event*
+adverse drug reaction*
+advisory committee meeting*
+=AESI
+allocation concealment
+allocation ratio
+alpha spending
+=ANDA
+arm dropping
+as-treated
+assessor-blinded
+=ATMP
+=ATMPs
+attention control*
+baseline characteristics
+baseline imbalance
+basket trial*
+before-after stud*
+before-and-after stud*
+behavioral intervention*
+behavioural intervention*
+Belmont Report
+=BICR
+bioavailability stud*
+bioequivalence
+biologics license application*
+birth cohort*
+=BLA
+black box warning*
+=BLAs
+blinded assessor*
+blinded independent central review
+blinded outcome assessment
+block randomisation
+block randomization
+=BOIN
+boxed warning*
+breakthrough designation
+breakthrough therapy
+budget impact analys*
+=CACE
+carry-over effect*
+carryover effect*
+case report form*
+case reports
+case-crossover
+case-only design*
+case-only stud*
+case-parent trio*
+case-time-control
+=CBER
+=CDER
+Center for Biologics Evaluation and Research
+Center for Drug Evaluation and Research
+central randomisation
+central randomization
+charter of the data monitoring
+=CHMP
+claims data
+claims database*
+clinician-reported outcome*
+closed cohort*
+cluster crossover
+cluster randomisation
+cluster randomization
+cluster trial*
+cluster-randomised
+cluster-randomized
+cohort design*
+=COMET initiative
+Committee for Medicinal Products for Human Use
+community-based stud*
+comparative effectiveness
+comparator arm*
+compassionate use
+complete response letter
+complete response rate
+complex intervention*
+composite endpoint*
+composite outcome*
+composite strategy
+concealed allocation
+concurrent control*
+conditional power
+consent form*
+consent procedure*
+=CONSORT
+CONSORT 2010
+CONSORT 2025
+CONSORT diagram
+CONSORT extension
+CONSORT flow diagram
+CONSORT statement
+continual reassessment method
+contract research organisation*
+contract research organization*
+control arm*
+controlled before-after
+controlled before-and-after
+controlled human infection
+core outcome set*
+cost-benefit analys*
+cost-effectiveness
+cost-minimisation analys*
+cost-minimization analys*
+cost-utility analys*
+cross-over design*
+cross-over trial*
+cross-sectional analys*
+cross-sectional data
+cross-sectional design*
+cross-sectional survey*
+crossover design*
+crossover stud*
+crossover trial*
+=CTCAE
+=CTIS
+=CVOT
+=CVOTs
+data and safety monitoring board*
+data monitoring committee*
+data safety monitoring board*
+decentralised trial*
+decentralized trial*
+decision-analytic model*
+Declaration of Helsinki
+deferred consent
+delayed-start design*
+design effect
+device trial*
+differential dropout
+disability-adjusted life year*
+discontinuation trial*
+dose escalation
+dose expansion
+dose finding
+dose titration
+dose-limiting toxicit*
+dose-ranging
+double-blinded
+double-dummy
+drop-the-loser
+drug approval*
+drug label*
+drug pipeline*
+drug shortage*
+drug-drug interaction stud*
+=DSMB
+=DSMBs
+duration of response
+dynamic cohort*
+early-phase trial*
+=eCRF
+=eCRFs
+effectiveness trial*
+=EMA
+EMA approval
+EMA-approved
+enrichment design*
+=ePRO
+=EQ-5D
+equivalence margin
+equivalence stud*
+equivalence trial*
+error spending
+escalation with overdose control
+estimand*
+ethical approval
+ethics approval
+ethics committee*
+=EudraCT
+European Medicines Agency
+event-driven trial*
+event-free survival
+exclusion criteria
+explanatory trial*
+exploratory endpoint*
+external validity
+=FDA
+FDA approval
+FDA-approved
+fidelity of implementation
+first-in-human
+first-in-man
+Food and Drug Administration
+food-effect stud*
+full analysis set
+futility analys*
+futility boundar*
+futility stopping
+=GBM AGILE
+group sequential
+hard endpoint*
+Hatch-Waxman
+Haybittle-Peto
+head-to-head trial*
+Health Canada
+health economic*
+health technology assessment*
+health-related quality of life
+healthy volunteer*
+historical cohort*
+historical control*
+hospital-based stud*
+=HRQoL
+=HTA
+human challenge trial*
+hybrid effectiveness-implementation
+hypothetical strategy
+I-SPY 2
+=I-SPY2
+ICH E10
+ICH E11
+ICH E17
+ICH E6
+ICH E8
+ICH E9
+ICH guideline*
+=ICH-GCP
+=ICTRP
+=IDMC
+implementation science
+in silico trial*
+inception cohort*
+inclusion criteria
+=IND application*
+=IND-enabling
+indirect treatment comparison*
+individually randomised
+individually randomized
+=INDs
+informed consent
+institutional review board*
+intention-to-treat
+interactive voice response system
+interactive web response system
+intercurrent event*
+interim analys*
+interim look*
+internal pilot
+International Council for Harmonisation
+intervention arm*
+intra-cluster correlation
+intracluster correlation
+investigational agent*
+investigational drug*
+investigational medicinal product*
+investigational new drug
+investigational product*
+investigational therapy
+investigator brochure
+investigator's brochure
+investigator-initiated
+=IRB
+=IRBs
+=iRECIST
+=ISRCTN
+=ITT
+=IWRS
+=IxRS
+Kefauver-Harris
+label expansion
+Lan-DeMets
+large simple trial*
+late-phase trial*
+longitudinal cohort*
+longitudinal stud*
+loss to follow-up
+lost to follow-up
+=MACE
+=MAIC
+=MAMS
+masked trial*
+master protocol*
+maximum tolerated dose
+=MedDRA
+medication adherence
+Medicines and Healthcare products Regulatory Agency
+megatrial*
+=MHRA
+microdosing stud*
+microsimulation model*
+minimisation algorithm
+minimization algorithm
+=mITT
+multi-arm design*
+multi-arm multi-stage
+multi-arm trial*
+multi-center
+multi-centre
+multicenter
+multicentre
+multinational trial*
+multiple ascending dose
+=N-of-1
+n-of-1 stud*
+n-of-1 trial*
+named patient
+=NCI-MATCH
+=NCT number*
+new drug application*
+new molecular entit*
+=NMPA
+nocebo
+non-equivalent control group
+non-inferiority
+non-randomised
+non-randomized
+nonequivalent control group
+noninferiority
+nonrandomised
+nonrandomized
+Nuremberg Code
+O'Brien-Fleming
+objective response rate
+observer-blinded
+observer-reported outcome*
+occupational cohort*
+=ODAC
+off-label
+open cohort*
+open-label
+orphan medicinal product*
+=ORR
+outcome assessor*
+outcome switching
+outcome trial*
+overall response rate
+package insert*
+parallel-arm trial*
+parallel-group design*
+parallel-group randomi*
+parallel-group trial*
+participant recruitment
+pathological complete response
+patient enrollment
+patient enrolment
+patient recruitment
+patient registr*
+patient-reported outcome*
+=PBRER
+=PDUFA
+PDUFA date
+per-protocol
+periodic safety update report*
+permuted block*
+pharmacoeconomic*
+phase 0 stud*
+phase 0 trial*
+phase 1 stud*
+phase 1 trial*
+phase 1/2
+phase 1a
+phase 1b
+phase 2 stud*
+phase 2 trial*
+phase 2/3
+phase 2a
+phase 2b
+phase 3 stud*
+phase 3 trial*
+phase 4 stud*
+phase 4 trial*
+phase I stud*
+phase I/II
+phase Ia
+phase Ib
+phase II stud*
+phase II/III
+phase IIa
+phase IIb
+phase III stud*
+phase IIIa
+phase IIIb
+phase IV stud*
+phase IV trial*
+pilot RCT*
+pilot stud*
+pilot trial*
+pivotal stud*
+pivotal trial*
+platform protocol*
+platform trial*
+=PMDA
+Pocock boundar*
+population-based cohort*
+population-based stud*
+post-authorisation safety stud*
+post-authorization safety stud*
+post-marketing requirement*
+post-marketing stud*
+post-marketing surveillance
+postmarketing stud*
+postmarketing surveillance
+=PRAC
+pragmatic randomi*
+pragmatic trial*
+pre-post design*
+pre-post stud*
+PRECIS-2
+prescribing information
+pretest-posttest
+prevention trial*
+primary outcome*
+=PRIME designation
+=PRIME scheme
+principal investigator*
+principal stratification
+principal stratum
+=PRINCIPLE trial
+priority review
+=PRO measure*
+Project Optimus
+=PROMs
+proof of mechanism
+proof-of-concept stud*
+proof-of-concept trial*
+prospective stud*
+prospectively registered
+protocol deviation*
+protocol violation*
+=PSUR
+quadruple-blind
+quality of life questionnaire*
+quality-adjusted life year*
+quasi-experiment*
+quasi-randomi*
+random allocation
+randomisation sequence
+randomised controlled stud*
+randomised stud*
+randomised trial*
+randomised withdrawal
+randomization sequence
+randomized controlled stud*
+randomized stud*
+randomized trial*
+randomized withdrawal
+=RE-AIM
+real-world data
+real-world effectiveness
+real-world setting*
+real-world stud*
+=REC approval
+=RECIST
+RECIST 1.1
+recommended phase 2 dose
+recommended phase II dose
+RECOVERY trial
+recurrence-free survival
+registrational trial*
+registry stud*
+registry-based
+regulatory science
+regulatory submission*
+relapse-free survival
+=REMAP-CAP
+remote trial*
+=REMS
+repeated cross-sectional
+response-adaptive
+retrospective stud*
+retrospectively registered
+risk evaluation and mitigation strateg*
+risk management plan*
+risk-based monitoring
+=RMAT
+routine health data
+routinely collected data
+routinely collected health data
+=RP2D
+run-in period
+=RWD
+=RWE
+=SAD/MAD
+=SAEs
+safety analysis set
+safety endpoint*
+safety population
+safety signal*
+=sBLA
+=SCCS
+screen failure*
+screening trial*
+screening visit
+seamless adaptive
+seamless phase
+secondary endpoint*
+secondary outcome*
+selective outcome reporting
+self-controlled cohort*
+self-controlled design*
+sequential trial*
+serial cross-sectional
+=SF-12
+=SF-36
+sham procedure*
+sham surgery
+sham-controlled
+simple randomisation
+simple randomization
+simulated treatment comparison*
+single ascending dose
+single-arm
+single-blind
+single-blinded
+single-patient trial*
+site initiation visit
+=SmPC
+=sNDA
+=SOLIDARITY trial
+source data verification
+=SPIRIT 2013
+=SPIRIT 2025
+SPIRIT checklist
+SPIRIT statement
+=SPIRIT-AI
+sponsor-investigator
+=STAMPEDE
+stepped-wedge
+stopped early for benefit
+stopped for futility
+stopping boundar*
+stopping rule*
+stratified randomisation
+stratified randomization
+study arm*
+subcohort
+summary of product characteristics
+superiority margin
+superiority trial*
+supplemental indication
+surgical trial*
+surrogate marker*
+surrogate outcome*
+=SUSAR
+=SUSARs
+suspected unexpected serious adverse reaction*
+target product profile
+=TEAE
+=TEAEs
+technology appraisal*
+template for intervention description
+thorough QT stud*
+=TIDieR
+time to first event
+time to progression
+time to treatment failure
+tissue-agnostic
+transportability
+treatment adherence
+treatment arm*
+treatment as usual
+treatment fidelity
+treatment policy strategy
+treatment trial*
+treatment-emergent
+trial attrition
+trial design*
+trial diversity
+trial failure*
+trial management group
+trial methodolog*
+trial monitoring
+trial participant*
+trial participation
+trial population*
+trial protocol*
+trial recruitment
+trial registr*
+trial representativeness
+trial site*
+trial steering committee*
+trial success rate*
+trialist*
+triple-blind
+triple-blinded
+two-period crossover
+umbrella trial*
+unblinded
+unblinding
+underpowered trial*
+unequal allocation
+usual care
+validated surrogate
+virtual trial*
+wait-list control*
+waiting list control*
+waitlist control*
+waiver of consent
+washout period*
+while on treatment strategy
+willingness-to-pay threshold
+withdrawal design*
+
+# omics
+=13C-MFA
+=13C-NMR
+=16S
+16S rRNA gene sequencing
+16S rRNA sequencing
+=1H NMR
+3D genome
+=450K array
+=5caC
+=5fC
+=5hmC
+=5mC
+A-to-I editing
+A/B compartment*
+=AbsoluteIDQ
+acetylom*
+affinity proteomics
+affinity purification mass spectrometry
+ageing clock*
+aging clock*
+Aitchison distance
+allele-specific binding
+allele-specific chromatin accessibility
+allele-specific expression
+allele-specific methylation
+alpha diversity
+alternative polyadenylation
+amplicon sequence variant*
+amplicon sequencing
+=AP-MS
+=apaQTL*
+=APEX2
+aptamer-based
+=ASV
+=ASVs
+beta diversity
+=Biocrates
+=BioID
+biological age
+biological ageing
+biological aging
+biomonitoring
+bivalent chromatin
+bivalent promoter*
+=BMIQ
+bottom-up proteomics
+=bQTL*
+Bray-Curtis
+Bray-Curtis dissimilarity
+bulk RNA-seq
+=CAGE-seq
+candidate cis-regulatory element*
+cap analysis of gene expression
+=Capture-C
+=cCRE*
+cell-type composition
+cell-type heterogeneity
+centered log-ratio
+centred log-ratio
+Chao1
+chemical exposome
+chemoproteom*
+=ChIA-PET
+=ChIP-chip
+=ChIP-exo
+=ChIPmentation
+chromatin accessibility
+chromatin accessibility QTL*
+chromatin conformation
+chromatin immunoprecipitation
+chromatin interaction*
+chromatin loop*
+chromatin remodel*
+chromatin state*
+=circRNA*
+circular RNA*
+circulating protein*
+=cis-pQTL*
+cis-regulatory element*
+=CLIP-seq
+co-expression module*
+co-expression network*
+comparative genomics
+connectom*
+connectome-based
+connectome-wide
+=CpG
+CpG island*
+CpG shore*
+CpG site*
+=CpGs
+=CPIC
+CPIC guideline*
+=CRISPRa
+=CRISPRi
+cross-linking mass spectrometry
+=CUT&RUN
+=CUT&Tag
+=DamID
+data-dependent acquisition
+data-independent acquisition
+deep phenotyping
+deep visual proteomics
+=DEG
+=DEGs
+diet-gene interaction*
+differential abundance
+differential expression
+differential gene expression
+differential isoform
+differentially expressed gene*
+differentially methylated position*
+differentially methylated region*
+direct RNA sequencing
+=DMPs
+=DMR
+=DMRs
+DNA methylation
+DNA methylation age
+=DNAm
+DNAm age
+DNase I hypersensitive site*
+DNase I hypersensitivity
+=DNase-seq
+=DPWG
+=DunedinPACE
+=DunedinPoAm
+dysbiosis
+=eCLIP
+=EEAA
+electrospray ionisation
+electrospray ionization
+=EM-seq
+enhancer RNA*
+enhancer-promoter contact*
+enhancer-promoter interaction*
+enterotype*
+environment-wide association
+enzymatic methyl-seq
+epiallele*
+=EPIC array
+=EPICv2
+epigenetic age acceleration
+epigenetic clock*
+epigenom*
+epigenome-wide association*
+epimutation*
+=epiTOC
+epitranscriptom*
+=eRNA*
+=ESI-MS
+euchromatin
+=EWAS
+exposom*
+exposome-wide
+expression microarray*
+expression profil*
+expression quantitative trait loc*
+extrinsic epigenetic age acceleration
+faecal microbiota transplant*
+=FAIRE-seq
+Faith's PD
+Faith's phylogenetic diversity
+fecal microbiota transplant*
+=Fiber-seq
+fluxom*
+fluxomic*
+foodomics
+=FPKM
+=FT-ICR
+functional connectome
+functional genomics
+functional normalisation
+functional normalization
+functional profiling
+gamma diversity
+gas chromatography
+=GC-MS
+gene body methylation
+gene co-expression network*
+gene expression profil*
+gene set enrichment analysis
+gene-diet interaction*
+glycan profiling
+glycan*
+glycom*
+glycoproteom*
+glycosylation profil*
+=GrimAge
+=GrimAge2
+=GRO-seq
+=GSEA
+gut flora
+gut microbiome
+gut microbiota
+=H2A.Z
+=H2AK119ub
+=H3K27ac
+=H3K27me3
+=H3K36me3
+=H3K4me1
+=H3K4me2
+=H3K4me3
+=H3K79me2
+=H3K9ac
+=H3K9me2
+=H3K9me3
+=H4K20me1
+Hannum clock
+=HDX-MS
+heterochromatin
+=HiChIP
+high-throughput phenotyping
+=HILIC
+histone acetylation
+histone code
+histone mark*
+histone methylation
+histone modification*
+histone QTL*
+histone variant*
+=HITS-CLIP
+Horvath clock
+Houseman method
+=hQTL*
+Human Connectome Project
+=HumanMethylation27
+=HumanMethylation450
+hydrogen-deuterium exchange
+hydroxymethylation
+hypermethylated
+hypermethylation
+hypomethylated
+hypomethylation
+=iCLIP
+=IEAA
+IgG glycome
+IgG glycosylation
+=Illumina EPIC
+imaging genetics
+immunopeptidom*
+=Infinium
+insulator element*
+interactom*
+intermediate metabolizer*
+intrinsic epigenetic age acceleration
+Inverse Simpson
+ion mobility
+ionom*
+=Iso-Seq
+isoform quantification
+isoform usage
+isotope tracing
+=iTRAQ
+=ITS sequencing
+kinome
+label-free quantification
+label-free quantitation
+lamina-associated domain*
+=LC-MS
+=LC-MS/MS
+limited proteolysis
+lipid profil*
+lipid species
+liquid chromatography
+=lncQTL*
+log-ratio transform*
+long non-coding RNA*
+=Luminex
+=m6A
+=m6A-seq
+=MALDI
+=MALDI imaging
+=MALDI-TOF
+mass spectrometry imaging
+massively parallel reporter assay*
+=MBD-seq
+=mbQTL*
+=MeDIP
+=MeDIP-seq
+=meQTL*
+=MeRIP-seq
+=Meso Scale Discovery
+metabolic flux analysis
+metaboliser phenotype*
+metabolite annotation
+metabolite identification
+metabolite level*
+metabolite profil*
+metabolite QTL*
+metabolite ratio*
+metabolizer phenotype*
+metabolome-wide association*
+=Metabolon
+metagenome-assembled genome*
+metaproteom*
+metastable epiallele*
+metatranscriptom*
+methylation beta value*
+methylation calling
+methylation clock*
+methylation level*
+methylation M-value*
+methylation profil*
+methylation quantitative trait loc*
+methylation risk score*
+methylation-based predictor*
+=MethylationEPIC
+methylom*
+=metQTL*
+=mGWAS
+=miCLIP
+=Micro-C
+microarray*
+microbial communities
+microbial community
+microbial diversity
+microbiome QTL*
+microbiome-wide association*
+=miRNA-seq
+=MNase-seq
+module eigengene*
+molecular networking
+motif enrichment
+=MPRA
+=MPRAs
+=MS/MS
+multi-omic*
+multi-omics integration
+multiomic*
+multiple reaction monitoring
+=MWAS
+mycobiome
+N-glycan*
+nanopore methylation
+nascent transcription
+native mass spectrometry
+=NET-seq
+network medicine
+=Nightingale Health
+Nightingale NMR
+NMR metabolomics
+=NOMe-seq
+normalised protein expression
+normalized protein expression
+=NPX
+nuclear magnetic resonance spectroscopy
+nucleosome occupancy
+nucleosome positioning
+nucleosome-depleted region*
+=NULISA
+O-glycan*
+=Olink
+=Olink Explore
+=Olink Target 96
+omic
+omics
+omics data
+omics integration
+open chromatin
+operational taxonomic unit*
+=Orbitrap
+=OTU
+=OTUs
+over-representation analysis
+=oxBS
+oxidative bisulfite sequencing
+panomics
+=PAR-CLIP
+parallel reaction monitoring
+pathway enrichment analysis
+peak calling
+=PedBE
+peptide-spectrum match*
+peptidom*
+=PERMANOVA
+=PharmVar
+phecode*
+=PhenoAge
+phenome
+phenome-wide association*
+phenomics
+phosphoproteom*
+=PLAC-seq
+plasma protein level*
+plasma proteomics
+polyadenylation
+polysome profiling
+poor metaboliser*
+poor metabolizer*
+population genomics
+=Pore-C
+precision nutrition
+=PRO-seq
+promoter capture Hi-C
+promoter methylation
+promoter-enhancer interaction*
+protein abundance
+protein interaction network*
+protein quantitative trait loc*
+protein-protein interaction network*
+=Proteograph
+proteomic clock*
+proximity extension assay*
+proximity labeling
+proximity labelling
+proximity ligation assay*
+=Q Exactive
+=Q-TOF
+=QTOF
+quadrupole time-of-flight
+radiogenomic*
+radiomic feature*
+radiomic*
+rarefaction
+rarefying
+reduced representation bisulfite sequencing
+reference-based deconvolution
+reference-free deconvolution
+regulatory genomics
+resistome
+reverse phase protein array*
+=ribo-QTL*
+=Ribo-seq
+ribosome profiling
+=RIP-seq
+RNA editing
+RNA immunoprecipitation
+RNA modification*
+RNA sequencing
+=RPKM
+=RPPA
+=rQTL*
+=RRBS
+=scBS-seq
+secretom*
+selected reaction monitoring
+Shannon diversity
+Shannon index
+short-chain fatty acid*
+shotgun lipidomics
+shotgun metagenomic*
+shotgun proteomics
+=Simoa
+Simpson index
+=SLAM-seq
+small RNA sequencing
+=snmC-seq
+=snoRNA*
+=SOMAmer*
+=SomaScan
+spatial proteomics
+splice junction*
+splicing QTL*
+splicing quantitative trait loc*
+stable isotope tracing
+star allele*
+=STARR-seq
+strain-level profiling
+structural connectome
+super-enhancer*
+=SWATH-MS
+=TAB-seq
+=TAD
+=TADs
+tagmentation
+tandem mass spectrometry
+tandem mass tag*
+target-decoy
+targeted metabolomics
+taxonomic profiling
+=TFBS
+=TFBSs
+thermal proteome profiling
+three-dimensional genome
+time-of-flight mass spectrometry
+=timsTOF
+=TMT labeling
+=TMT labelling
+Tn5 transposase
+top-down proteomics
+topologically associating domain*
+toxicogenom*
+=tQTL*
+=trans-pQTL*
+transcript abundance
+transcription factor binding site*
+transcription factor footprint*
+transcription start site*
+transcriptomic clock*
+transcripts per million
+translatom*
+triple quadrupole
+=TSS
+=TT-seq
+=TurboID
+=UHPLC
+UK Biobank Pharma Proteomics Project
+=UKB-PPP
+ultrarapid metaboliser*
+ultrarapid metabolizer*
+=UniFrac
+untargeted metabolomics
+untranslated region*
+unweighted UniFrac
+=UPLC
+=UPLC-MS
+weighted gene co-expression network*
+weighted UniFrac
+=WGBS
+whole-genome bisulfite sequencing
+=XL-MS
+=XWAS
+=Y2H
+yeast two-hybrid
+
+# population genetics and evolution software
+=ABBA-BABA
+=ABCtoolbox
+=aBSREL
+=adegenet
+=ADMIXTOOLS
+=ADMIXTOOLS 2
+=ANGSD
+ape package
+=ARG-Needle
+=ARGweaver
+=Arlequin
+=BayeScan
+=BayPass
+bcftools roh
+BEAST 2
+=BEAST2
+=BEAUti
+=ChromoPainter
+=codeml
+=convertf
+=D-statistic*
+=dadi
+=Datamonkey
+=diploS/HIC
+=discoal
+=DIYABC
+=Dsuite
+=EggLib
+=EIGENSOFT
+=EIGENSTRAT
+=ELAI
+f3-statistic*
+f4-ratio
+f4-statistic*
+=fastsimcoal
+=fastsimcoal2
+=fastSTRUCTURE
+=FastTree
+=FigTree
+=fineSTRUCTURE
+=flashpca
+=FlashPCA2
+=fsc27
+=fwdpy11
+=G-PhoCS
+=GenAlEx
+=GERP
+=ggtree
+=GLOBETROTTER
+=hap-IBD
+=hapbin
+=HAPMIX
+=HapNe
+=hierfstat
+Hudson's ms
+=HyPhy
+=IBDNe
+=IBDseq
+=iHS
+=iLASH
+=IMa2
+=IMa3
+=IQ-TREE 2
+=iTOL
+KING kinship
+=KING-robust
+=LAMP-LD
+=LDhat
+=LDhelmet
+=LFMM
+=LSD2
+=MCMCtree
+=MEGA software
+=MEGA X
+=MEGA11
+=MEGA7
+=MIGRATE-N
+=ModelFinder
+=moments-LD
+=momi2
+=MSMC
+=MSMC-IM
+=MSMC2
+=msprime
+=NeEstimator
+=NGSadmix
+=ngsLD
+=ngsRelate
+=nSL
+=OmegaPlus
+=OrientAGraph
+=OutFLANK
+=PAML
+=PAUP*
+=pcadapt
+=PCAngsd
+=phangorn
+=phastCons
+=PHYLIP
+=PhyloBayes
+=phyloP
+=pixy
+=PopART
+=PopGenome
+=PopLDdecay
+=poppr
+=PSMC
+=pyrho
+=qpAdm
+=qpDstat
+=qpF4ratio
+=qpGraph
+=qpWave
+=RAiSD
+=RAxML-NG
+=realSFS
+Refined IBD
+=rehh
+=Relate genealogies
+=RevBayes
+=RFMix
+=RFMix2
+=ROHan
+=scikit-allel
+=selscan
+=simuPOP
+=SLiM
+=SLiM 4
+=smartpca
+=SNAPP
+=SOURCEFIND
+=SplitsTree
+=StarBEAST
+=stdpopsim
+=STRUCTURE program
+=STRUCTURE software
+=SweeD
+=SweepFinder
+=SweepFinder2
+=TempEst
+=TreeAnnotator
+=TreeMix
+=tsdate
+=tsinfer
+=tskit
+=XP-EHH
+
+# epidemiology and statistics software
+=ADaM dataset*
+=AMSTAR 2
+=bayesmeta
+=Castor EDC
+=CDISC
+=cmprsk
+Comprehensive Meta-Analysis
+=Covasim
+=Covidence
+=CovidSim
+=coxph
+Cytel East
+=DisMod-MR
+=DistillerSR
+=dmetar
+=EMOD
+=Epi Info
+Epi package
+=EpiData
+=EpiEstim
+=EpiModel
+=EpiNow2
+=epiR
+=episensr
+=epitools
+=EValue
+=flexsurv
+=G*Power
+=geepack
+=gemtc
+=ggdag
+=glmmTMB
+=GraphPad
+=GraphPad Prism
+=gsDesign
+=gtsummary
+=Hmisc
+=IBM SPSS
+ipw package
+=ivreg2
+=ivregress
+=lavaan
+=MatchIt
+=Medidata
+=Medidata Rave
+meta package
+=metafor
+=metan
+=MetaXL
+=mgcv
+mice package
+=Minitab
+=missForest
+=mitools
+=Mplus
+=MRrobust
+multiple imputation by chained equations
+=mvmeta
+=NCSS PASS
+=netmeta
+Newcastle-Ottawa Scale
+=NIMBLE
+=nlme
+=nQuery
+=OpenBUGS
+=OpenClinica
+=OpenEpi
+=OpenMalaria
+=OpenMx
+=optmatch
+=Oracle Clinical
+PASS software
+=pmsampsize
+=PredictABEL
+=pROC
+=PROC GENMOD
+=PROC GLIMMIX
+=PROC LOGISTIC
+=PROC MIXED
+=PROC PHREG
+=PROC SURVEYREG
+=PSweight
+=pwr package
+=QUADAS-2
+=R-INLA
+=REDCap
+Review Manager
+=RevMan
+=riskRegression
+rms package
+=robvis
+=rpact
+=rstan
+=rstanarm
+=SAS Institute
+=SAS software
+=SAS/STAT
+=SDTM
+=SPIRIT statement
+=SPSS
+=Stata
+=Stata command*
+=stcox
+=STROBE-MR
+=SUDAAN
+surveillance package
+survey package
+survival package
+=survminer
+=tableone
+=timeROC
+=tipr
+=TRIPOD-AI
+=twang
+=WeightIt
+=WHODrug
+=xtmixed
+
+# Python
+=__init__
+=__main__
+=__name__
+Anaconda distribution
+anndata
+argparse
+array broadcasting
+ArviZ
+asyncio
+BeautifulSoup
+Bokeh library
+bytecode
+=cffi
+=concurrent.futures
+conda
+context manager*
+=cProfile
+=CPython
+ctypes
+cuDF
+=CuPy
+CVXPY
+Dask
+dataclass*
+dataframe*
+Datashader
+decorator function*
+defaultdict
+dict comprehension*
+dictionary comprehension*
+Django framework
+docstring*
+doctest
+=dtype
+dunder method*
+dynesty
+einsum
+emcee sampler
+FastAPI
+flake8
+Flask app*
+functools
+generator expression*
+generator function*
+glob module
+global interpreter lock
+Google Colab
+groupby
+h5py
+HoloViews
+=igraph
+=iloc
+IPython
+ipywidgets
+itertools
+=JAX
+joblib
+JupyterHub
+JupyterLab
+Keras
+=kwargs
+lifelines library
+line_profiler
+linspace
+logging module
+magic method*
+metaclass*
+micromamba
+Miniconda
+mpi4py
+mpmath
+multiprocessing
+mypy
+namedtuple
+napari
+nbconvert
+ndarray
+networkx
+numexpr
+NumPyro
+=ONNX
+OpenCV
+Optax
+=os.path
+=pandas
+pandas library
+pandas Series
+pathlib
+PEP 484
+PEP 8
+pickle module
+pingouin package
+pipenv
+Plotly
+plotnine
+=Polars
+PyArrow
+pybind11
+=pydantic
+pylint
+PyMC3
+Pyodide
+=PyPI
+pyplot
+pyproject.toml
+PyPy
+pyright
+pysam
+PySpark
+PyTables
+pytest
+Python 3
+Python API
+Python bindings
+Python class*
+Python code
+Python decorator*
+Python environment*
+Python function*
+Python generator*
+Python implementation*
+Python interpreter
+Python librar*
+Python module*
+Python notebook*
+Python programming
+Python version*
+Python wrapper*
+read_csv
+requests library
+requirements.txt
+scikit-image
+setup.py
+setuptools
+=shutil
+SQLAlchemy
+statsmodels
+Streamlit
+=subprocess
+SymPy
+=sys.argv
+threading module
+torch.nn
+tqdm
+type annotation*
+type hint*
+typing module
+unittest
+Vega-Lite
+=venv
+virtualenv
+xarray
+
+# R
+base R
+BiocManager
+blogdown
+bookdown
+car package
+caret package
+CmdStan
+CmdStanPy
+CmdStanR
+ComplexHeatmap
+cowplot
+data.table package
+dbplyr
+devtools
+doParallel
+dtplyr
+emmeans
+forcats
+foreach package
+=fread
+=fwrite
+=ggplot
+=ggpubr
+ggrepel
+=ggsave
+glmmTMB
+=lapply
+lattice package
+lmerTest
+lubridate
+magrittr
+=mapply
+MASS package
+mgcv
+mlr3
+native pipe
+nlme
+non-standard evaluation
+OpenBUGS
+package vignette*
+packrat
+patchwork package
+pheatmap
+pipe operator
+pkgdown
+purrr
+PyStan
+Quarto document*
+Quarto notebook*
+Quarto website*
+R CMD check
+R code
+R console
+R environment
+R function*
+R language
+R object*
+R programming
+R script*
+R session*
+R Shiny
+R version*
+R-INLA
+R6 class*
+randomForest
+ranger package
+RcppArmadillo
+RcppEigen
+=RData
+RDS file*
+readr
+renv
+reticulate
+rjags
+=rlang
+Rmarkdown
+=Rmd
+=roxygen
+roxygen2
+=Rscript
+rstanarm
+S3 class*
+S4 class*
+S4 object*
+=sapply
+Shiny app*
+Shiny server
+shinydashboard
+Stan code
+Stan program*
+stringr
+survminer
+=tapply
+testthat
+tibble*
+tidy data
+tidy evaluation
+tidymodels
+tidyr
+usethis
+=vapply
+
+# shell and HPC
+Amazon S3
+Amazon Web Services
+Ansible
+apt-get
+array job*
+awk
+=AWS
+Bash shell
+bash_profile
+bashrc
+batch job*
+Bitbucket
+Bourne shell
+brew install
+=bsub
+bzip2
+CentOS
+=chmod
+=chown
+CI pipeline*
+CI/CD
+cloud storage
+command substitution
+commit message*
+compute node*
+container image*
+container registry
+continuous deployment
+core hours
+coreutils
+CPU hours
+=cron
+cron job*
+crontab
+curl command
+Debian
+Dockerfile
+=EasyBuild
+=EC2
+egrep
+Environment Modules
+environment variable*
+exit code*
+exit status
+file descriptor*
+file path*
+file permission*
+filesystem*
+find command
+fish shell
+=FTP
+=gawk
+git branch
+git clone
+git commit
+git merge
+git pull
+git push
+git rebase
+git repository
+gitignore
+=Globus
+=GNU
+GNU Make
+GNU parallel
+GNU screen
+Google Cloud
+GPU cluster*
+GPU node*
+grep
+Grid Engine
+=gunzip
+head node*
+Helm chart*
+here document
+heredoc
+home directory
+HTCondor
+=htop
+hypervisor
+Infrastructure as code
+Jenkins pipeline*
+job array*
+job script*
+job submission*
+=k8s
+=Lmod
+login node*
+=LSF
+Lustre file system
+=LZ4
+macOS
+merge conflict*
+Microsoft Azure
+module load
+monorepo
+=NFS
+=nohup
+=NVIDIA
+nvidia-smi
+object storage
+parallel file system*
+PATH variable
+PBS job*
+PBS Pro
+Podman
+PowerShell
+pre-commit hook*
+process substitution
+pull request*
+=qstat
+=qsub
+=RHEL
+ripgrep
+=rsync
+=sacct
+salloc
+sbatch
+scancel
+=scp
+scratch directory
+scratch space
+secure shell
+sed command
+sed script*
+serverless computing
+=sftp
+shebang
+shell command*
+shell prompt
+shell variable*
+Singularity image*
+Spack
+squeue
+=srun
+=SSH
+SSH key*
+SSH tunnel*
+standard input
+standard output
+=stderr
+=stdin
+=stdout
+submission script*
+=sudo
+supercomputer*
+supercomputing
+superuser
+symbolic link*
+symlink*
+systemd
+tar archive
+tarball*
+terminal emulator
+=tmux
+=TPU
+=TPUs
+Travis CI
+Ubuntu
+umask
+wall-clock time
+walltime
+=wget
+working directory
+=WSL
+xargs
+=zcat
+=zsh
+Zstandard
+=zstd
+
+# C and C++
+abstract class*
+AddressSanitizer
+ANSI C
+Armadillo library
+autoconf
+automake
+autotools
+AVX-512
+AVX2
+Bazel
+C code
+C library
+C programming
+C++ class*
+C++ standard library
+C++ template*
+=calloc
+=ccache
+CMakeLists
+=constexpr
+copy constructor*
+core dump*
+cuBLAS
+CUDA kernel*
+cuDNN
+cuSOLVER
+dangling pointer*
+=DLL
+dynamic librar*
+dynamic linking
+=FFTW
+function overloading
+function pointer*
+=gdb
+gfortran
+GNU Scientific Library
+GPU kernel*
+header-only
+inline function*
+Intel MKL
+Kokkos
+lambda expression*
+=LAPACK
+=linker
+=lldb
+loop unrolling
+macro expansion
+=malloc
+Math Kernel Library
+method overloading
+method overriding
+move semantics
+=MSVC
+nullptr
+object file*
+OpenBLAS
+OpenCL
+operator overloading
+=PETSc
+pkg-config
+preprocessor directive*
+=printf
+=RAII
+raw pointer*
+=realloc
+=ROCm
+ScaLAPACK
+segfault*
+shared librar*
+shared_ptr
+SIMD intrinsics
+=sizeof
+smart pointer*
+Standard Template Library
+static librar*
+static linking
+std::cout
+std::map
+std::string
+=struct
+SuiteSparse
+=SYCL
+Threading Building Blocks
+Trilinos
+=typedef
+undefined behavior
+undefined behaviour
+unique_ptr
+valgrind
+=vcpkg
+virtual function*
+Visual Studio
+
+# other programming languages
+AngularJS
+Apache Airflow
+Apache Kafka
+Apache Maven
+Apache Spark
+arrow function*
+=async
+async function*
+BigQuery
+borrow checker
+callback function*
+Canvas API
+=Cargo.toml
+Chart.js
+ClickHouse
+Clojure
+=COBOL
+Common Lisp
+crates.io
+=CSS
+D3.js
+data lake*
+data pipeline*
+data warehouse*
+database query
+database schema*
+DifferentialEquations.jl
+Document Object Model
+DuckDB
+ECMAScript
+Electron framework
+Erlang
+ES6
+=ETL
+event loop*
+Flux.jl
+foreign key*
+GNU Octave
+golang
+goroutine*
+Gradle
+graph database*
+=GraphQL
+=gRPC
+Hadoop
+Haskell
+=HDFS
+=HTML
+HTML5
+inner join*
+Java code
+Java Development Kit
+Java programming
+JavaScript
+=JDK
+jQuery
+=JSX
+Julia code
+Julia language
+Julia package*
+Julia programming
+=JuliaLang
+=JUnit
+=JVM
+key-value store*
+Kotlin
+=LabVIEW
+left join*
+Lua script*
+=LuaJIT
+=Makie
+Maple software
+MapReduce
+MariaDB
+maturin
+MongoDB
+multiple dispatch
+MySQL
+Neo4j
+Node.js
+NodeJS
+=npm
+npm package*
+Objective-C
+Observable notebook*
+Observable Plot
+OCaml
+=OpenJDK
+=ORM
+outer join*
+=PHP
+Pluto.jl
+primary key*
+Prolog
+PyO3
+query language
+query optimiser
+query optimizer
+query planner
+React component*
+React.js
+ReactJS
+=Redis
+Resource Description Framework
+Ruby on Rails
+Ruby programming
+Rust code
+Rust crate*
+rustc
+SAS Institute
+SAS macro*
+SAS software
+Scala language
+Simulink
+SparkR
+SPARQL
+stored procedure*
+TypeScript
+=VBA
+Visual Basic
+Vue.js
+=WASM
+web app
+web application*
+web apps
+WebAssembly
+=WebGPU
+webpack
+=WebSocket*
+Wolfram Language
+
+# software engineering
+abstract syntax tree*
+ahead-of-time compilation
+=Amdahl
+anonymous function*
+Apache License
+API key*
+assert statement*
+atomic operation*
+=AttributeError
+benchmark suite*
+buffer overflow*
+build system*
+build tool*
+cache miss*
+call stack
+class inheritance
+code coverage
+code formatter*
+code profiling
+code repository
+code review*
+code smell*
+codebase*
+compile time
+concurrency
+concurrent programming
+coroutine*
+CPU cache*
+CPU profiler*
+data parallelism
+deadlock detection
+declarative programming
+dependency hell
+dependency injection
+dependency management
+design pattern*
+distributed memory
+duck typing
+dynamic typing
+dynamically typed
+eager evaluation
+Eclipse IDE
+=Emacs
+embarrassingly parallel
+end-to-end test*
+exception handling
+first-class function*
+flame graph*
+functional programming
+garbage collection
+garbage collector*
+generic programming
+global variable*
+GNU General Public License
+=GPL
+Gustafson's law
+hackathon*
+heap memory
+higher-order function*
+=HTTP
+HTTP request*
+=HTTPS
+imperative programming
+=ImportError
+=IndexError
+integrated development environment
+integration test*
+=IntelliJ
+=KeyError
+L1 cache
+L2 cache
+lazy evaluation
+legacy code
+lexer
+lexical closure*
+lexical scope
+lexical scoping
+linter*
+linting
+load balancing
+local variable*
+lock-free
+many-core
+memory allocation
+memory footprint
+memory hierarchy
+memory management
+memory profiler*
+memory safety
+memory usage
+memory-efficient
+memory-mapped
+memory-safe
+message passing
+metaprogramming
+microbenchmark*
+MIT License
+=mmap
+mock object*
+multi-core
+multicore
+mutable state
+=mutex*
+=OAuth
+=OOP
+open source
+out-of-memory
+package manager*
+pair programming
+parallel efficiency
+=parser
+performance profiling
+procedural programming
+process pool*
+programmer*
+property-based testing
+pseudo-code
+pseudocode
+pure function*
+PyCharm
+race condition*
+refactor
+refactoring
+reference counting
+remote procedure call*
+research software
+RESTful
+runtime error*
+=RuntimeError
+semantic versioning
+=SemVer
+shared memory
+software architecture
+software design
+software developer*
+software development
+software engineer*
+software librar*
+software license*
+software package*
+spaghetti code
+spinlock*
+Spyder IDE
+stack frame*
+stack memory
+stack overflow
+static analysis
+static typing
+statically typed
+strong scaling
+strongly typed
+syntax error*
+tail call*
+task parallelism
+technical debt
+test coverage
+test fixture*
+test suite*
+test-driven development
+thread pool*
+thread safety
+thread-safe
+traceback
+transpiler
+type checker
+type checking
+type inference
+type safety
+type system*
+=TypeError
+use-after-free
+=ValueError
+variable scope
+=Vim
+=VS Code
+=VSCode
+weak scaling
+web API*
+web crawler*
+web scraping
+worker thread*
