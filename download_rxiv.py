@@ -433,8 +433,10 @@ def fetch_paper(row, server, out_dir, min_body, pdf_seconds=ax.PDF_SECONDS, pdf_
                 else:
                     notes.append("pdf too large" if blob == "too_large" else "pdf not a PDF")
             except Blocked as exc:
-                blocked = True
-                trouble.append(f"pdf blocked ({exc})")
+                # the site's bot protection refuses PDFs (and article pages) to scripts while the JATS files stay
+                # open; a paper reaching this point has no JATS file, so the PDF refusal is final for it and is
+                # not a sign that the run is being blocked (that is what a refused JATS file shows)
+                notes.append(f"pdf refused ({exc})")
             except Exception as exc:  # noqa: BLE001
                 if isinstance(exc, ax.Stopped):
                     raise
