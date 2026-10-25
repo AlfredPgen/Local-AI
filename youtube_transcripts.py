@@ -159,7 +159,7 @@ def list_videos(spec, cookies, max_videos):
             unique.append(e)
     handle = (info.get("uploader_id") or info.get("channel_id") or info.get("id") or spec).lstrip("@")
     channel = {"name": info.get("channel") or info.get("uploader") or info.get("title") or spec,
-               "key": safe_name(handle, 60)}
+               "key": safe_name(handle, 60), "id": info.get("channel_id") or ""}
     return channel, unique[:max_videos] if max_videos else unique
 
 
@@ -531,6 +531,8 @@ def parse_args(argv=None):
     p.add_argument("--delay", type=float, default=2.0, help="average seconds between videos (be gentle)")
     p.add_argument("--cookies-from-browser", help="e.g. firefox or edge, only if YouTube blocks the run")
     p.add_argument("--list-only", action="store_true", help="count videos and hours per channel, then stop")
+    p.add_argument("--recheck-days", type=float, default=7.0,
+                   help="skip channels fully processed within this many days (0 = list every channel again)")
     p.add_argument("--recheck-off-topic", action="store_true",
                    help="look again at videos rejected as off topic (after the keyword list has changed)")
     args = p.parse_args(argv)
@@ -574,19 +576,42 @@ def main(argv=None):
     except Exception:  # noqa: BLE001 - a courtesy only
         pass
     os.makedirs(args.meta, exist_ok=True)
+    # channels.json remembers each channel's exact address (no @handle guessing and search on later runs) and
+    # when it was last processed to the end, so channels finished within --recheck-days are not listed again
+    memory_path = os.path.join(args.meta, "channels.json")
+    try:
+        with open(memory_path, encoding="utf-8") as handle:
+            memory = json.load(handle)
+    except (OSError, ValueError):
+        memory = {}
+
+    def remember(spec, **fields):
+        memory.setdefault(spec, {}).update(fields)
+        with open(memory_path + ".part", "w", encoding="utf-8") as handle:
+            json.dump(memory, handle, indent=1, sort_keys=True)
+        os.replace(memory_path + ".part", memory_path)
+
+    revisit = args.whisper or args.recheck_off_topic or args.list_only
+    skipped_recent = []
     whisper = None
     tmp = tempfile.mkdtemp(prefix="yt_audio_")
     try:
         for spec in args.channels:
-            print(f"\n[{spec}] listing videos ...", flush=True)
+            known = memory.get(spec, {})
+            if (not revisit and args.recheck_days > 0 and known.get("finished")
+                    and time.time() - known["finished"] < args.recheck_days * 86400):
+                skipped_recent.append(known.get("name") or spec)
+                continue
             try:
-                channel, entries = list_videos(spec, args.cookies_from_browser, args.max_videos)
+                channel, entries = list_videos(known.get("url") or spec, args.cookies_from_browser, args.max_videos)
             except (LookupError, yt_dlp.utils.DownloadError) as exc:
                 print(f"[{spec}] skipped: {str(exc).splitlines()[0][:200]}", flush=True)
                 continue
+            if channel.get("id"):
+                remember(spec, url=f"https://www.youtube.com/channel/{channel['id']}", name=channel["name"])
             hours = sum(e.get("duration") or 0 for e in entries) / 3600
-            print(f"[{spec}] {channel['name']}: {len(entries):,} videos, {hours:,.0f} hours", flush=True)
             if args.list_only:
+                print(f"[{channel['name']}] {len(entries):,} videos, {hours:,.0f} hours", flush=True)
                 continue
             tsv = os.path.join(args.meta, f"{channel['key']}_report.tsv")
             old_name = os.path.join(args.meta, f"{channel['key']}.tsv")  # name used until 30 September 2026
@@ -597,10 +622,15 @@ def main(argv=None):
             if args.recheck_off_topic:
                 final = final - {"off_topic"}
             todo = [e for e in entries if status.get(e["id"]) not in final]
+            if not todo:
+                print(f"[{channel['name']}] {len(entries):,} videos, nothing new", flush=True)
+                remember(spec, finished=time.time())
+                continue
             if args.whisper and whisper is None and any(status.get(e["id"]) in (None, "queued_whisper", "error")
                                                         for e in todo):
                 whisper = Whisper(args.whisper_device, args.whisper_model, args.whisper_threads)
-            print(f"[{spec}] {len(entries) - len(todo):,} done earlier; processing {len(todo):,}", flush=True)
+            print(f"\n[{channel['name']}] {len(entries):,} videos, {hours:,.0f} hours; {len(entries) - len(todo):,} done "
+                  f"earlier, processing {len(todo):,}", flush=True)
             counts = {}
             with open(tsv, "a", encoding="utf-8", newline="\n") as report:
                 if not status:
@@ -620,10 +650,14 @@ def main(argv=None):
                     if k % 10 == 0 or k == len(todo):
                         print(f"  [{channel['key']}] {k:,}/{len(todo):,} {counts}", flush=True)
                     time.sleep(random.uniform(0.5, 1.5) * args.delay)
-            print(f"[{spec}] done: {counts}; files in {os.path.join(args.out, channel['key'])}")
+            print(f"[{channel['name']}] done: {counts}; files in {os.path.join(args.out, channel['key'])}")
+            remember(spec, finished=time.time())
             if counts.get("queued_whisper") and not args.whisper:
                 print(f"  {counts['queued_whisper']} videos have no usable captions: rerun with --whisper "
                       "(after training, so it can use the GPU).")
+        if skipped_recent:
+            print(f"\n{len(skipped_recent)} channels were processed to the end within the last "
+                  f"{args.recheck_days:g} days and were not listed again (--recheck-days 0 lists them all).")
     except BotCheck as exc:
         print(f"\nYouTube is blocking or rate-limiting this session ({exc}). Stopped; finished videos are saved. "
               "Wait a few hours and rerun, or add --cookies-from-browser firefox.")
