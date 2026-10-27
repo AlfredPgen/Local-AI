@@ -664,6 +664,10 @@ nothing is overwritten, and compare the results with compare_models.py.
 
 **Rules for this folder:**
 
+- **Compression (27 October):** the text folders (all except `web`, `wikipedia` and `images`) use Windows' built-in
+  NTFS compression, about half the space. Files read and write as usual and new files are compressed automatically.
+  data_prep.py and estimate_dataset.py also read gzip-compressed files (`.md.gz`, `.txt.gz`); `a.md.gz` gets the
+  same document id as `a.md`, so compressing a folder never changes the train/validation split.
 - Folders whose names start with `_` or `.` are skipped.
 - Every file move of 29 September is listed in `_moves_2026-09-29.tsv` (old path, new path), so the reorganisation
   can be undone.
@@ -962,6 +966,20 @@ python download_pmc.py --out $HOME\ai_training_data\pmc --max-papers 100000
 - **Stop and restart:** Ctrl+C, then the same command; finished papers are skipped.
 - **Licences:** most papers are CC BY; some are CC BY-NC or NIH author manuscripts (text mining allowed). Fine for a
   personal model; check `report.tsv` before publishing a model trained on them.
+
+**Selecting with keywords.txt (since 27 October):** the fixed search above only finds papers that mention genetics
+words. With `--keywords`, PMC papers are chosen the way arXiv and bioRxiv papers are:
+
+```
+python download_pmc.py --out $HOME\ai_training_data\pmc --keywords keywords.txt --max-papers 300000
+```
+
+- **Harvest once:** title, abstract, year, citations and journal of every open-access, full-text MEDLINE paper
+  (about 7.9 million) go to `_pmc_meta\metadata`, about 170 papers a second (about 13 hours, a few GB). A rerun
+  continues where it stopped; `--refresh-metadata` harvests again for new papers.
+- **Select:** papers with 3 keyword matches from 3 different terms (the title counts 3 times), ranked by keyword
+  density (`--rank cited`: by citations); the best `--max-papers` are fetched. After a keyword edit, rerun: only the
+  selection is redone, in minutes. Papers already downloaded are skipped.
 
 ## Lecture transcripts from YouTube: youtube_transcripts.py
 

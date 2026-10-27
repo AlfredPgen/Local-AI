@@ -1358,6 +1358,25 @@ class TestFixes(unittest.TestCase):
     def tearDownClass(cls):
         shutil.rmtree(cls.tmp, ignore_errors=True)
 
+    def test_markdown_gzip_inputs(self):
+        """data_prep reads a.md.gz like a.md (same id and title); a damaged .gz is skipped and counted."""
+        import collections
+        import gzip
+        folder = os.path.join(self.tmp, "gz_md")
+        os.makedirs(folder, exist_ok=True)
+        with open(os.path.join(folder, "plain.md"), "w", encoding="utf-8", newline="\n") as f:
+            f.write("# Plain\n\nGenetic drift.")
+        with gzip.open(os.path.join(folder, "packed.md.gz"), "wt", encoding="utf-8", newline="\n") as f:
+            f.write("# Packed\n\nAllele frequencies.")
+        with open(os.path.join(folder, "broken.txt.gz"), "wb") as f:
+            f.write(b"not gzip")
+        stats = {"scanned": 0, "skipped": collections.Counter(), "cleaning": collections.Counter()}
+        docs = list(data_prep.iter_markdown([folder], list(data_prep.MD_PATTERNS_DEFAULT), [], False, stats, []))
+        self.assertEqual([(d[0], d[1], d[2]) for d in docs],
+                         [("packed.md", "packed", "# Packed\n\nAllele frequencies."),
+                          ("plain.md", "plain", "# Plain\n\nGenetic drift.")])
+        self.assertEqual(stats["skipped"]["bad_gzip"], 1)
+
     def test_keyword_covered_terms(self):
         """tools/kw_covered.py: a term whose every match is another term's match only double-counts."""
         sys.path.insert(0, os.path.join(HERE, "tools"))

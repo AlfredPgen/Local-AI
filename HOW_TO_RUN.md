@@ -88,6 +88,7 @@ python convert_to_markdown.py "D:\SomeFolder" --out $HOME\ai_training_data `
 
 ```
 python download_pmc.py --out $HOME\ai_training_data\pmc --max-papers 100000
+python download_pmc.py --out $HOME\ai_training_data\pmc --keywords keywords.txt --max-papers 300000   # select with keywords.txt
 ```
 
 Already done: 99,664 papers (about 1.25 billion tokens). `--max-papers 200000` would add the next 100,000.

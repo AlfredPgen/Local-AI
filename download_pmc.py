@@ -24,6 +24,16 @@ time (2 am to 10 am UK time).
 
 Example (the 100,000 most-cited open-access genetics/genomics papers):
     python download_pmc.py --out %USERPROFILE%\ai_training_data\pmc --max-papers 100000
+
+With --keywords the list comes from keywords.txt instead of --query, as for arXiv
+and bioRxiv: the title, abstract, year, citations and journal of every open-access
+full-text MEDLINE paper (about 7.9 million; --harvest-query) are harvested once
+into <meta>\metadata (about 9 hours, a few GB; resumable), then papers with 3
+matches from 3 different terms (the title counts 3 times) are ranked by keyword
+density (--rank cited: by citations) and the best --max-papers are fetched.
+Papers already downloaded are skipped. After editing the keywords, rerun: only
+the selection is redone. --refresh-metadata harvests again for new papers.
+    python download_pmc.py --out %USERPROFILE%\ai_training_data\pmc --keywords keywords.txt --max-papers 300000
 """
 
 import argparse
@@ -31,6 +41,7 @@ import concurrent.futures as cf
 import gzip
 import http.client
 import json
+import math
 import os
 import random
 import re
@@ -140,6 +151,128 @@ def build_list(query, sort, limit, path):
             handle.write("\t".join(row) + "\n")
     os.replace(path + ".part", path)
     print(f"Paper list: {len(rows):,} papers saved to {path}")
+    return rows
+
+
+HARVEST_QUERY = "OPEN_ACCESS:y AND HAS_FT:y AND SRC:MED"
+_TAGS = re.compile(r"<[^>]+>")
+
+
+def harvest(query, folder, refresh=False):
+    """Title, abstract, year, citations and journal of every search hit with a
+    PMCID, appended page by page to <folder>\\records.jsonl.gz. state.json keeps
+    the search position, so an interrupted harvest continues where it stopped."""
+    os.makedirs(folder, exist_ok=True)
+    records, state_path = os.path.join(folder, "records.jsonl.gz"), os.path.join(folder, "state.json")
+    state = {}
+    if os.path.isfile(state_path) and not refresh:
+        with open(state_path, encoding="utf-8") as handle:
+            state = json.load(handle)
+    if state.get("query") != query:
+        if os.path.isfile(records):
+            os.remove(records)
+        state = {"query": query, "cursor": "*", "records": 0, "complete": False}
+    if state["complete"]:
+        print(f"Metadata: {state['records']:,} papers from {records}")
+        return records
+    t0, start = time.time(), state["records"]
+    while True:
+        params = {"query": query, "format": "json", "resultType": "core", "pageSize": 1000,
+                  "cursorMark": state["cursor"], "sort": "CITED desc"}
+        data = json.loads(http_get(SEARCH_URL + "?" + urllib.parse.urlencode(params)))
+        results = data.get("resultList", {}).get("result", [])
+        lines = []
+        for r in results:
+            if not r.get("pmcid"):
+                continue
+            journal = ((r.get("journalInfo") or {}).get("journal") or {}).get("title") or r.get("journalTitle")
+            lines.append(json.dumps({"pmcid": r["pmcid"], "pmid": str(r.get("pmid") or ""),
+                                     "year": str(r.get("pubYear") or ""), "cited": int(r.get("citedByCount") or 0),
+                                     "journal": _flat(journal), "lang": r.get("language") or "",
+                                     "title": _flat(r.get("title")),
+                                     "abstract": _flat(_TAGS.sub(" ", r.get("abstractText") or ""))},
+                                    ensure_ascii=False))
+        if lines:
+            with gzip.open(records, "at", encoding="utf-8") as handle:  # one gzip member per page
+                handle.write("\n".join(lines) + "\n")
+        nxt = data.get("nextCursorMark")
+        state["records"] += len(lines)
+        state["complete"] = not results or not nxt or nxt == state["cursor"]
+        state["cursor"] = nxt or state["cursor"]
+        with open(state_path + ".part", "w", encoding="utf-8") as handle:
+            json.dump(state, handle)
+        os.replace(state_path + ".part", state_path)
+        total = data.get("hitCount", 0)
+        done = state["records"] - start
+        if state["complete"] or done % 20_000 < 1000:
+            rate = done / max(time.time() - t0, 1e-9)
+            left = (total - state["records"]) / max(rate, 1e-9) / 3600
+            print(f"  metadata: {state['records']:,} of about {total:,} papers "
+                  f"({rate:,.0f}/s, about {max(left, 0):.1f} h left)", flush=True)
+        if state["complete"]:
+            print(f"Metadata: {state['records']:,} papers in {records}")
+            return records
+
+
+def read_records(path):
+    seen = set()
+    with gzip.open(path, "rt", encoding="utf-8") as handle:
+        for line in handle:
+            try:
+                rec = json.loads(line)
+            except ValueError:  # a page cut short by a crash; the harvest rewrote it after
+                continue
+            if rec["pmcid"] not in seen:
+                seen.add(rec["pmcid"])
+                yield rec
+
+
+def keyword_list(records_path, keyword_path, min_hits, min_distinct, limit, rank, path):
+    """Papers whose title and abstract match the keywords (the title counts 3
+    times), best first, as list rows; written to `path`. rank: 'density'
+    (keyword matches per square root of words) or 'cited' (most cited first)."""
+    import pyarrow as pa
+
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import data_prep as dp
+
+    kw = dp.KeywordFilter(dp.read_terms(keyword_path), [], min_hits, min_distinct, title_weight=3)
+    kept, n, t0 = [], 0, time.time()
+
+    def score(chunk):
+        arrays = {"text": pa.array([r["abstract"] for r in chunk]), "title": pa.array([r["title"] for r in chunk])}
+        upper, _, _ = dp._vector_scores(arrays, kw, "text", "title", None, None)  # C++ prefilter, never too low
+        for rec, bound in zip(chunk, upper):
+            if bound < min_hits or not rec["lang"].lower().startswith(("eng", "en")) and rec["lang"]:
+                continue
+            keep, _, hits, _ = kw.evaluate(rec["title"], rec["abstract"])
+            if keep:
+                words = len(rec["title"].split()) + len(rec["abstract"].split())
+                kept.append((hits / math.sqrt(max(words, 50)), rec))
+
+    chunk = []
+    for rec in read_records(records_path):
+        n += 1
+        chunk.append(rec)
+        if len(chunk) == 50_000:
+            score(chunk)
+            chunk = []
+            if n % 500_000 == 0:
+                print(f"  scored {n:,} papers, {len(kept):,} match ({time.time() - t0:,.0f} s)", flush=True)
+    if chunk:
+        score(chunk)
+    if rank == "cited":
+        kept.sort(key=lambda p: (-p[1]["cited"], -p[0], p[1]["pmcid"]))
+    else:
+        kept.sort(key=lambda p: (-p[0], -p[1]["cited"], p[1]["pmcid"]))
+    rows = [(r["pmcid"], r["pmid"], r["year"], str(r["cited"]), r["journal"], r["title"]) for _, r in kept[:limit]]
+    with open(path + ".part", "w", encoding="utf-8", newline="\n") as handle:
+        handle.write(f"# keywords: {keyword_path} (min hits {min_hits}, min distinct {min_distinct}, rank {rank})\n"
+                     f"# metadata: {records_path}\n# complete: {len(rows)} papers\n")
+        for row in rows:
+            handle.write("\t".join(row) + "\n")
+    os.replace(path + ".part", path)
+    print(f"Paper list: {len(kept):,} of {n:,} papers match the keywords; the best {len(rows):,} are in {path}")
     return rows
 
 
@@ -674,6 +807,17 @@ def parse_args(argv=None):
     p.add_argument("--batch", type=int, default=100, help="papers per request")
     p.add_argument("--min-body-chars", type=int, default=1500, help="skip papers whose XML body is shorter")
     p.add_argument("--list-only", action="store_true", help="build the paper list and stop")
+    p.add_argument("--keywords", help="select papers with this keyword file (e.g. keywords.txt) instead of --query: "
+                                      "harvests the title and abstract of every open-access full-text paper once, "
+                                      "then keeps those with --min-hits matches from --min-distinct terms")
+    p.add_argument("--harvest-query", default=HARVEST_QUERY,
+                   help=f"papers whose metadata is harvested for --keywords (default: {HARVEST_QUERY})")
+    p.add_argument("--min-hits", type=int, default=3)
+    p.add_argument("--min-distinct", type=int, default=3)
+    p.add_argument("--rank", choices=("density", "cited"), default="density",
+                   help="order of keyword-selected papers: keyword density (default) or citations")
+    p.add_argument("--refresh-metadata", action="store_true",
+                   help="harvest the metadata again (to add papers published since the last harvest)")
     args = p.parse_args(argv)
     if not 1 <= args.workers <= 3:
         p.error("--workers must be 1..3")
@@ -698,7 +842,12 @@ def main(argv=None):
     args = parse_args(argv)
     os.makedirs(args.out, exist_ok=True)
     os.makedirs(args.meta, exist_ok=True)
-    rows = build_list(args.query, args.sort, args.max_papers, os.path.join(args.meta, "list.tsv"))
+    if args.keywords:
+        records = harvest(args.harvest_query, os.path.join(args.meta, "metadata"), args.refresh_metadata)
+        rows = keyword_list(records, args.keywords, args.min_hits, args.min_distinct, args.max_papers, args.rank,
+                            os.path.join(args.meta, "list.tsv"))
+    else:
+        rows = build_list(args.query, args.sort, args.max_papers, os.path.join(args.meta, "list.tsv"))
     if args.list_only:
         return
     report_path = os.path.join(args.meta, "report.tsv")

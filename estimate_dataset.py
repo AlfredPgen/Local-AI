@@ -34,6 +34,7 @@ but it ranks the options.
 import argparse
 import csv
 import glob
+import gzip
 import math
 import os
 import random
@@ -135,17 +136,25 @@ def markdown_source(name, dirs, args, use_kw, rng):
             if dp._excluded(path, rel, excludes):
                 continue
             size = os.path.getsize(path)
+            if path.lower().endswith(".gz") and size >= 18:  # the gzip trailer holds the text size (mod 4 GB)
+                with open(path, "rb") as handle:
+                    handle.seek(-4, os.SEEK_END)
+                    size = int.from_bytes(handle.read(4), "little")
             if size <= 512 * 1024 * 1024:
                 files.append((path, size))
     t.total, t.total_bytes = len(files), sum(s for _, s in files)
     n = min(len(files), max(300, int(args.sample * len(files))))
     for path, size in rng.sample(files, n):
-        with open(path, "rb") as handle:
-            text = dp.decode_bytes(handle.read(), {"bom_removed": 0, "decode_errors_docs": 0,
-                                                   "decode_errors_chars": 0})
+        try:
+            with (gzip.open if path.lower().endswith(".gz") else open)(path, "rb") as handle:
+                raw = handle.read()
+        except (OSError, EOFError):
+            continue  # a damaged .gz file, which data_prep skips too
+        text = dp.decode_bytes(raw, {"bom_removed": 0, "decode_errors_docs": 0, "decode_errors_chars": 0})
         t.sampled += 1
         t.sampled_bytes += size
-        examine(t, os.path.splitext(os.path.basename(path))[0], text, use_kw)
+        stem = os.path.basename(path)[:-3] if path.lower().endswith(".gz") else os.path.basename(path)
+        examine(t, os.path.splitext(stem)[0], text, use_kw)
     return t
 
 

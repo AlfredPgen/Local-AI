@@ -4,9 +4,11 @@ Last updated 27 October 2026.
 
 ## Data
 
-- [ ] **Before the next `data_prep.py` run:** compress `ai_training_data` with NTFS compression (about 2x less
-      space; scripts keep working): `compact /c /s:"$env:USERPROFILE\ai_training_data" /i /q`
-      (undo: `compact /u /s:"$env:USERPROFILE\ai_training_data" /i /q`).
+- [x] **Compression (27 October):** the text folders of `ai_training_data` use NTFS compression (new files are
+      compressed automatically; undo per folder: `compact /u /s:<folder> /i /q`); data_prep.py and
+      estimate_dataset.py also read `.md.gz` and `.txt.gz` files.
+- [ ] **PMC by keywords:** `python download_pmc.py --out $HOME\ai_training_data\pmc --keywords keywords.txt
+      --max-papers 300000` (harvest about 13 h once; best overnight UK time, as NCBI asks).
 
 - [ ] **Rebuild the dataset.** `datasets\` is empty (bio_all is gone). Rebuild with `python run_pipeline.py build`
       (about 2 h) once the downloads below have added more text. It picks up the 22,650-term `keywords.txt`.

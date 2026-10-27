@@ -1411,6 +1411,8 @@ _SKIP_URL_RE = re.compile(
     r"/(_sources|_static|_images|_downloads|_modules|_raw|genindex|search|py-modindex|modindex|wp-admin|wp-json|"
     r"wp-login|wp-includes|wp-content|feed|xmlrpc\.php|tag|category|author|page/\d+)(/|\.html?$|$)|"
     r"[?&](replytocom|share|print|format|action|do|rev|diff|oldid|redirect|utm_[a-z]+)=|"
+    # GitHub wikis: old revisions (/wiki/Page/<commit>), history, compare and edit pages repeat the current page
+    r"/wiki/([^/]+/)?[0-9a-f]{40}$|/wiki/(_history|_compare|_new|_edit|_access)\b|/wiki/[^/]+/(_history|_edit)$|"
     # licence, author and release-note pages (pkgdown's LICENSE-text.html, authors.html, news/), as for github rows
     r"/(licen[cs]e(-text)?|authors|news|change_?log|changes|history|release[-_]?notes|whatsnew)"
     r"(/|/index\.html?|\.html?)?$", re.I)

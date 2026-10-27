@@ -48,7 +48,9 @@ import collections
 import datetime
 import fnmatch
 import glob
+import gzip
 import hashlib
+import io
 import json
 import math
 import os
@@ -63,7 +65,8 @@ import numpy as np
 HERE = os.path.dirname(os.path.abspath(__file__))
 FORMAT = "tiny_gpt_dataset"
 FORMAT_VERSION = 1
-MD_PATTERNS_DEFAULT = ("*.md", "*.markdown", "*.rmd", "*.Rmd", "*.txt")
+MD_PATTERNS_DEFAULT = ("*.md", "*.markdown", "*.rmd", "*.Rmd", "*.txt",  # and gzip-compressed copies of them:
+                       "*.md.gz", "*.markdown.gz", "*.rmd.gz", "*.txt.gz")
 SOURCE_NAME_RE = r"[A-Za-z][A-Za-z0-9_-]{0,31}"
 
 
@@ -832,6 +835,9 @@ def iter_markdown(dirs, patterns, excludes, recursive, stats, ledger, source="md
                 continue
             seen.add(real)
             rel = os.path.relpath(path, directory)
+            packed = rel.lower().endswith(".gz")
+            if packed:
+                rel = rel[:-3]  # a.md.gz has the id of a.md, so compressing a folder keeps every split decision
             doc_id = os.path.join(bases[k], rel) if len(dirs) > 1 else rel
             stats["scanned"] += 1
             if _excluded(path, rel, excludes):
@@ -845,7 +851,19 @@ def iter_markdown(dirs, patterns, excludes, recursive, stats, ledger, source="md
                 continue
             with open(path, "rb") as handle:
                 raw = handle.read()
-            yield doc_id, os.path.splitext(os.path.basename(path))[0], decode_bytes(raw, stats["cleaning"]), {"path": path}
+            if packed:
+                try:
+                    with gzip.GzipFile(fileobj=io.BytesIO(raw)) as unpacked:
+                        raw = unpacked.read(512 * 1024 * 1024 + 1)
+                except (OSError, EOFError) as exc:
+                    stats["skipped"]["bad_gzip"] += 1
+                    ledger.append(_ledger_row(source, doc_id, rel, "skipped", f"bad_gzip: {exc}"[:80], size))
+                    continue
+                if len(raw) > 512 * 1024 * 1024:
+                    stats["skipped"]["file_too_large"] += 1
+                    ledger.append(_ledger_row(source, doc_id, rel, "skipped", "file_too_large", len(raw)))
+                    continue
+            yield doc_id, os.path.splitext(os.path.basename(rel))[0], decode_bytes(raw, stats["cleaning"]), {"path": path}
 
 
 class ArrowTableSource:
