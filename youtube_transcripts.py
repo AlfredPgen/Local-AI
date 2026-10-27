@@ -163,16 +163,36 @@ def list_videos(spec, cookies, max_videos):
     return channel, unique[:max_videos] if max_videos else unique
 
 
+def search_channels(name, cookies, n=8):
+    """[(channel name, @handle, channel id, subscribers)] from YouTube's channel search."""
+    import urllib.parse
+    url = ("https://www.youtube.com/results?search_query=" + urllib.parse.quote(name)
+           + "&sp=EgIQAg%3D%3D")  # the search filter 'type: channel'
+    with ydl(cookies, extract_flat="in_playlist", playlistend=n) as y:
+        found = y.extract_info(url, download=False)
+    return [(e.get("channel") or e.get("title") or "", e.get("uploader_id") or "", e.get("channel_id") or "",
+             e.get("channel_follower_count")) for e in (found.get("entries") or [])[:n] if e.get("channel_id")]
+
+
 def _find_channel_by_name(name, cookies):
-    with ydl(cookies, extract_flat="in_playlist") as y:
-        found = y.extract_info(f"ytsearch20:{name}", download=False)
+    """A channel given by its display name: an exact (punctuation-blind) match in the
+    channel search, else in the video search; otherwise the error lists the closest channels."""
     wanted = re.sub(r"\W", "", name).lower()
-    for e in found.get("entries") or []:
-        if re.sub(r"\W", "", e.get("channel") or e.get("uploader") or "").lower() == wanted and e.get("channel_id"):
-            print(f"  '{name}' is channel {e.get('channel')} ({e['channel_id']})")
-            with ydl(cookies, extract_flat="in_playlist") as y:
-                return y.extract_info(f"https://www.youtube.com/channel/{e['channel_id']}/videos", download=False)
-    raise LookupError(f"no channel named '{name}' found; give its exact @handle or URL")
+    candidates = search_channels(name, cookies)
+    match = next((c for c in candidates if re.sub(r"\W", "", c[0]).lower() == wanted), None)
+    if match is None:
+        with ydl(cookies, extract_flat="in_playlist") as y:
+            found = y.extract_info(f"ytsearch20:{name}", download=False)
+        match = next(((e.get("channel"), e.get("uploader_id") or "", e["channel_id"], None)
+                      for e in found.get("entries") or [] if e.get("channel_id")
+                      and re.sub(r"\W", "", e.get("channel") or e.get("uploader") or "").lower() == wanted), None)
+    if match:
+        print(f"  '{name}' is channel {match[0]} ({match[1] or match[2]})")
+        with ydl(cookies, extract_flat="in_playlist") as y:
+            return y.extract_info(f"https://www.youtube.com/channel/{match[2]}/videos", download=False)
+    near = "; ".join(f"{c[0]} ({c[1] or c[2]}, {c[3] or 0:,} subscribers)" for c in candidates[:3])
+    raise LookupError(f"no channel named '{name}' found; give its exact @handle or URL"
+                      + (f". Closest: {near}" if near else ""))
 
 
 def pick_track(tracks, prefer):

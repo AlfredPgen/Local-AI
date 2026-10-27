@@ -33,12 +33,13 @@ Ben Lambert                         # 497 videos: Bayesian statistics, econometr
 @khanacademy
 
 # Added 2026-10-21: more genetics, medicine, statistics and ML (names are looked up like the ones above)
-Wellcome Connecting Science         # genomics courses and conferences
+https://www.youtube.com/channel/UCCtAWpUMsibnPBjNhGGG6fQ   # Sanger Institute Scientific Training and Events (Wellcome Connecting Science courses)
+https://www.youtube.com/channel/UCUzZKO3uzq8PQBeJhLLDxQg   # Wellcome Connecting Science Engage
 Cold Spring Harbor Laboratory       # CSHL Leading Strand: research talks
 Allen Institute                     # cell and brain science
 @BioInteractive                     # HHMI BioInteractive: evolution, genetics, ecology
 Simons Institute                    # theory of computing, statistics, learning theory
-Institute for Pure & Applied Mathematics   # IPAM: maths of biology and ML
+https://www.youtube.com/channel/UCGzuiiLdQZu9wxDNJHO_JnA   # IPAM (Institute for Pure & Applied Mathematics): maths of biology and ML
 Isaac Newton Institute for Mathematical Sciences
 Neuromatch Academy                  # computational neuroscience and deep learning courses
 @zedstatistics                      # statistics and econometrics
@@ -164,3 +165,28 @@ https://www.youtube.com/channel/UCNJK6_DZvcMqNSzQdEkzvzA   # Richard McElreath
 https://www.youtube.com/channel/UCzL_0nIe8B4-7ShhVPfJkgw   # Data Science Dojo
 https://www.youtube.com/channel/UCCcrR0XBH0aWbdffktUBEdw   # Mutual Information
 https://www.youtube.com/channel/UCIxertsVDip8QHpnhinkAow   # Ari Seff
+
+# Added 27 October 2026 (exact channels from YouTube's channel search)
+https://www.youtube.com/channel/UC5yMlYjHSgFfZ37LYq-dzig   # Oxford Nanopore Technologies
+https://www.youtube.com/channel/UCwePTCex7jAcDl75drp41RQ   # Olink Proteomics, part of Thermo Fisher Scientific
+https://www.youtube.com/channel/UCoQHyIrWjXP675NR-QNzEnQ   # DNAnexus
+https://www.youtube.com/channel/UCZtZm3QLSw-O5htPgNoaFpA   # NBP- Psychiatric Epidemiology (Niels Bohr Professorship)
+https://www.youtube.com/channel/UCkKlJ5LHrE3C7fgbnPA5DGA   # Manolis Kellis
+https://www.youtube.com/channel/UCumdc9Rsih0CHMnK1ZF8UVQ   # Psychiatric Genomics Consortium
+https://www.youtube.com/channel/UCtrq7AvGCEVKW3Wt8DyjUJw   # Social Science Genetics Association Consortium
+https://www.youtube.com/channel/UCKGzTZIXfs2HX44X3HqBtDA   # Ensembl Training
+https://www.youtube.com/channel/UCSNBIiwEl2ONu2ewgIUA5jw   # pleiotropy
+https://www.youtube.com/channel/UChMKH9Da5gPz1_z41a8U-3Q   # Tushar Kundu (@tusharkundu8996, the largest of several channels with this name)
+https://www.youtube.com/channel/UC-A3RB9zleSwKGYBdBcV8lw   # Data4Bio
+https://www.youtube.com/channel/UC8xNPQ-3a5t9uMU7Vah-jWA   # Jeff Leek
+https://www.youtube.com/channel/UC1lb9cYp9wt8xjF3APM9bMw   # Rafael Irizarry (Rafalab)
+https://www.youtube.com/channel/UCkfbcgMdQbCeAVhwuBjPXPg   # EMBL's European Bioinformatics Institute EMBL-EBI
+https://www.youtube.com/channel/UC1yK-2gwKPttK9fbt2-K13w   # Golden Helix Inc.
+https://www.youtube.com/channel/UCFe6jenM1Bc54qtBsIJGRZQ   # Patrick J (patrickjMT): maths
+https://www.youtube.com/channel/UCVqWctrxf5-oBIM1lqOIt-A   # CSHL Leading Strand
+https://www.youtube.com/channel/UCp2Z2NYhXFbnp_7ulnaXmCw   # Evolutionary Medicine
+https://www.youtube.com/channel/UC6nSFpj9HTCZ5t-N3Rm3-HA   # Vsauce
+https://www.youtube.com/channel/UC_CzsS7UTjcxJ-xXp1ftxtA   # Sebastian Raschka
+https://www.youtube.com/channel/UCBTZEtFw_-eLa1Vb5LPiGMA   # SithDev (@sithdev8206)
+https://www.youtube.com/channel/UCzr638RebE2CNtHstSxuoyw   # CMMath (@CMMath06)
+https://www.youtube.com/channel/UCHlNU7kIZhRgSbhHvFoy72w   # Hugging Face
