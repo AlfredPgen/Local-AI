@@ -46,7 +46,7 @@ The rest of this file explains the steps and options behind these commands.
 
 | Step | What happens | Script | How long |
 |---|---|---|---|
-| 1 | Put text into `$HOME\ai_training_data` | `convert_to_markdown.py`, `download_pmc.py`, `download_arxiv.py`, `youtube_transcripts.py` | minutes to days |
+| 1 | Put text into `$HOME\ai_training_data` | `convert_to_markdown.py`, `download_pmc.py`, `download_arxiv.py`, `download_rxiv.py`, `download_docs.py`, `youtube_transcripts.py` | minutes to days |
 | 2 | (Optional) See how big the dataset will be and which model it supports | `estimate_dataset.py` | ~7 min |
 | 3 | Clean, filter and tokenise everything into a dataset folder | `data_prep.py` | ~2-2.5 h |
 | 4 | Train the model | `tiny_gpt.py` | 12 h to days |
@@ -129,8 +129,28 @@ python download_rxiv.py --server biorxiv --update   # later: add new preprints
   full text, else the PDF. Output in `ai_training_data\biorxiv` and `ai_training_data\medrxiv`.
 - `--wait 5-15` (default) before each paper and at least 1 s between requests; a bot-check page stops the run after
   5 papers in a row so it never hammers the site.
-- What happened to each paper, with its licence: `ai_training_data\_arxiv_meta\report.tsv`. Stop with Ctrl+C and
-  rerun the same command to continue.
+- What happened to each paper, with its licence: `ai_training_data\_biorxiv_meta\report.tsv` (and
+  `_medrxiv_meta`). Stop with Ctrl+C and rerun the same command to continue.
+
+**Software documentation** (manuals, tutorials and worked examples of the tools the model should learn to use)
+
+```
+python download_docs.py --list                           # the sources in doc_sources.tsv and their status
+python download_docs.py                                  # download what is not done yet; a rerun continues
+python download_docs.py --only plink2,regenie --refresh  # fetch some tools again
+```
+
+- `doc_sources.tsv` lists about 1,200 sources for about 920 tools (columns: tool, kind, url, licence, notes). Kinds:
+  GitHub repositories (README, docs, vignettes, examples), documentation sites (crawled under the URL's folder only,
+  robots.txt obeyed, at most `--max-pages 400` pages), Read the Docs projects, PDF manuals, single pages, CRAN and
+  Bioconductor packages. Add a row to add a tool.
+- Output: `ai_training_data\software_doc\<tool>\...` as Markdown, one file per page; `data_prep.py` reads it as the
+  source `software_doc`. `software_doc\_manifest.tsv` lists each row's status, files, characters and licence; rows
+  that failed (`error`, `partial`) are tried again on the next run.
+- Pacing: 1-2 s between requests to one host, a pause after "too many requests", at most `--max-mb 300` per row.
+  Nothing downloaded is run.
+- Some sites refuse scripts: GCTA, SMR and GSMR (yanglab.westlake.edu.cn), LDAK (dougspeed.com) and KING. Those rows
+  stay errors; save their pages from the browser and convert them with `convert_to_markdown.py`.
 
 **YouTube lecture transcripts**
 

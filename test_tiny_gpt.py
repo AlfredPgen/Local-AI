@@ -1358,6 +1358,46 @@ class TestFixes(unittest.TestCase):
     def tearDownClass(cls):
         shutil.rmtree(cls.tmp, ignore_errors=True)
 
+    def test_keyword_covered_terms(self):
+        """tools/kw_covered.py: a term whose every match is another term's match only double-counts."""
+        sys.path.insert(0, os.path.join(HERE, "tools"))
+        import kw_covered
+        terms = ["polymer*", "polymerase", "spatial transcriptomic*", "spatial transcriptomics", "CITE-seq",
+                 "=CITE-seq", "=MET", "=Met", "regression", "linear regression", "*mab", "adalimumab",
+                 "China Kadoorie", "China Kadoorie Biobank"]
+        self.assertEqual(kw_covered.find(terms, nested=False),
+                         {"polymerase": "polymer*", "spatial transcriptomics": "spatial transcriptomic*",
+                          "=CITE-seq": "CITE-seq"})
+        nested = kw_covered.find(terms, nested=True)
+        self.assertEqual(nested.get("China Kadoorie Biobank"), "China Kadoorie")
+        for kept in ("linear regression", "adalimumab", "=Met", "=MET", "polymer*"):
+            self.assertNotIn(kept, nested)
+
+    def test_download_docs_helpers(self):
+        """download_docs.py: unsafe archive names, bad links, crawl scope, robots wildcards, decoding, Rd code."""
+        import urllib.robotparser
+        import download_docs as d
+        for bad in ("/etc/passwd", "C:/x.md", "../up.md", "a/../../b.md", "a\x00b"):
+            self.assertIsNone(d.safe_member(bad), bad)
+        self.assertEqual(d.safe_member("repo-main\\docs\\./a.md"), "repo-main/docs/a.md")
+        for bad in ("http://localhost:PORT/", "http://x:99999/", "https://[hostname]/"):
+            self.assertIsNone(d.normalise_url(bad), bad)
+        scope = d.Scope("https://a.org/docs/")
+        self.assertIn("https://a.org/docs/x", scope)
+        self.assertNotIn("https://a.org/other/x", scope)
+        self.assertNotIn("https://a.org:8443/docs/x", scope)
+        rp = urllib.robotparser.RobotFileParser()
+        d.parse_robots(rp, "User-agent: *\nDisallow: /*?\nDisallow: /private/\nCrawl-delay: 2.5\n")
+        self.assertTrue(rp.can_fetch("tinyGPT-docs", "https://a.org/docs/manual.html"))
+        self.assertFalse(rp.can_fetch("tinyGPT-docs", "https://a.org/docs/manual.html?x=1"))
+        self.assertFalse(rp.can_fetch("tinyGPT-docs", "https://a.org/private/x.html"))
+        self.assertEqual(rp.crawl_delay("tinyGPT-docs"), 3)
+        self.assertEqual(d.decode_text("don’t – café".encode("cp1252")), "don’t – café")
+        md = d.rd_markdown(r"\name{f}\title{F}\usage{f(fun = function(v) { v + 1 })}" "\n"
+                           r"\examples{for (i in 1:3) {" "\n  print(i)\n}\n}")
+        self.assertIn("f(fun = function(v) { v + 1 })", md)
+        self.assertIn("for (i in 1:3) {\n  print(i)\n}", md)
+
     def small_model(self, seed=0, vocab=50):
         torch.manual_seed(seed)
         cfg = tiny_gpt.ModelConfig(vocab_size=vocab, ctx=16, d_model=32, n_layers=2, n_heads=4, n_kv_heads=2)

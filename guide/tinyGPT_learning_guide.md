@@ -43,12 +43,14 @@ answerer. **e**, tools to inspect, compare, export and use checkpoints.](figures
 | posttrain.py | A whole post-training round from open datasets: question data, SFT, DPO and a before/after evaluation |
 | detect_text.py | Was this text written by my model? A watermark test and a likelihood score |
 | convert_to_markdown.py | Turns PDF, DOCX, PPTX, XLSX, CSV, HTML, code and GWAS summary statistics into Markdown, sorted by type |
-| download_pmc.py, download_arxiv.py | Open-access papers from PubMed Central and arXiv, as Markdown |
+| download_pmc.py, download_arxiv.py, download_rxiv.py | Open-access papers from PubMed Central, arXiv, bioRxiv and medRxiv, as Markdown |
+| download_docs.py, doc_sources.tsv | Software documentation (manuals, tutorials, examples) of about 920 tools, as Markdown |
+| tools/ | Keyword-list checks: kw_check.py (format, duplicates, common words), kw_covered.py (terms that only double-count), term_evidence.py (literature hits), url_check.py (documentation links) |
 | youtube_transcripts.py | On-topic lecture transcripts from YouTube channels |
 | download_wikipedia.py | English Wikipedia in the format data_prep.py reads |
 | gpu_check.py | GPU readings, a load test and a training benchmark; refuses to run while the GPU is busy |
 | test_tiny_gpt.py | About 30 automated tests that run on the CPU |
-| keywords.txt | 4,100 topic terms for the keyword filter |
+| keywords.txt | 22,650 topic terms in 80 categories for the keyword filter |
 | probes_biology.tsv | The fact benchmark: 336 questions in 16 categories, with near-miss wrong answers |
 | calibrate_probes.py | Sets the benchmark's difficulty labels from how open reference models score it |
 | finetune_examples/ | Format templates: 20 SFT examples and 12 DPO pairs |
@@ -653,7 +655,9 @@ nothing is overwritten, and compare the results with compare_models.py.
 | tables | Spreadsheets, CSV and GWAS summaries (as text) | Yes, "tables" |
 | codes | R, Python and other code (as text; never run) | Yes, "codes" |
 | synthetic | AI-written text (GLM and DeepSeek genetics notes) | Yes, "synthetic". Rename it to `_synthetic` to leave it out |
-| pmc, arxiv, lectures | Downloaded papers and lecture transcripts (Sections 4.8 to 4.10) | Yes, one source each; their reports are in `_pmc_meta`, `_arxiv_meta` and `_lectures_meta` |
+| pmc, arxiv, biorxiv, medrxiv, lectures | Downloaded papers, preprints and lecture transcripts | Yes, one source each; their reports are in `_pmc_meta`, `_arxiv_meta`, `_biorxiv_meta`, `_medrxiv_meta` and `_lectures_meta` |
+| software_doc | Software documentation from download_docs.py | Yes, source "software_doc"; `_manifest.tsv` inside is not read |
+| 3d | Reserved for 3D-modelling text (scene descriptions, Blender scripts) | Yes, once it holds Markdown or text |
 | images | Pictures for future multimodal work | No |
 | wikipedia | English Wikipedia (Hugging Face Arrow format, 6.4M articles) | Through `--wiki-dir` |
 | web | FineWeb-Edu (Parquet) and peS2o (JSON Lines) | Through `--parquet` and `--jsonl` |
@@ -732,15 +736,31 @@ are never keyword-filtered.
 
 **The keyword list:**
 
-- keywords.txt has 4,100 terms, grouped by category. It covers molecular and cell biology, genetics and genomics,
+- keywords.txt has 22,650 terms in 80 categories. It covers molecular and cell biology, genetics and genomics,
   evolution and phylogenetics, statistics and mathematics, machine learning, medicine and specific diseases, drugs
   and other chemicals, nutrition and metabolism, enzymes and other proteins, gene symbols, species and microbes,
-  molecular structure and 3D modelling and rendering, databases and biobanks, and the names of well-known
-  scientists.
+  molecular structure and 3D modelling and rendering, databases and biobanks, and the names of scientists. Since
+  27 October it also covers the tools and methods of your work and the tasks the model should learn: GWAS and
+  post-GWAS software, sequencing, population genetics, cross-ancestry methods, causal inference, HLA, drug discovery,
+  pharmacogenomics and pharmacokinetics, biomechanics, cluster pipelines and reporting (bash, Slurm, Snakemake,
+  Nextflow, R and Python statistics, SVG plots, Word and Excel files), visual explanation (TikZ, Mermaid, Manim, D3)
+  and 3D generation.
 - **History:** 608 terms until 30 September 2026. Then mathematics, statistics and more genetics themes were added
   (1,006), then diseases, chemistry, genes, proteins and 3D modelling (1,686), then nutrition, species, microbes,
   phylogenetics, more diseases and scientists' names (2,385). On 1 October: many more genes (200 to 618), proteins
   and enzymes, bacteria, viruses, parasites and fungi, cancer types, biobanks, databases and epidemiology (4,100).
+  On 11 October: statistical genetics, ML, computing and epidemiology (4,527). On 25 October: genes, proteins,
+  chemicals, drugs, pharma companies, trials, omics and programming (12,203). On 27 October: the areas above,
+  biobanks and cohorts worldwide (ARIC, KoGES, KCPS-II, Taiwan Biobank, TPMI, All of Us, MVP, FinnGen, Mexico City
+  Prospective Study, Our Future Health, Genes & Health and many more), industry and start-ups, diet, metabolomics,
+  immunology, databases (GTEx, ENCODE, Roadmap and others) and about 1,950 more researchers (22,650).
+- **How the 27 October round was checked:** every new term went through a mechanical check (`tools/kw_check.py`:
+  format, duplicates, words common in ordinary web text), an independent reviewer that verified names against
+  official sites, PyPI, CRAN and GitHub, and a count of Europe PMC papers using the exact phrase
+  (`tools/term_evidence.py`); terms with fewer than 3 papers were checked once more by hand. Documents that the new
+  list keeps or drops were judged blind for relevance: of the 223 documents it no longer keeps, 107 were off topic
+  and 47 on topic; of the 493 it newly keeps, 306 were on topic and 37 off topic. `tools/kw_covered.py` removed 94
+  terms that only counted a mention twice ('=CITE-seq' beside 'CITE-seq', 'meta-analysis' beside 'meta-analys\*').
 - **Everyday words are left out or used only in phrases.** Examples: "stroke" appears only as "ischaemic stroke";
   "Godot" only as "Godot engine" (not the play); "Falconer" only as "Douglas Falconer". Common surnames (Fisher,
   Wright, Snow) appear only as full names ("Ronald Fisher", "Sewall Wright", "John Snow").
@@ -989,8 +1009,10 @@ python download_arxiv.py --out $HOME\ai_training_data\arxiv              # first
 python download_arxiv.py --out $HOME\ai_training_data\arxiv --update     # later: add papers new on arXiv
 ```
 
-1. **Harvest:** titles, abstracts, categories and licences of the subject areas in `--sets` (biology, statistics,
-   AI and mathematics), cached in `ai_training_data\_arxiv_meta`. A rerun continues where it stopped.
+1. **Harvest:** titles, abstracts, categories and licences of the subject areas in `--sets`, cached in
+   `ai_training_data\_arxiv_meta`. A rerun continues where it stopped. The 21 default areas: q-bio,
+   physics.bio-ph and physics.med-ph (biology); stat, econ.EM and physics.data-an (statistics); cs.AI, LG, CL, CV,
+   NE, MA, IR, CE, DS, DC, MS, CR, CY and eess.IV (AI and computing); math.
 2. **Select:** papers whose title and abstract match the keywords (at least 3 matches from 3 different terms; a
    title match counts 3 times), biology first, then statistics, then AI and mathematics, each ranked by keyword
    density.
@@ -1015,6 +1037,57 @@ python download_arxiv.py --out $HOME\ai_training_data\arxiv --update     # later
 - **Output:** `ai_training_data\arxiv\<arXiv id>__<title>.md`, and `_arxiv_meta\report.tsv` with each paper's
   status, method, categories and licence. Most arXiv papers carry arXiv's own licence (reading, not reuse); check
   `report.tsv` before sharing a model trained on them.
+
+## Preprints: download_rxiv.py
+
+```
+python download_rxiv.py --server biorxiv            # first run: harvests the metadata (hours), then downloads
+python download_rxiv.py --server medrxiv
+python download_rxiv.py --server biorxiv --update   # later: add new preprints
+```
+
+- **Why:** most statistical-genetics and genetic-epidemiology papers appear on bioRxiv or medRxiv first, often
+  years before (or instead of) a journal version.
+- **Selection:** the same keyword rule as arXiv (3 matches from 3 terms in the title and abstract, the title counting
+  3 times), best matches first. `--rebuild-list` selects again after a keyword edit.
+- **Text:** from the server's JATS XML (sections, equations, figure captions; references left out), else Europe
+  PMC's full text, else the PDF. A PDF the site refuses is recorded for that paper and the run goes on.
+- **Pacing:** `--wait 5-15` seconds before each paper by default. medRxiv limits requests more strictly than bioRxiv:
+  use `--wait 30-50` there, and don't run both servers at once.
+- **Output:** `ai_training_data\biorxiv` and `medrxiv`, with each paper's status and licence in `_biorxiv_meta` and
+  `_medrxiv_meta`. Licences vary from CC BY to "all rights reserved".
+
+## Software documentation: download_docs.py
+
+```
+python download_docs.py --list      # the sources and their status
+python download_docs.py             # download what is not done yet; a rerun continues
+```
+
+**Why:** papers name the tools but rarely show how to run them. The manuals, vignettes and worked examples teach
+commands, options, file formats and typical analysis steps (PLINK, REGENIE, GCTA, LDAK, Quickdraws, Hail, Seurat,
+AutoDock Vina, Blender's Python API, python-docx, officer and so on).
+
+- **Sources:** `doc_sources.tsv`, about 1,200 rows for about 920 tools in nine areas: statistical genetics,
+  sequencing and population genetics, molecular and cell biology, HPC pipelines and reporting (bash, Slurm,
+  Snakemake, Nextflow; descriptive statistics, SVG plots, Word and Excel files) and 3D, visual explanation (TikZ,
+  Mermaid, Graphviz, Manim, D3), causal inference (packages and free textbooks), drug discovery (APIs, public ICH,
+  FDA and EMA guidelines), pharmacogenomics, pharmacokinetics and biomechanics, and HLA analysis.
+- **Kinds:** a GitHub repository (README, docs, vignettes, examples, notebooks; code files only from example
+  folders), a documentation site (crawled under the URL's folder only, robots.txt obeyed), a Read the Docs project
+  (its HTML zip), a PDF manual, one page, a CRAN or a Bioconductor package.
+- **Clean text:** each page keeps only its main content; navigation, menus, licence and changelog pages, image links
+  and pages that are mostly links are left out; code blocks keep their language; exact duplicates are dropped.
+- **Polite and safe:** 1-2 s between requests to one host, a pause after "too many requests", a size limit per row,
+  an honest User-Agent. Nothing downloaded is run: archives are read in memory, pandoc runs with a memory cap, PDFs
+  are converted in a separate process.
+- **Resumable:** `software_doc\_manifest.tsv` records each row (status, files, characters, licence); finished rows
+  are skipped, failed ones tried again. A second copy started on the same folder refuses to run.
+- **Sites that refuse scripts:** GCTA, SMR and GSMR, LDAK and KING answer scripts with an error or a challenge page.
+  Save those pages from the browser and convert them with `convert_to_markdown.py`.
+- **In training:** the folder becomes the source `software_doc`, with its own validation loss. It is a small share of
+  all tokens; if its loss lags behind the others, give it more weight. Question-and-answer pairs made from the docs
+  (for example "run REGENIE step 1 on these files") are the natural next step for post-training.
 
 ## More data worth getting
 

@@ -33,6 +33,8 @@ python tiny_gpt.py --generate "Genetic drift is"
 | `convert_to_markdown.py` | PDF (with OCR for scans), Word, PowerPoint, Excel, HTML, notebooks, code and GWAS summary statistics to Markdown |
 | `download_pmc.py` | Open-access papers from PubMed Central, converted from their XML to Markdown with LaTeX equations |
 | `download_arxiv.py` | arXiv papers that match the keywords, converted from their LaTeX source (or PDF) to Markdown; `--update` adds new papers |
+| `download_rxiv.py` | bioRxiv and medRxiv preprints that match the keywords, from their JATS XML (else Europe PMC, else the PDF) |
+| `download_docs.py` | Software documentation listed in `doc_sources.tsv` (GitHub repositories, documentation sites, Read the Docs, PDF manuals, CRAN and Bioconductor) as Markdown |
 | `download_wikipedia.py` | English Wikipedia in the format `data_prep.py --wiki-dir` reads (needs about 45 GB free while it runs) |
 | `youtube_transcripts.py` | On-topic lecture transcripts from YouTube channels (captions, or Whisper speech recognition) |
 | `estimate_dataset.py` | Tokens per source and the model sizes they support, without building anything |
@@ -46,7 +48,9 @@ python tiny_gpt.py --generate "Genetic drift is"
 | `calibrate_probes.py` | Difficulty labels for the fact benchmark, from open reference models |
 | `gpu_check.py` | GPU clocks, power limits and a short training benchmark |
 | `test_tiny_gpt.py` | Test suite: `python -m unittest test_tiny_gpt.py` (CPU only, a few minutes) |
-| `keywords.txt` | 4,100 terms (biology, genetics and gene symbols, proteins, microbes, diseases, chemistry and drugs, nutrition, species, molecular structure and 3D rendering, mathematics, statistics, machine learning, databases, scientists' names) that decide which web, Wikipedia, arXiv and YouTube documents are on topic |
+| `keywords.txt` | 22,650 terms in 80 categories (biology, genetics and gene symbols, proteins, microbes, diseases, chemistry and drugs, nutrition, species, statistics, causal inference, machine learning, GWAS and sequencing software, cross-ancestry methods, HLA, drug discovery, pharmacogenomics, biomechanics, pipelines and reporting, visual explanation, 3D modelling, databases, biobanks, companies, scientists' names) that decide which web, Wikipedia, arXiv, bioRxiv, medRxiv and YouTube documents are on topic |
+| `doc_sources.tsv` | The documentation sources for `download_docs.py` (tool, kind, url, licence, notes) |
+| `tools/` | Keyword-list checks (`kw_check.py`, `kw_covered.py`, `term_evidence.py`) and a link check for `doc_sources.tsv` (`url_check.py`) |
 | `probes_biology.tsv` | The 336-question fact benchmark (16 categories, difficulty-labelled) |
 | `youtube_channels.txt` | Channels for `youtube_transcripts.py` |
 | `finetune_examples/` | Example SFT and DPO data |
@@ -76,6 +80,8 @@ validation loss and sampling weight; web-scale data sits in its own folders:
 | `notes`, `scripts` | Your own notes and texts | copy Markdown in |
 | `pmc` | Open-access PubMed Central papers | `download_pmc.py` |
 | `arxiv` | arXiv papers on the keyword topics | `download_arxiv.py` |
+| `biorxiv`, `medrxiv` | Preprints on the keyword topics | `download_rxiv.py` |
+| `software_doc` | Manuals, tutorials and examples of about 920 tools | `download_docs.py` |
 | `lectures` | YouTube lecture transcripts | `youtube_transcripts.py` |
 | `wikipedia` | English Wikipedia (Hugging Face `save_to_disk`) | `download_wikipedia.py` |
 | `web/fineweb-edu`, `web/pes2o` | FineWeb-Edu web pages, peS2o scientific papers | Hugging Face downloads |

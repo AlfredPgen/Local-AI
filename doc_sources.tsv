@@ -1,0 +1,1219 @@
+# Documentation sources for download_docs.py (tab-separated; lines starting with # are comments).
+# kind: github | site (crawl under the URL's path prefix) | rtd | pdf | page | cran | bioc
+# Sites that refuse scripts (answer 403 or a challenge page to non-browser clients): yanglab.westlake.edu.cn (GCTA, SMR, GSMR),
+# dougspeed.com (LDAK), kingrelatedness.com (KING); www.gnu.org timed out from this machine on 2026-10-27. Failed rows are retried on the next run.
+tool	kind	url	licence	notes
+# --- statistical genetics: GWAS, heritability, fine-mapping, colocalisation, MR, TWAS, PGS, post-GWAS, cross-ancestry ---
+plink1_9	site	https://www.cog-genomics.org/plink/1.9/	GPL-3.0	PLINK 1.9 manual: all command pages under /plink/1.9/ (QC, --assoc/--logistic, --clump, --score, file formats)
+plink2	site	https://www.cog-genomics.org/plink/2.0/	GPL-3.0	PLINK 2.0 manual: --glm, --score, pgen/pvar/psam formats, all pages under /plink/2.0/
+gcta	page	https://yanglab.westlake.edu.cn/software/gcta/	MIT (binaries); GPL-3.0 (source)	one-page GCTA manual: GREML, fastGWA/fastGWA-GLMM, COJO, mtCOJO, GSMR, fastBAT, GRM; needs browser-like User-Agent
+regenie	github	https://github.com/rgcgithub/regenie	MIT	mkdocs Markdown sources in docs/docs (options, file formats, worked examples) + example/
+bolt-lmm	page	https://alkesgroup.broadinstitute.org/BOLT-LMM/BOLT-LMM_manual.html	GPL-3.0	one-page BOLT-LMM / BOLT-REML manual
+quickdraws	site	https://palamaralab.github.io/software/quickdraws/	GPL-3.0	Quickdraws manual, UK Biobank RAP tutorial and Docker pages
+quickdraws	github	https://github.com/PalamaraLab/quickdraws	GPL-3.0	README + example/ run scripts
+ldak	site	https://dougspeed.com/	GPL-3.0	whole WordPress site is the LDAK manual (SumHer, MegaPRS, LDAK-KVIK, GBAT, REML, file formats); skip /feed/ and /comments/; 403 to non-browser User-Agents, HTTP 200 with a browser-like User-Agent (confirmed 2026-10-27)
+saige	github	https://github.com/saigegit/SAIGE-doc	GPL-3.0	Markdown sources (docs/) of saigegit.github.io/SAIGE-doc: SAIGE and SAIGE-GENE+ step 1/2 options, examples, FAQ
+saige-qtl	site	https://weizhou0.github.io/SAIGE-QTL-doc/	GPL-3.0	SAIGE-QTL docs (single-cell eQTL mapping with Poisson mixed models)
+meta-saige	github	https://github.com/leelabsg/META_SAIGE	unknown	README: rare-variant meta-analysis of SAIGE/SAIGE-GENE+ summary statistics
+remeta	site	https://rgcgithub.github.io/remeta/	MIT	REMETA: meta-analysis of REGENIE gene-based tests (mkdocs site)
+gemma	github	https://github.com/genetics-statistics/GEMMA	GPL-3.0	README, doc/, example/ for GEMMA LMM/BSLMM
+gemma	pdf	https://raw.githubusercontent.com/genetics-statistics/GEMMA/master/doc/manual.pdf	GPL-3.0	GEMMA user manual PDF
+gmmat	cran	https://cran.r-project.org/package=GMMAT	GPL-3.0-or-later	GMMAT / SMMAT generalised linear mixed-model association; vignette + reference manual
+genesis	bioc	https://bioconductor.org/packages/GENESIS	GPL-3.0	PC-AiR, PC-Relate, mixed-model association and aggregate tests
+hail	site	https://hail.is/docs/0.2/	MIT	Hail 0.2 docs: tutorials (GWAS), methods (QC, LD pruning, regression), API reference
+gwastools	bioc	https://bioconductor.org/packages/GWASTools	Artistic-2.0	GWAS data cleaning, QC and association in R
+tensorqtl	github	https://github.com/broadinstitute/tensorqtl	BSD-3-Clause	README, docs/outputs.md, example notebooks for GPU cis/trans-QTL mapping
+qtltools	site	https://qtltools.github.io/qtltools/pages/basic_leftmenu.html	unknown	QTLtools frameset site: start at the left menu; mode and man pages live under /qtltools/pages/
+plinkqc	cran	https://cran.r-project.org/package=plinkQC	MIT	per-individual/per-marker QC and ancestry-check vignettes (wraps PLINK)
+snprelate	bioc	https://bioconductor.org/packages/SNPRelate	GPL-3.0	GDS genotype format, LD pruning, PCA, IBD/kinship
+king	page	https://www.kingrelatedness.com/manual.shtml	unknown	one-page KING manual (kinship, --related, --unrelated, --ibdseg); needs browser-like User-Agent
+eigensoft	page	https://raw.githubusercontent.com/DReichLab/EIG/master/POPGEN/README	BSD-style (Broad Institute/Harvard)	smartpca documentation (plain-text README; repo root has no README)
+eigensoft	page	https://raw.githubusercontent.com/DReichLab/EIG/master/CONVERTF/README	BSD-style (Broad Institute/Harvard)	convertf: EIGENSTRAT/PACKEDPED/ANCESTRYMAP format conversion (plain text)
+eigensoft	page	https://raw.githubusercontent.com/DReichLab/EIG/master/EIGENSTRAT/README	BSD-style (Broad Institute/Harvard)	EIGENSTRAT stratification correction (plain text)
+flashpca	github	https://github.com/gabraham/flashpca	GPL-3.0	README: fast PCA of genotype data, flashpcaR
+admixture	pdf	https://dalexander.github.io/admixture/admixture-manual.pdf	unknown	ADMIXTURE manual PDF
+rfmix	github	https://github.com/slowkoni/rfmix	unknown	RFMix v2 local-ancestry inference: README + MANUAL.md
+beagle	pdf	https://faculty.washington.edu/browning/beagle/beagle_5.5_17Dec24.pdf	GPL-3.0	Beagle 5.5 manual PDF (file name changes with each release; current link on beagle.html)
+eagle	page	https://alkesgroup.broadinstitute.org/Eagle/	GPL-3.0	one-page Eagle2 phasing manual
+minimac4	github	https://github.com/statgen/Minimac4	GPL-3.0	README: imputation options, MSAV reference format
+imputation-server	rtd	https://imputationserver.readthedocs.io/en/latest/	unknown	Michigan Imputation Server docs: data preparation, QC, pipeline, API
+bcftools	page	https://samtools.github.io/bcftools/bcftools.html	MIT	one-page bcftools manual (all commands and options)
+bcftools-score	github	https://github.com/freeseek/score	MIT	README + examples.md: bcftools +munge, +liftover, +metal, +pgs, +blup, +score for GWAS-VCF summary statistics
+gwas2vcf	site	https://mrcieu.github.io/gwas2vcf/	MIT	GWAS-VCF format and gwas2vcf conversion tool docs
+gwas-ssf	page	https://www.ebi.ac.uk/gwas/docs/summary-statistics-format/	EMBL-EBI terms of use	GWAS Catalog summary-statistics standard (GWAS-SSF) column definitions
+gwas-sumstats-tools	github	https://github.com/gwas-catalog/sumstats-tools	Apache-2.0	gwas-ssf CLI: validate and format summary statistics (README, docs/)
+mungesumstats	bioc	https://bioconductor.org/packages/MungeSumstats	Artistic-2.0	standardise/QC GWAS summary statistics, liftover, allele flipping
+gwaslab	github	https://github.com/Cloufield/gwaslab	GPL-3.0	Markdown sources (docs/) of cloufield.github.io/gwaslab: sumstats QC, harmonisation, plots, CLI + examples/
+dentist	github	https://github.com/Yves-CHEN/DENTIST	LGPL-3.0	README + FAQ: QC of summary statistics against LD reference
+crossmap	rtd	https://crossmap.readthedocs.io/en/latest/	GPL-2.0-or-later	CrossMap liftover of VCF/BED/GFF/GWAS files between assemblies
+ieugwasr	site	https://mrcieu.github.io/ieugwasr/	MIT	R client for OpenGWAS (associations, tophits, LD clumping); API calls need a free token, docs public
+ldsc	github	https://github.com/bulik/ldsc	GPL-3.0	README: munge_sumstats.py and ldsc.py usage
+ldsc	site	https://github.com/bulik/ldsc/wiki	GPL-3.0	GitHub wiki: h2/rg tutorial, partitioned h2 (S-LDSC), cell-type-specific analyses, file formats, FAQ
+hdl	github	https://github.com/zhenin/HDL	GPL-3.0-or-later	README: high-definition likelihood genetic correlation
+hdl	site	https://github.com/zhenin/HDL/wiki	GPL-3.0-or-later	GitHub wiki: syntax, reference panels, HDL-L local rg, HDL-C, stratified enrichment, worked examples
+popcorn	github	https://github.com/brielin/Popcorn	unknown	README: trans-ethnic genetic correlation (compute/fit)
+s-ldxr	site	https://huwenboshi.github.io/s-ldxr/	GPL-3.0	S-LDXR: stratified trans-ethnic genetic correlation
+hess	site	https://huwenboshi.github.io/hess/	GPL-3.0	HESS / rho-HESS: local SNP-heritability and genetic covariance
+lava	github	https://github.com/josefin-werme/LAVA	unknown (DESCRIPTION says All rights reserved)	README, REFERENCE.md and vignettes: local genetic correlation analysis
+supergnova	github	https://github.com/qlu-lab/SUPERGNOVA	MIT	README: local genetic correlation
+mixer	github	https://github.com/precimed/mixer	GPL-3.0	README + usecases/: univariate/bivariate MiXeR polygenicity and overlap
+genomicsem	github	https://github.com/GenomicSEM/GenomicSEM	GPL-3.0	README + R man pages
+genomicsem	site	https://github.com/GenomicSEM/GenomicSEM/wiki	GPL-3.0	GitHub wiki: munge/ldsc, common-factor and multivariate GWAS, stratified Genomic SEM, T-SEM, tutorials
+mtag	github	https://github.com/JonJala/mtag	GPL-3.0	README: multi-trait analysis of GWAS
+mtag	site	https://github.com/JonJala/mtag/wiki	GPL-3.0	GitHub wiki: tutorials (basics, special options, maxFDR)
+mama	github	https://github.com/JonJala/mama	MIT	README + tutorial/: multi-ancestry meta-analysis
+lcv	github	https://github.com/lukejoconnor/LCV	unknown	README: latent causal variable model (genetic causality proportion)
+susier	site	https://stephenslab.github.io/susieR/	BSD-3-Clause	pkgdown site: SuSiE and SuSiE-RSS vignettes + function reference
+finemap	page	http://www.christianbenner.com/	non-commercial licence (University of Helsinki)	one-page FINEMAP manual (input files, --sss/--cond, outputs); same page documents LDstore 2
+polyfun	github	https://github.com/omerwe/polyfun	MIT	README + example_data/ for PolyFun, PolyLoc, PolyPred
+polyfun	site	https://github.com/omerwe/polyfun/wiki	MIT	GitHub wiki: priors, annotations, finemapper (SuSiE/FINEMAP), PolyLoc, S-LDSC, PolyPred, FAQ
+susiex	github	https://github.com/getian107/SuSiEx	MIT	README: cross-ancestry fine-mapping options and examples
+mesusie	site	https://borangao.github.io/meSuSie_Analysis/	GPL-2.0-or-later	workflowr tutorial: data preparation, running MESuSiE, worked analyses (linked from README)
+mesusie	github	https://github.com/borangao/MESuSiE	GPL-2.0-or-later	R package: README + man/ function reference
+multisusie	github	https://github.com/jordanero/MultiSuSiE	GPL-3.0	README + examples/: multi-ancestry SuSiE in Python
+sushie	github	https://github.com/mancusolab/sushie	MIT	Markdown docs (docs/manual.md, files.md, model.md): multi-ancestry molQTL fine-mapping
+mvsusier	site	https://stephenslab.github.io/mvsusieR/	BSD-3-Clause	pkgdown site: multivariate (multi-trait) SuSiE
+fine-mapping-inf	github	https://github.com/FinucaneLab/fine-mapping-inf	GPL-3.0	README: SuSiE-inf and FINEMAP-inf
+carma	github	https://github.com/ZikunY/CARMA	GPL-3.0	README: CARMA Bayesian fine-mapping with annotations and outlier detection
+carma	pdf	https://raw.githubusercontent.com/ZikunY/CARMA/master/CARMA_demo.pdf	GPL-3.0	CARMA worked demo (PDF)
+dap	pdf	https://raw.githubusercontent.com/xqwen/dap/master/DAPG_manual.pdf	unknown	DAP-G manual PDF (repo README is short)
+dap	site	https://github.com/xqwen/dap/wiki	unknown	GitHub wiki: case studies (multi-SNP fine-mapping, QTL discovery, enrichment)
+paintor	github	https://github.com/gkichaev/PAINTOR_V3.0	unknown	README + SampleData/
+paintor	site	https://github.com/gkichaev/PAINTOR_V3.0/wiki	unknown	GitHub wiki: input formats, LD computation, running, output, CANVIS
+coloc	site	https://chr1swallace.github.io/coloc/	GPL-2.0 or GPL-3.0	pkgdown site: coloc.abf, coloc.susie, sensitivity vignettes + reference
+hyprcoloc	github	https://github.com/cnfoley/hyprcoloc	GPL-2.0-or-later	README + vignettes/: multi-trait colocalisation
+fastenloc	github	https://github.com/xqwen/fastenloc	unknown	README + docs/: enrichment-informed colocalisation
+colocboost	site	https://statfungen.github.io/colocboost/	MIT	pkgdown site: multi-trait colocalisation vignettes + reference
+pwcoco	github	https://github.com/jwr-git/pwcoco	GPL-3.0	README: pair-wise conditional + colocalisation
+ecaviar	github	https://github.com/fhormoz/caviar	unknown	README: CAVIAR and eCAVIAR
+smr	page	https://yanglab.westlake.edu.cn/software/smr/	MIT (binaries); GPL-2.0 (source)	one-page SMR manual: SMR & HEIDI, SMR-multi, BESD format, xQTL data; needs browser-like User-Agent
+opera	github	https://github.com/WuYang-Lab/OPERA	unknown	README: multi-omics extension of SMR/HEIDI
+twosamplemr	site	https://mrcieu.github.io/TwoSampleMR/	MIT	pkgdown site: harmonisation, MR methods, sensitivity analyses, reference
+mendelianrandomization	cran	https://cran.r-project.org/package=MendelianRandomization	GPL-2.0 or GPL-3.0	reference manual + Vignette_MR
+mr-presso	github	https://github.com/rondolab/MR-PRESSO	GPL-3.0	README + man/: outlier test and correction
+gsmr	page	https://yanglab.westlake.edu.cn/software/gsmr/	unknown	gsmr R package tutorial page (GCTA --gsmr is in the gcta row); needs browser-like User-Agent
+gsmr	github	https://github.com/JianYang-Lab/gsmr2	GPL-2.0-or-later	GSMR2 R package: README + vignettes (global heterogeneity test)
+cause	site	https://jean997.github.io/cause/	GPL-2.0-or-later	CAUSE tutorial site (worked LDL-CAD example)
+mr-raps	github	https://github.com/qingyuanzhao/mr.raps	GPL-3.0	README + man/ (package archived on CRAN 2025-03)
+mvmr	site	https://wspiller.github.io/MVMR/	GPL-3.0	pkgdown site: multivariable MR
+radialmr	site	https://wspiller.github.io/RadialMR/	GPL-3.0	pkgdown site: radial IVW/MR-Egger
+mrlap	github	https://github.com/n-mounier/MRlap	GPL-2.0	README: MR correcting for sample overlap, weak instruments and winner's curse
+fusion	site	http://gusevlab.org/projects/fusion/	GPL-3.0	FUSION TWAS manual (prefix /projects/fusion/)
+metaxcan	github	https://github.com/hakyimlab/MetaXcan	MIT	README: S-PrediXcan, S-MultiXcan
+metaxcan	site	https://github.com/hakyimlab/MetaXcan/wiki	MIT	GitHub wiki: command-line reference, tutorials, GTEx v8 best practices, FAQ
+focus	github	https://github.com/bogdanlab/focus	GPL-3.0	README: TWAS fine-mapping
+focus	site	https://github.com/bogdanlab/focus/wiki	GPL-3.0	GitHub wiki: cleaning sumstats, weight database, fine-mapping TWAS
+tigar	github	https://github.com/yanglab-emory/TIGAR	unknown	README: TIGAR TWAS model training and testing
+prs-cs	github	https://github.com/getian107/PRScs	MIT	README: PRS-CS options and LD reference
+prs-csx	github	https://github.com/getian107/PRScsx	MIT	README: cross-population PRS-CSx
+bigsnpr	site	https://privefl.github.io/bigsnpr/	GPL-3.0	pkgdown site: LDpred2, lassosum2, snp_ldsc tutorials + function reference
+gctb	page	https://gctbhub.cloud.edu.au/software/gctb/	unknown	one-page GCTB manual: SBayesR/S/C/RC, BayesS; cnsgenomics.com/software/gctb redirects here
+sbayesrc	github	https://github.com/zhilizheng/SBayesRC	GPL-3.0	README tutorial for SBayesRC R package
+prsice	github	https://github.com/choishingwan/PRSice	GPL-3.0	Markdown sources (docs/) of choishingwan.github.io/PRSice: PRSice-2 and PRSet command details, step-by-step
+pgsc_calc	rtd	https://pgsc-calc.readthedocs.io/en/latest/	Apache-2.0	PGS Catalog Calculator (Nextflow) docs: how-to, reference, ancestry
+pgscatalog-utils	rtd	https://pygscatalog.readthedocs.io/en/latest/	Apache-2.0	pgscatalog-utils CLIs: download, format, match, aggregate
+pgs-catalog	site	https://www.pgscatalog.org/docs/	EMBL-EBI terms of use	PGS Catalog docs (curation, ancestry, FAQ)
+pgs-catalog	page	https://www.pgscatalog.org/downloads/	EMBL-EBI terms of use	scoring file format column definitions
+lassosum	github	https://github.com/tshmak/lassosum	MIT	README + lassosum_standalone.md
+prosper	github	https://github.com/Jingning-Zhang/PROSPER	unknown	README + lassosum2.md: multi-ancestry ensemble PRS
+ct-sleb	github	https://github.com/andrewhaoyu/CTSLEB	MIT	README + Tutorial_CTSLEB.Rmd
+viprs	github	https://github.com/shz9/viprs	MIT	Markdown docs (docs/: commandline, tutorials, API) + notebooks/
+sdpr	github	https://github.com/eldronzhou/SDPR	GPL-3.0	README: SDPR options
+jointprs	github	https://github.com/LeqiXu/JointPRS	MIT	README: multi-population PRS
+bridgeprs	github	https://github.com/clivehoggart/BridgePRS	MIT	README: cross-ancestry Bayesian PRS
+x-wing	github	https://github.com/qlu-lab/X-Wing	GPL-3.0	README
+x-wing	site	https://github.com/qlu-lab/X-Wing/wiki	GPL-3.0	GitHub wiki: preparation, cross-population prediction, real example
+genopred	site	https://opain.github.io/GenoPred/	GPL-3.0	GenoPred pipeline docs: readme, technical details, method comparisons
+metal	page	https://genome.sph.umich.edu/wiki/METAL_Documentation	unknown	official METAL command documentation (no copy in the GitHub repo); server slow and intermittent: connect time-outs and ~40 s responses, but page confirmed (HTTP 200, 'METAL Documentation - Genome Analysis Wiki') on 2026-10-27; use long timeout + retries
+metal	github	https://github.com/statgen/METAL	unknown	README (new options OVERLAP, TRACKPOSITIONS, print precision) + examples/
+mr-mega	page	https://genomics.ut.ee/en/tools	unknown	Tartu tools page: MR-MEGA usage section (same page documents GWAMA, SCOPA/METASCOPA)
+magma	pdf	https://vu.data.surfsara.nl/index.php/s/MUiv3y1SFRePnyG/download	GPL-3.0	MAGMA v1.10 manual PDF (link from cncr.nl/research/magma)
+magma	pdf	https://vu.data.surfsara.nl/index.php/s/8Dti5BAUMx9mhw2/download	GPL-3.0	overview of conditional, joint and interaction gene-set models
+fuma	rtd	https://fuma-docs.readthedocs.io/en/latest/	unknown	FUMA v2 docs: SNP2GENE, GENE2FUNC, QTL, FLAMES, practicals (old fuma.ctglab.nl/tutorial returns 502)
+pops	github	https://github.com/FinucaneLab/pops	GPL-3.0	README + example/: polygenic priority score
+scdrs	site	https://martinjzhang.github.io/scDRS/	MIT	scDRS docs: CLI, file formats, notebooks, API
+cellect	github	https://github.com/perslab/CELLECT	GPL-3.0	README + example/
+cellect	site	https://github.com/perslab/CELLECT/wiki	GPL-3.0	GitHub wiki: CELLECT-LDSC/MAGMA/GENES tutorials and docs, inputs/outputs
+magma-celltyping	site	https://neurogenomics.github.io/MAGMA_Celltyping/	GPL-3.0	pkgdown site: MAGMA cell-type enrichment with single-cell data
+h-magma	github	https://github.com/thewonlab/H-MAGMA	unknown	README: Hi-C coupled MAGMA
+flames	github	https://github.com/Marijn-Schipper/FLAMES	MIT	README + tutorial/: effector-gene prioritisation
+gentropy	site	https://opentargets.org/gentropy/	Apache-2.0	Open Targets gentropy docs (mkdocs; moved from opentargets.github.io/gentropy/): sumstats harmonisation, fine-mapping, colocalisation, locus-to-gene
+tractor	site	https://atkinson-lab.github.io/Tractor-tutorial/	MIT	Tractor and Tractor-Mix tutorial: local ancestry, tract extraction, GWAS (local and Hail), GLMM
+tractor	github	https://github.com/Atkinson-Lab/Tractor	MIT	README + scripts/ + ipynbs/
+staar	github	https://github.com/li-lab-genetics/STAAR	GPL-3.0	README: STAAR rare-variant tests
+staar	pdf	https://raw.githubusercontent.com/li-lab-genetics/STAAR/master/docs/STAAR_manual.pdf	GPL-3.0	STAAR R reference manual PDF
+staarpipeline	github	https://github.com/li-lab-genetics/STAARpipeline	GPL-3.0	README: WGS/WES rare-variant analysis pipeline
+staarpipeline	pdf	https://raw.githubusercontent.com/li-lab-genetics/STAARpipeline/main/docs/STAARpipeline_manual.pdf	GPL-3.0	STAARpipeline reference manual PDF
+skat	cran	https://cran.r-project.org/package=SKAT	GPL-2.0 or GPL-3.0	SKAT/SKAT-O reference manual + vignette
+rvtests	github	https://github.com/zhanxw/rvtests	unknown	README (main manual): single-variant and rare-variant tests, meta-analysis summary output
+rvtests	site	https://github.com/zhanxw/rvtests/wiki	unknown	GitHub wiki: command-line options
+# --- sequencing, variant analysis, population genetics and evolution ---
+samtools	site	https://www.htslib.org/doc/1.24/	MIT	Release 1.24 man pages: samtools plus every samtools-<cmd>.html page, bgzip, tabix, htsfile, annot-tsv, ref-cache, bcftools. The versioned prefix keeps the crawl off the 28 older /doc/<ver>/ copies
+samtools	page	https://www.htslib.org/workflow/wgs-call.html	MIT	htslib.org worked workflow: WGS reads to variant calls
+samtools	page	https://www.htslib.org/workflow/fastq.html	MIT	htslib.org worked workflow: FASTQ to sorted/indexed BAM/CRAM
+samtools	page	https://www.htslib.org/workflow/filter.html	MIT	htslib.org worked workflow: filtering alignments and variants
+samtools	page	https://www.htslib.org/workflow/cram.html	MIT	htslib.org worked workflow: working with CRAM and references
+samtools	page	https://www.htslib.org/algorithms/duplicate.html	MIT	How samtools markdup identifies duplicates (algorithm notes)
+htslib	github	https://github.com/samtools/htslib	MIT	C library README plus bgzip.1, tabix.1, htsfile.1, annot-tsv.1 man pages
+htslib	page	https://www.htslib.org/doc/sam.html	MIT	sam(5): SAM/BAM/CRAM format summary
+htslib	page	https://www.htslib.org/doc/vcf.html	MIT	vcf(5): VCF/BCF format summary
+htslib	page	https://www.htslib.org/doc/faidx.html	MIT	faidx(5): FASTA/FASTQ .fai index format
+htslib	page	https://www.htslib.org/doc/reference_seqs.html	MIT	How htslib locates reference sequences for CRAM (REF_PATH, REF_CACHE)
+hts-specs	pdf	https://samtools.github.io/hts-specs/SAMv1.pdf	unknown	SAM/BAM format specification (GA4GH hts-specs)
+hts-specs	pdf	https://samtools.github.io/hts-specs/SAMtags.pdf	unknown	Standard and optional SAM tags
+hts-specs	pdf	https://samtools.github.io/hts-specs/VCFv4.5.pdf	unknown	VCF 4.5 and BCF2 specification (current version)
+hts-specs	pdf	https://samtools.github.io/hts-specs/CRAMv3.pdf	unknown	CRAM 3 specification
+hts-specs	pdf	https://samtools.github.io/hts-specs/tabix.pdf	unknown	Tabix (.tbi) index format
+hts-specs	pdf	https://samtools.github.io/hts-specs/CSIv1.pdf	unknown	CSI index format
+hts-specs	pdf	https://samtools.github.io/hts-specs/BEDv1.pdf	unknown	BED format specification
+gfa-spec	github	https://github.com/GFA-spec/GFA-spec	unknown	GFA 1 and GFA 2 graph/pangenome format specifications in Markdown
+bcftools	site	https://samtools.github.io/bcftools/howtos/	MIT or GPL-3.0	bcftools HOWTOs with worked examples: variant calling, filtering, query, consensus, CNV, ROH, csq, plugins
+bwa	github	https://github.com/lh3/bwa	GPL-3.0	README, README-alt.md (ALT-aware mapping) and the bwa.1 man page
+bwa-mem2	github	https://github.com/bwa-mem2/bwa-mem2	MIT	README: indexing and mem usage (same command line as bwa mem)
+minimap2	page	https://lh3.github.io/minimap2/minimap2.html	MIT	HTML man page listing every option and preset
+minimap2	github	https://github.com/lh3/minimap2	MIT	README, cookbook.md (worked examples), FAQ.md, Python binding (mappy)
+bowtie2	github	https://github.com/BenLangmead/bowtie2	GPL-3.0	The full manual is MANUAL.markdown at the repo root (also doc/manual.html), plus example/
+fastp	github	https://github.com/OpenGene/fastp	MIT	README is the full manual: trimming, filtering, UMI, all options
+fastqc	site	https://www.bioinformatics.babraham.ac.uk/projects/fastqc/Help/	GPL-3.0	FastQC help: basic operations and an explanation of every analysis module
+cutadapt	rtd	https://cutadapt.readthedocs.io/en/stable/	MIT	Adapter and quality trimming: user guide, recipes, reference
+seqkit	site	https://bioinf.shenwei.me/seqkit/	MIT	SeqKit FASTA/FASTQ toolkit: usage of every subcommand, tutorials
+multiqc	github	https://github.com/MultiQC/MultiQC	GPL-3.0	docs/ Markdown sources (docs.seqera.io/multiqc is a Docusaurus app): usage, config, module docs
+mosdepth	github	https://github.com/brentp/mosdepth	MIT	README: depth calculation options and output files
+picard	page	https://broadinstitute.github.io/picard/command-line-overview.html	MIT	All Picard tools and their arguments on one page
+picard	page	https://broadinstitute.github.io/picard/picard-metric-definitions.html	MIT	Definition of every QC metric column Picard writes
+fgbio	site	https://fulcrumgenomics.github.io/fgbio/tools/latest/	MIT	fgbio tool reference: UMI grouping, consensus calling, BAM/VCF utilities
+somalier	github	https://github.com/brentp/somalier	MIT	Sample swap, relatedness and sex checks from extracted sites: README and docs/
+peddy	rtd	https://peddy.readthedocs.io/en/latest/	MIT	Pedigree, sex and ancestry QC from VCF
+verifybamid2	github	https://github.com/Griffan/VerifyBamID	unknown	VerifyBamID2 DNA contamination estimation: README usage and resource files
+gatk	github	https://github.com/broadinstitute/gatk	Apache-2.0	README (running gatk, Spark, Docker) and docs/ (CNV, Mutect, Funcotator notes, HaplotypeCaller maths PDFs). Official tool docs at gatk.broadinstitute.org block scripts (403)
+gatk	github	https://github.com/broadinstitute/gatk-docs	BSD-3-Clause	Archive of GATK forum docs in Markdown: tutorials, methods and algorithms, FAQs, tool docs, blog 2012-2019 (mostly GATK3 era; concepts still apply)
+gatk	github	https://github.com/broadinstitute/warp	BSD-3-Clause	WARP: Broad production WDL pipelines (germline/somatic best practices); docs are Markdown in website/docs/
+gatk-sv	github	https://github.com/broadinstitute/gatk-sv	BSD-3-Clause	GATK-SV structural variant pipeline; docs are Markdown under website/
+deepvariant	github	https://github.com/google/deepvariant	BSD-3-Clause	docs/ Markdown: quick starts, case studies (WGS, WES, PacBio, ONT, RNA-seq, pangenome-aware), DeepTrio, gVCF, FAQ, metrics
+deepsomatic	github	https://github.com/google/deepsomatic	BSD-3-Clause	DeepSomatic tumour-normal and tumour-only calling: docs/ case studies
+glnexus	github	https://github.com/dnanexus-rnd/GLnexus	Apache-2.0	README: joint genotyping of gVCFs, presets
+glnexus	site	https://github.com/dnanexus-rnd/GLnexus/wiki	Apache-2.0	GitHub wiki (not in the repo): Getting Started, configuration, DeepVariant/GATK presets
+freebayes	github	https://github.com/freebayes/freebayes	MIT	README and doc/: usage, options, examples
+clair3	github	https://github.com/HKU-BAL/Clair3	BSD-3-Clause	Long-read small-variant caller: README and docs/ (quick demos, options, training)
+strelka2	github	https://github.com/Illumina/strelka	PolyForm-Strict-1.0.0	docs/userGuide: germline and somatic small variants (repo archived; still widely used)
+manta	github	https://github.com/Illumina/manta	PolyForm-Strict-1.0.0	docs/userGuide: SV and indel calling (repo archived)
+delly	github	https://github.com/dellytools/delly	BSD-3-Clause	README: germline, somatic, long-read SV and CNV calling workflows
+sniffles2	github	https://github.com/fritzsedlazeck/Sniffles	MIT	Sniffles2 long-read SV caller; README is the manual (single-sample, population merge, mosaic)
+cnvkit	rtd	https://cnvkit.readthedocs.io/en/stable/	Apache-2.0	CNV calling from targeted/WES/WGS: pipeline, commands, file formats
+expansionhunter	github	https://github.com/Illumina/ExpansionHunter	PolyForm-Strict-1.0.0	STR genotyping: docs/ (usage, variant catalogue format, outputs)
+truvari	site	https://github.com/ACEnglish/truvari/wiki	MIT	Truvari wiki: bench, refine, collapse, anno, consistency (SV benchmarking and merging)
+hap-py	github	https://github.com/Illumina/hap.py	BSD-2-Clause	doc/happy.md, sompy.md, normalisation.md: small-variant benchmarking against truth sets
+rtg-tools	site	https://realtimegenomics.github.io/rtg-tools/	BSD-2-Clause	RTG Tools Operations Manual v3.13 (vcfeval, vcfstats, mendelian, format conversion)
+vep	site	https://grch37.ensembl.org/info/docs/tools/vep/	Apache-2.0	Ensembl VEP docs (release 116, served on the GRCh37 site): options, cache, custom annotation, plugins, filter_vep, tutorial, output formats. www.ensembl.org now 308-redirects to jun2026.archive.ensembl.org, whose /info/ pages return 403 and whose robots.txt is unreadable (sep2025 archive: robots Disallow /)
+vep	github	https://github.com/Ensembl/ensembl-vep	Apache-2.0	README, examples/, Docker and Nextflow usage
+snpeff	site	https://pcingola.github.io/SnpEff/	MIT	SnpEff and SnpSift manual (static MkDocs site)
+vcfanno	github	https://github.com/brentp/vcfanno	MIT	README and docs/: annotation config, Lua post-annotation
+slivar	github	https://github.com/brentp/slivar	MIT	README: expression-based VCF filtering for trios/families
+slivar	site	https://github.com/brentp/slivar/wiki	MIT	slivar wiki: rare-disease recipes, attributes, compound hets
+vcftools	page	https://vcftools.github.io/man_latest.html	LGPL-3.0	Full VCFtools manual on one page (all options)
+vcftools	page	https://vcftools.github.io/examples.html	LGPL-3.0	VCFtools worked examples
+vcflib	github	https://github.com/vcflib/vcflib	MIT	doc/ holds a Markdown page per vcflib tool
+bedtools	rtd	https://bedtools.readthedocs.io/en/latest/	MIT	Full bedtools manual: every subcommand with examples
+bedops	rtd	https://bedops.readthedocs.io/en/latest/	GPL-2.0	BEDOPS manual: bedops, bedmap, sort-bed, format converters
+pysam	rtd	https://pysam.readthedocs.io/en/latest/	MIT	Python API for SAM/BAM/CRAM, VCF/BCF and tabix
+cyvcf2	site	https://brentp.github.io/cyvcf2/	MIT	Fast VCF/BCF parsing in Python
+scikit-allel	rtd	https://scikit-allel.readthedocs.io/en/stable/	MIT	Python variant analysis and popgen: diversity, Fst, LD, PCA, selection scans
+sgkit	site	https://sgkit-dev.github.io/sgkit/latest/	Apache-2.0	Scalable statistical and population genetics in Python (VCF Zarr, popgen stats, GWAS)
+shapeit5	site	https://gensoft.pasteur.fr/docs/shapeit5/5.1.1/	MIT	Institut Pasteur mirror of the official SHAPEIT5 5.1.1 docs (phase_common, phase_rare, ligate, switch); github.com/odelaneau/shapeit5 is access-blocked by GitHub and odelaneau.github.io/shapeit5 returns 404
+glimpse2	github	https://github.com/odelaneau/GLIMPSE	MIT	GLIMPSE2 docs/ (just-the-docs Markdown) for chunk, split_reference, phase, ligate, concordance, plus tutorial/
+quilt	github	https://github.com/rwdavies/QUILT	GPL-3.0	QUILT2 low-coverage imputation: README_QUILT2.md, README_QUILT-HLA.md, examples
+stitch	github	https://github.com/rwdavies/STITCH	GPL-3.0	STITCH reference-free low-coverage imputation: README, Options.md, examples
+whatshap	rtd	https://whatshap.readthedocs.io/en/latest/	MIT	Read-based phasing: guide, subcommands, stats and compare
+hiphase	github	https://github.com/PacificBiosciences/HiPhase	PacBio Software License	HiFi joint phasing of small variants, SVs and STRs: docs/
+hap-ibd	github	https://github.com/browning-lab/hap-ibd	Apache-2.0	README manual: IBD and HBD segments from phased data
+refined-ibd	pdf	https://faculty.washington.edu/browning/refined-ibd/refined-ibd.04Dec18.pdf	GPL-3.0	Refined IBD manual
+ibdne	page	https://faculty.washington.edu/browning/ibdne.html	Apache-2.0	IBDNe manual: recent Ne from IBD segments (parameters, outputs)
+ibd-ends	github	https://github.com/browning-lab/ibd-ends	Apache-2.0	IBD segment endpoint estimation; README manual
+ibis	github	https://github.com/williamslab/ibis	GPL-3.0	IBIS IBD detection in unphased genotypes; README manual
+ngsrelate	github	https://github.com/ANGSD/NgsRelate	GPL-2.0	Relatedness and inbreeding from genotype likelihoods
+vg	github	https://github.com/vgteam/vg	MIT	README (construct, autoindex, giraffe, call) and doc/
+vg	site	https://github.com/vgteam/vg/wiki	MIT	vg wiki (not in the repo): tutorials, Giraffe, index types, graph formats
+minigraph	github	https://github.com/lh3/minigraph	MIT	README and minigraph.1: pangenome graph construction and mapping
+pggb	rtd	https://pggb.readthedocs.io/en/latest/	MIT	PanGenome Graph Builder docs
+odgi	rtd	https://odgi.readthedocs.io/en/latest/	MIT	ODGI pangenome graph toolkit: per-command docs and tutorials
+cactus	github	https://github.com/ComparativeGenomicsToolkit/cactus	MIT	Progressive Cactus and Minigraph-Cactus: doc/ (pangenome.md, progressive.md)
+hifiasm	rtd	https://hifiasm.readthedocs.io/en/latest/	MIT	HiFi/ONT assembly, trio and Hi-C phasing
+flye	github	https://github.com/mikolmogorov/Flye	BSD-3-Clause	docs/USAGE.md and FAQ: long-read assembly
+verkko	github	https://github.com/marbl/verkko	Public domain (US Government work)	README: telomere-to-telomere hybrid assembly
+dorado	site	https://software-docs.nanoporetech.com/dorado/latest/	Oxford Nanopore Public License 1.0	Dorado docs (static MkDocs): basecalling, duplex, modified bases, barcoding, alignment, polishing, models
+nf-core-sarek	github	https://github.com/nf-core/sarek	MIT	docs/usage.md and docs/output.md: germline and somatic variant-calling pipeline
+nf-core-eager	github	https://github.com/nf-core/eager	MIT	docs/: ancient DNA pipeline (preprocessing, mapping, damage, genotyping)
+mapdamage	page	https://ginolhac.github.io/mapDamage/	MIT	mapDamage2 manual: aDNA damage patterns and rescaling
+msprime	github	https://github.com/tskit-dev/msprime	GPL-3.0	docs/ MyST Markdown: quickstart, ancestry, demography, mutations, pedigrees, CLI, API (tskit.dev start page is a meta refresh, so the repo is listed)
+tskit	github	https://github.com/tskit-dev/tskit	MIT	docs/: data model, file formats, statistics, Python and C API, CLI
+tskit	github	https://github.com/tskit-dev/tutorials	CC-BY-4.0	tskit.dev tutorials as Markdown chapters at the repo root: popgen stats, ARGs, forward sims, simplification, metadata
+tsinfer	github	https://github.com/tskit-dev/tsinfer	GPL-3.0	docs/: inference, usage, large-scale inference, CLI
+tsdate	github	https://github.com/tskit-dev/tsdate	MIT	docs/: usage, priors, real data, historical samples, methods
+pyslim	github	https://github.com/tskit-dev/pyslim	MIT	docs/: tutorial, vignettes and .slim example scripts for SLiM tree sequences
+slim	pdf	http://benhaller.com/slim/SLiM_Manual.pdf	GPL-3.0	SLiM 5.2 manual (about 40 MB; hundreds of recipes); same file as the GitHub v5.2 release asset
+slim	pdf	http://benhaller.com/slim/Eidos_Manual.pdf	GPL-3.0	Eidos scripting language manual used by SLiM
+slim	github	https://github.com/MesserLab/SLiM-Extras	unknown	Community SLiM recipes, functions and models with explanations
+stdpopsim	site	https://popsim-consortium.github.io/stdpopsim-docs/stable/	GPL-3.0	stdpopsim docs: CLI and Python tutorials, species and demographic-model catalogue
+demes	site	https://popsim-consortium.github.io/demes-docs/latest/	ISC	Demes demographic-model format: tutorial and specification
+fwdpy11	github	https://github.com/molpopgen/fwdpy11	GPL-3.0	doc/ MyST: forward-simulation vignettes and technical notes (site start page is a meta refresh)
+discoal	github	https://github.com/kr-colab/discoal	GPL-3.0	README: coalescent simulation with selective sweeps
+discoal	pdf	https://raw.githubusercontent.com/kr-colab/discoal/master/discoaldoc.pdf	GPL-3.0	discoal manual
+ms	pdf	http://home.uchicago.edu/~rhudson1/source/mksamples/msdir/msdoc.pdf	unknown	Hudson ms coalescent simulator manual
+relate	site	https://myersgroup.github.io/relate/	Relate academic usage licence	Relate docs: getting started, input data, modules (popsize, selection, tree sampling), parallelisation
+arg-needle	site	https://palamaralab.github.io/software/argneedle/	GPL-3.0	ARG-Needle overview and manual (/manual/): ARG inference, ARG-MATCH, ARG-based association
+arg-needle	rtd	https://arg-needle-lib.readthedocs.io/en/latest/	GPL-3.0	arg-needle-lib Python API reference
+singer	github	https://github.com/popgenmethods/SINGER	MIT	SINGER Bayesian ARG sampling: README manual
+threads	site	https://palamaralab.github.io/software/threads/	GPL-3.0	Threads ARG inference and imputation: usage page
+threads	github	https://github.com/PalamaraLab/threads	GPL-3.0	README and example/
+argweaver	github	https://github.com/mdrasmus/argweaver	MIT	README and doc/: Bayesian ARG sampling
+dadi	rtd	https://dadi.readthedocs.io/en/latest/	0BSD	dadi user guide and API: SFS-based demographic inference, DFE
+moments	site	https://momentsld.github.io/moments/	MIT	moments docs: SFS and LD-based inference, Demes integration
+fastsimcoal2	pdf	https://cmpg.unibe.ch/software/fastsimcoal2/man/fastsimcoal28.pdf	unknown	fastsimcoal 2.8 manual: simulation and SFS-based inference, .tpl/.est files
+msmc2	github	https://github.com/stschiff/msmc2	GPL-3.0	README: MSMC2 usage and options
+msmc2	github	https://github.com/stschiff/msmc-tools	unknown	Input preparation scripts (generate_multihetsep, bamCaller) and msmc-tutorial/ worked example
+smcpp	github	https://github.com/popgenmethods/smcpp	GPL-3.0	README.rst: vcf2smc, estimate, split, plot
+psmc	github	https://github.com/lh3/psmc	MIT	README: input generation, run, bootstrap, plotting
+momi2	rtd	https://momi2.readthedocs.io/en/latest/	unknown	momi2 tutorial and API
+stairway-plot2	pdf	https://raw.githubusercontent.com/xiaoming-liu/stairway-plot-v2/master/READMEv2.1.pdf	Artistic-2.0	Stairway Plot 2 manual
+stairway-plot2	github	https://github.com/xiaoming-liu/stairway-plot-v2	Artistic-2.0	README and example blueprint files
+gone	pdf	https://raw.githubusercontent.com/esrud/GONE/master/USER%C2%B4S%20GUIDE.pdf	unknown	GONE user guide (recent Ne from LD)
+gone	github	https://github.com/esrud/GONE	unknown	README, TUTORIAL.pdf and EXAMPLE/
+hapne	github	https://github.com/PalamaraLab/HapNe	GPL-3.0	HapNe recent Ne from IBD or LD: README
+phlash	github	https://github.com/jthlab/phlash	MIT	PHLASH Bayesian population-size inference: README and notebooks/
+easysfs	github	https://github.com/isaacovercast/easySFS	unknown	Projected SFS from VCF for dadi, fastsimcoal2, momi2
+pyrho	github	https://github.com/popgenmethods/pyrho	MIT	Fine-scale recombination maps from population data
+admixtools2	site	https://uqrmaie1.github.io/admixtools/	GPL-3	ADMIXTOOLS 2 R package site (pkgdown): tutorial articles (f-statistics, qpAdm, qpGraph) and function reference
+admixtools	github	https://github.com/DReichLab/AdmixTools	unknown	Classic ADMIXTOOLS (qp3Pop, qpDstat, qpF4ratio, qpAdm, qpGraph): README.* text files and parameter-file examples at the repo root
+eigensoft	github	https://github.com/DReichLab/EIG	BSD-style	EIGENSOFT (smartpca, convertf, EIGENSTRAT): plain-text READMEs in POPGEN/, CONVERTF/, EIGENSTRAT/
+treemix	pdf	https://bitbucket.org/nygcresearch/treemix/downloads/treemix_manual_10_1_2012.pdf	unknown	TreeMix manual (Bitbucket redirects to a signed S3 URL)
+structure	pdf	https://web.stanford.edu/group/pritchardlab/structure_software/release_versions/v2.3.4/structure_doc.pdf	unknown	STRUCTURE 2.3.4 documentation
+finestructure	site	https://people.maths.bris.ac.uk/~madjl/finestructure/	unknown	fineSTRUCTURE and ChromoPainter v2 manual, data preparation, FAQ, GLOBETROTTER notes
+flare	github	https://github.com/browning-lab/flare	Apache-2.0	FLARE local ancestry inference: README manual
+angsd	site	https://github.com/ANGSD/angsd/wiki	unknown	ANGSD wiki (popgen.dk/angsd now redirects here): genotype likelihoods, SFS/realSFS, thetas, Fst, ABBA-BABA, NGSadmix
+angsd	github	https://github.com/ANGSD/angsd	unknown	README, doc/ and R/ helper scripts
+pcangsd	github	https://github.com/Rosemeis/pcangsd	GPL-3.0	PCA, admixture, selection scans and inbreeding from genotype likelihoods
+pixy	rtd	https://pixy.readthedocs.io/en/latest/	MIT	Unbiased pi, dxy and Fst from all-sites VCFs
+poplddecay	github	https://github.com/BGI-shenzhen/PopLDdecay	MIT	LD decay from VCF: README
+adegenet	cran	https://cran.r-project.org/package=adegenet	GPL-2 or GPL-3	Multivariate population genetics (DAPC, PCA); vignettes and reference manual
+hierfstat	cran	https://cran.r-project.org/package=hierfstat	GPL-2 or GPL-3	F-statistics and hierarchical Fst
+poppr	cran	https://cran.r-project.org/package=poppr	GPL-2 or GPL-3	Clonal and population genetic analysis
+vcfr	cran	https://cran.r-project.org/package=vcfR	GPL-3	VCF manipulation and visualisation in R
+pegas	cran	https://cran.r-project.org/package=pegas	GPL-2 or GPL-3	Population genetics in R: diversity, neutrality tests, haplotype networks
+lea	bioc	https://bioconductor.org/packages/LEA	GPL-3	sNMF ancestry and LFMM2 genotype-environment association
+selscan	pdf	https://raw.githubusercontent.com/szpiech/selscan/main/Selscan_Manual_v3_0_1.pdf	GPL-3.0	selscan v3.0.1 manual: EHH, iHS, nSL, XP-EHH, XP-nSL, iHH12
+selscan	github	https://github.com/szpiech/selscan	GPL-3.0	README and example/
+rehh	cran	https://cran.r-project.org/package=rehh	GPL-2 or GPL-3	EHH-based scans in R (iHS, Rsb, XP-EHH)
+pcadapt	cran	https://cran.r-project.org/package=pcadapt	GPL-2 or GPL-3	PCA-based genome scans for selection
+raisd	github	https://github.com/alachins/raisd	unknown	RAiSD mu-statistic sweep detection: README and help/RAiSD_Help.txt
+sweed	pdf	https://raw.githubusercontent.com/alachins/sweed/master/sweed3.0_manual.pdf	GPL-3.0	SweeD 3.0 manual: CLR sweep scans
+xpclr	github	https://github.com/hardingnj/xpclr	MIT	XP-CLR selection scan (Python): README
+clues2	github	https://github.com/avaughn271/CLUES2	unknown	Selection inference from ARGs (Relate, SINGER) and allele-frequency time series
+baypass	pdf	https://forge.inrae.fr/mathieu.gautier/baypass_public/-/raw/master/manual/BayPass_manual.pdf	CeCILL-B	BayPass manual: XtX, covariate (GEA) models, Pool-seq
+iqtree	github	https://github.com/iqtree/iqtree.github.io	GPL-2.0	Markdown sources of the IQ-TREE 2/3 manual in doc/: command reference, tutorials, substitution models, ModelFinder, UFBoot, dating, AliSim, concordance factors
+raxml-ng	site	https://github.com/amkozlov/raxml-ng/wiki	AGPL-3.0	RAxML-NG wiki (not in the repo): tutorial, command reference, input formats, models
+beast2	site	https://www.beast2.org/	LGPL-2.1	BEAST 2 site: features, XML format, packages, FAQ, error messages, technical blog posts
+beast2	site	https://taming-the-beast.org/tutorials/	CC-BY-4.0	Taming the BEAST: worked BEAUti/BEAST 2 tutorials
+beast-x	site	https://beast.community/	LGPL-2.1	BEAST X (BEAST 1.x/10.x) docs and tutorials
+mrbayes	pdf	https://raw.githubusercontent.com/NBISweden/MrBayes/develop/doc/manual/Manual_MrBayes_v3.2.pdf	GPL-3.0	MrBayes 3.2 manual
+mrbayes	github	https://github.com/NBISweden/MrBayes	GPL-3.0	README and examples/ (Nexus files with MrBayes blocks)
+revbayes	site	https://revbayes.github.io/tutorials/	GPL-3.0	RevBayes tutorials: Rev language, substitution models, divergence times, diversification
+paml	pdf	https://raw.githubusercontent.com/abacus-gene/paml/master/doc/pamlDOC.pdf	GPL-3.0	PAML manual: baseml, codeml, mcmctree, control files
+paml	pdf	https://raw.githubusercontent.com/abacus-gene/paml/master/doc/MCMCtree.Tutorials.pdf	GPL-3.0	MCMCtree divergence-time tutorials
+paml	github	https://github.com/abacus-gene/paml-tutorial	GPL-3.0	Worked tutorials: positive selection with codeml, MCMCtree, intro to MCMC
+hyphy	github	https://github.com/veg/hyphy-site	MIT	Markdown sources of hyphy.org: methods (BUSTED, aBSREL, MEME, FEL, RELAX), tutorials, HBL reference
+astral	github	https://github.com/chaoszhang/ASTER	AGPL-3.0	ASTER family (ASTRAL-IV, wASTRAL, CASTER): README and tutorial/
+mafft	page	https://mafft.cbrc.jp/alignment/software/manual/manual.html	BSD	MAFFT manual (one page)
+muscle	site	https://drive5.com/muscle5/manual/	GPL-3.0	MUSCLE5 manual: align, super5, ensembles
+trimal	rtd	https://trimal.readthedocs.io/en/latest/	GPL-3.0	trimAl alignment trimming
+fasttree	page	https://microbesonline.org/fasttree/	unknown	FastTree one-page manual
+treetime	rtd	https://treetime.readthedocs.io/en/latest/	MIT	Molecular-clock dating, ancestral reconstruction, mugration
+augur	rtd	https://docs.nextstrain.org/projects/augur/en/stable/	AGPL-3.0	Nextstrain Augur phylodynamics toolkit
+usher	rtd	https://usher-wiki.readthedocs.io/en/latest/	MIT	UShER, matUtils, matOptimize, RIPPLES: phylogenetic placement on mutation-annotated trees
+ete	site	https://etetoolkit.github.io/ete/	GPL-3.0	ETE 4 tree toolkit (Python)
+bpp	pdf	https://raw.githubusercontent.com/bpp/bpp/master/bpp4DOC.pdf	AGPL-3.0	BPP 4 manual: multispecies coalescent, species delimitation, introgression (MSci)
+orthofinder	pdf	https://raw.githubusercontent.com/davidemms/OrthoFinder/master/OrthoFinder-manual.pdf	GPL-3.0	OrthoFinder manual
+orthofinder	github	https://github.com/davidemms/OrthoFinder	GPL-3.0	README and ExampleData/
+busco	page	https://busco.ezlab.org/busco_userguide.html	MIT	BUSCO user guide
+cafe5	github	https://github.com/hahnlab/CAFE5	IU Open Source License	Gene-family size evolution: README manual
+ape	cran	https://cran.r-project.org/package=ape	GPL-2 or GPL-3	Phylogenetics and evolution in R
+phangorn	cran	https://cran.r-project.org/package=phangorn	GPL-2 or GPL-3	Phylogenetic reconstruction in R; vignettes
+phytools	cran	https://cran.r-project.org/package=phytools	GPL-2 or GPL-3	Phylogenetic comparative methods in R
+ggtree	bioc	https://bioconductor.org/packages/ggtree	Artistic-2.0	Tree visualisation with ggplot2
+ggtree	site	https://yulab-smu.top/treedata-book/	unknown	treedata book: worked ggtree/treeio examples
+# --- molecular and cell biology, omics, structural biology, docking and molecular dynamics ---
+scanpy	rtd	https://scanpy.readthedocs.io/en/stable/	BSD-3-Clause	Scanpy docs: API reference, usage principles, tutorials
+scverse-tutorials	rtd	https://scverse-tutorials.readthedocs.io/en/latest/	BSD-3-Clause	scverse core tutorials (scanpy, anndata, muon, scvi-tools notebooks)
+anndata	rtd	https://anndata.readthedocs.io/en/stable/	BSD-3-Clause	AnnData docs: h5ad/zarr on-disk format, API, tutorials
+scvi-tools	site	https://docs.scvi-tools.org/en/stable/	BSD-3-Clause	scvi-tools docs (RTD custom domain): user guide, scVI/scANVI/totalVI/MultiVI/PeakVI tutorials, API
+squidpy	rtd	https://squidpy.readthedocs.io/en/stable/	BSD-3-Clause	Squidpy spatial omics docs and tutorials
+spatialdata	site	https://spatialdata.scverse.org/en/latest/	BSD-3-Clause	SpatialData framework docs (scverse); spatialdata.readthedocs.io is an unrelated project
+muon	site	https://muon.scverse.org/stable/	BSD-3-Clause	muon multimodal omics docs (RTD custom domain)
+mudata	site	https://mudata.scverse.org/stable/	BSD-3-Clause	MuData multimodal container and h5mu format docs
+scirpy	site	https://scirpy.scverse.org/en/latest/	BSD-3-Clause	Scirpy single-cell TCR/BCR repertoire docs
+cellrank	rtd	https://cellrank.readthedocs.io/en/latest/	BSD-3-Clause	CellRank cell-fate mapping docs
+scvelo	rtd	https://scvelo.readthedocs.io/en/stable/	BSD-3-Clause	scVelo RNA velocity docs
+celltypist	rtd	https://celltypist.readthedocs.io/en/latest/	MIT	CellTypist automated cell-type annotation docs
+decoupler	site	https://decoupler.scverse.org/en/latest/	BSD-3-Clause	decoupler enrichment and TF/pathway activity docs (RTD custom domain)
+liana	rtd	https://liana.readthedocs.io/en/stable/	BSD-3-Clause	LIANA+ cell-cell communication docs
+pertpy	site	https://pertpy.scverse.org/en/latest/	MIT	pertpy perturbation analysis docs (Mixscape, scCODA, Augur, Milo)
+scib	rtd	https://scib.readthedocs.io/en/latest/	MIT	scIB single-cell integration benchmarking docs
+scib-metrics	rtd	https://scib-metrics.readthedocs.io/en/stable/	BSD-3-Clause	scib-metrics (JAX) integration metrics docs
+scarches	site	https://docs.scarches.org/en/latest/	BSD-3-Clause	scArches reference mapping docs (RTD custom domain)
+rapids-singlecell	site	https://rapids-singlecell.scverse.org/en/latest/	MIT	GPU-accelerated single-cell analysis docs (RTD custom domain)
+bbknn	rtd	https://bbknn.readthedocs.io/en/latest/	MIT	BBKNN batch-balanced kNN docs
+harmonypy	github	https://github.com/slowkow/harmonypy	GPL-3.0	Harmony integration in Python: README and examples
+scanorama	github	https://github.com/brianhie/scanorama	MIT	Scanorama integration: README usage
+scrublet	github	https://github.com/swolock/scrublet	MIT	Scrublet doublet detection: README and example notebooks
+pyscenic	rtd	https://pyscenic.readthedocs.io/en/latest/	GPL-3.0	pySCENIC gene regulatory network docs; RTD HTML zip available
+scenicplus	rtd	https://scenicplus.readthedocs.io/en/latest/	unknown	SCENIC+ enhancer-driven GRN docs
+celloracle	site	https://morris-lab.github.io/CellOracle.documentation/	Apache-2.0 modified (non-commercial academic)	CellOracle GRN and in silico perturbation docs
+cellphonedb	rtd	https://cellphonedb.readthedocs.io/en/latest/	MIT	CellPhoneDB ligand-receptor inference docs
+cell2location	rtd	https://cell2location.readthedocs.io/en/latest/	Apache-2.0	cell2location spatial deconvolution docs and tutorials
+tangram	github	https://github.com/broadinstitute/Tangram	BSD-3-Clause	Tangram single-cell to spatial mapping: README and tutorial notebooks
+palantir	rtd	https://palantir.readthedocs.io/en/latest/	MIT	Palantir trajectory and fate-probability docs
+snapatac2	site	https://snapatac2.scverse.org/	MIT	SnapATAC2 single-cell ATAC docs (kzhang.org/SnapATAC2 redirects here)
+scgpt	github	https://github.com/bowang-lab/scGPT	MIT	scGPT foundation model: README and tutorial notebooks
+scgpt	rtd	https://scgpt.readthedocs.io/en/latest/	MIT	scGPT API reference
+geneformer	rtd	https://geneformer.readthedocs.io/en/latest/	Apache-2.0	Geneformer docs (model and code hosted on Hugging Face)
+cellbender	rtd	https://cellbender.readthedocs.io/en/latest/	BSD-3-Clause	CellBender remove-background (ambient RNA) docs
+alevin-fry	rtd	https://alevin-fry.readthedocs.io/en/latest/	BSD-3-Clause	alevin-fry single-cell quantification docs
+simpleaf	rtd	https://simpleaf.readthedocs.io/en/latest/	BSD-3-Clause	simpleaf (alevin-fry wrapper) docs
+kb-python	github	https://github.com/pachterlab/kb_python	BSD-2-Clause	kallisto-bustools wrapper (kb ref, kb count): README and docs
+bustools	github	https://github.com/BUStools/bustools	BSD-2-Clause	BUS format tools: README and docs
+seurat	site	https://satijalab.org/seurat/	MIT	Seurat pkgdown site: vignettes (articles) and function reference
+azimuth	github	https://github.com/satijalab/azimuth	GPL-3.0	Azimuth reference mapping: README and vignettes
+signac	site	https://stuartlab.org/signac/	MIT	Signac single-cell chromatin pkgdown site: vignettes and reference
+archr	site	https://www.archrproject.com/	MIT	ArchR site: full manual (bookdown) and function reference
+sctransform	cran	https://cran.r-project.org/package=sctransform	GPL-3.0	CRAN reference manual and vignettes
+harmony	cran	https://cran.r-project.org/package=harmony	GPL-3.0	Harmony (R) integration: CRAN manual and vignettes
+singlecellexperiment	bioc	https://bioconductor.org/packages/SingleCellExperiment	GPL-3.0	SingleCellExperiment container: vignettes and manual
+scran	bioc	https://bioconductor.org/packages/scran	GPL-3.0	scran normalisation, HVGs, marker detection
+scater	bioc	https://bioconductor.org/packages/scater	GPL-3.0	scater QC and visualisation
+osca	site	https://bioconductor.org/books/release/OSCA/	unknown	Orchestrating Single-Cell Analysis with Bioconductor (book with worked workflows)
+osta	site	https://lmweber.org/OSTA/	unknown	Orchestrating Spatial Transcriptomics Analysis with Bioconductor (book)
+dropletutils	bioc	https://bioconductor.org/packages/DropletUtils	GPL-3.0	DropletUtils: emptyDrops, barcode ranks, 10x I/O
+scdblfinder	bioc	https://bioconductor.org/packages/scDblFinder	GPL-3.0	scDblFinder doublet detection
+singler	bioc	https://bioconductor.org/packages/SingleR	GPL-3.0	SingleR reference-based annotation
+monocle3	site	https://cole-trapnell-lab.github.io/monocle3/	MIT	Monocle 3 docs: trajectories, clustering, differential expression
+slingshot	bioc	https://bioconductor.org/packages/slingshot	Artistic-2.0	Slingshot lineage inference
+tradeseq	bioc	https://bioconductor.org/packages/tradeSeq	MIT	tradeSeq trajectory-based differential expression
+cellchat	github	https://github.com/jinworks/CellChat	GPL-3.0	CellChat v2 cell-cell communication: README and tutorials
+nichenetr	github	https://github.com/saeyslab/nichenetr	GPL-3.0	NicheNet ligand activity: README and vignettes
+infercnv	github	https://github.com/broadinstitute/infercnv	BSD-3-Clause	inferCNV copy-number inference from scRNA-seq: README and wiki
+soupx	cran	https://cran.r-project.org/package=SoupX	GPL-2.0	SoupX ambient RNA correction: CRAN manual and vignette
+doubletfinder	github	https://github.com/chris-mcginnis-ucsf/DoubletFinder	CC0-1.0	DoubletFinder: README usage
+milor	bioc	https://bioconductor.org/packages/miloR	GPL-3.0	miloR differential abundance on kNN graphs
+muscat	bioc	https://bioconductor.org/packages/muscat	GPL-3.0	muscat multi-sample multi-condition (pseudobulk) DS analysis
+mast	bioc	https://bioconductor.org/packages/MAST	GPL-2.0-or-later	MAST hurdle-model single-cell DE
+glmgampoi	bioc	https://bioconductor.org/packages/glmGamPoi	GPL-3.0	glmGamPoi fast Gamma-Poisson GLMs
+zellkonverter	bioc	https://bioconductor.org/packages/zellkonverter	MIT	zellkonverter AnnData (h5ad) to SingleCellExperiment conversion
+giotto	site	https://giottosuite.com/	MIT	Giotto Suite spatial omics pkgdown site (old drieslab.github.io/Giotto_website is 404)
+bayesspace	bioc	https://bioconductor.org/packages/BayesSpace	MIT	BayesSpace spatial clustering and resolution enhancement
+spotlight	bioc	https://bioconductor.org/packages/SPOTlight	GPL-3.0	SPOTlight spot deconvolution
+spatialexperiment	bioc	https://bioconductor.org/packages/SpatialExperiment	GPL-3.0	SpatialExperiment container
+banksy	bioc	https://bioconductor.org/packages/Banksy	unknown	BANKSY spatial clustering
+spacexr	github	https://github.com/dmcable/spacexr	GPL-3.0	spacexr (RCTD, C-SIDE): README and vignettes
+baysor	github	https://github.com/kharchenkolab/Baysor	MIT	Baysor cell segmentation for imaging-based transcriptomics: README and docs
+mofa2	bioc	https://bioconductor.org/packages/MOFA2	unknown	MOFA2 multi-omics factor analysis vignettes and manual
+mofa2	site	https://biofam.github.io/MOFA2/	unknown	MOFA2 site: R and Python (mofapy2) tutorials incl. MEFISTO and multi-group
+mixomics	bioc	https://bioconductor.org/packages/mixOmics	GPL-2.0-or-later	mixOmics multivariate multi-omics integration (DIABLO, sPLS-DA)
+deseq2	bioc	https://bioconductor.org/packages/DESeq2	LGPL-3.0-or-later	DESeq2 vignette and manual
+edger	bioc	https://bioconductor.org/packages/edgeR	GPL-2.0-or-later	edgeR vignettes incl. the edgeR User's Guide
+limma	bioc	https://bioconductor.org/packages/limma	GPL-2.0-or-later	limma vignettes incl. the limma User's Guide (voom)
+tximport	bioc	https://bioconductor.org/packages/tximport	LGPL-2.0-or-later	tximport transcript-to-gene import
+tximeta	bioc	https://bioconductor.org/packages/tximeta	GPL-2.0	tximeta quantification import with provenance
+sva	bioc	https://bioconductor.org/packages/sva	Artistic-2.0	sva: surrogate variables, ComBat, ComBat-seq
+variancepartition	bioc	https://bioconductor.org/packages/variancePartition	GPL-2.0	variancePartition and dream mixed-model DE
+dexseq	bioc	https://bioconductor.org/packages/DEXSeq	GPL-3.0-or-later	DEXSeq differential exon usage
+salmon	rtd	https://salmon.readthedocs.io/en/latest/	BSD-3-Clause	Salmon transcript quantification docs
+star	github	https://github.com/alexdobin/STAR	MIT	STAR aligner repo: README, docs (STARsolo.md, STARconsensus), CHANGES
+star	pdf	https://raw.githubusercontent.com/alexdobin/STAR/master/doc/STARmanual.pdf	MIT	STAR manual PDF (all options)
+kallisto	github	https://github.com/pachterlab/kallisto	BSD-2-Clause	kallisto repo: README and docs
+kallisto	page	https://pachterlab.github.io/kallisto/manual	BSD-2-Clause	kallisto manual page (commands and options)
+subread	pdf	https://subread.sourceforge.net/SubreadUsersGuide.pdf	GPL-3.0	Subread/Rsubread User's Guide (subread-align, subjunc, featureCounts)
+subread	bioc	https://bioconductor.org/packages/Rsubread	GPL-3.0-or-later	Rsubread package (align, featureCounts in R): vignette and manual
+hisat2	page	https://daehwankimlab.github.io/hisat2/manual/	GPL-3.0	HISAT2 manual
+stringtie	page	https://ccb.jhu.edu/software/stringtie/index.shtml?t=manual	MIT	StringTie manual
+htseq	rtd	https://htseq.readthedocs.io/en/latest/	GPL-3.0	HTSeq and htseq-count docs
+rsem	github	https://github.com/deweylab/RSEM	GPL-3.0	RSEM: README is the full manual
+umi-tools	rtd	https://umi-tools.readthedocs.io/en/latest/	MIT	UMI-tools extract/dedup/count docs
+trim-galore	github	https://github.com/FelixKrueger/TrimGalore	GPL-3.0	Trim Galore: Docs/Trim_Galore_User_Guide.md
+rseqc	page	https://rseqc.sourceforge.net/	unknown	RSeQC one-page manual of all scripts
+qualimap	site	http://qualimap.conesalab.org/doc_html/index.html	unknown	Qualimap 2 documentation
+rmats	github	https://github.com/Xinglab/rmats-turbo	BSD-2-Clause (academic and non-profit use)	rMATS-turbo alternative splicing: README
+leafcutter	github	https://github.com/davidaknowles/leafcutter	Apache-2.0	LeafCutter intron clustering and splicing QTL: README and docs
+isoquant	github	https://github.com/ablab/IsoQuant	GPL-2.0	IsoQuant long-read transcript discovery and quantification: README and docs
+clusterprofiler	bioc	https://bioconductor.org/packages/clusterProfiler	Artistic-2.0	clusterProfiler enrichment (ORA, GSEA)
+clusterprofiler	site	https://yulab-smu.top/biomedical-knowledge-mining-book/	CC-BY-NC-4.0	Biomedical Knowledge Mining book (clusterProfiler, enrichplot, DOSE worked examples)
+fgsea	bioc	https://bioconductor.org/packages/fgsea	MIT	fgsea fast preranked GSEA
+gsva	bioc	https://bioconductor.org/packages/GSVA	Artistic-2.0	GSVA/ssGSEA sample-level enrichment
+topgo	bioc	https://bioconductor.org/packages/topGO	LGPL	topGO GO enrichment with GO-graph topology
+gseapy	rtd	https://gseapy.readthedocs.io/en/latest/	BSD-3-Clause	GSEApy (GSEA, prerank, Enrichr) docs
+gprofiler2	cran	https://cran.r-project.org/package=gprofiler2	GPL-2.0-or-later	g:Profiler R client: CRAN manual and vignette
+wgcna	cran	https://cran.r-project.org/package=WGCNA	GPL-2.0-or-later	WGCNA co-expression networks: CRAN manual
+genomicranges	bioc	https://bioconductor.org/packages/GenomicRanges	Artistic-2.0	GenomicRanges interval data: vignettes and manual
+biostrings	bioc	https://bioconductor.org/packages/Biostrings	Artistic-2.0	Biostrings sequence manipulation and matching
+summarizedexperiment	bioc	https://bioconductor.org/packages/SummarizedExperiment	Artistic-2.0	SummarizedExperiment container
+biomart	bioc	https://bioconductor.org/packages/biomaRt	Artistic-2.0	biomaRt Ensembl BioMart queries
+macs3	github	https://github.com/macs3-project/MACS	BSD-3-Clause	MACS3: docs/ Markdown sources (callpeak, hmmratac, bdgcmp, ...)
+deeptools	rtd	https://deeptools.readthedocs.io/en/latest/	MIT	deepTools docs: every tool with options, API
+homer	site	http://homer.ucsd.edu/homer/	unknown	HOMER site: motif finding, annotatePeaks, NGS analysis tutorials
+meme-suite	site	https://meme-suite.org/meme/doc/overview.html	unknown	MEME Suite documentation (MEME, STREME, FIMO, Tomtom, SEA, CentriMo); crawl prefix /meme/doc/
+bowtie2	page	https://bowtie-bio.sourceforge.net/bowtie2/manual.shtml	GPL-3.0	Bowtie 2 manual
+chromap	github	https://github.com/haowenz/chromap	MIT	Chromap fast ATAC/ChIP/Hi-C alignment: README
+genrich	github	https://github.com/jsh58/Genrich	MIT	Genrich peak caller (ATAC mode): README is the manual
+seacr	github	https://github.com/FredHutch/SEACR	GPL-2.0	SEACR CUT&RUN peak caller: README
+idr	github	https://github.com/nboley/idr	GPL-2.0	IDR irreproducible discovery rate: README
+chromvar	bioc	https://bioconductor.org/packages/chromVAR	MIT	chromVAR motif accessibility deviations
+diffbind	bioc	https://bioconductor.org/packages/DiffBind	Artistic-2.0	DiffBind differential binding
+chipseeker	bioc	https://bioconductor.org/packages/ChIPseeker	Artistic-2.0	ChIPseeker peak annotation
+csaw	bioc	https://bioconductor.org/packages/csaw	GPL-3.0	csaw window-based differential binding
+tobias	github	https://github.com/loosolab/TOBIAS	MIT	TOBIAS ATAC footprinting: README and wiki
+bismark	github	https://github.com/FelixKrueger/Bismark	GPL-3.0	Bismark bisulfite aligner: Docs/ Markdown user guide
+methyldackel	github	https://github.com/dpryan79/MethylDackel	MIT	MethylDackel methylation extraction: README
+methylkit	bioc	https://bioconductor.org/packages/methylKit	Artistic-2.0	methylKit DNA methylation analysis
+dss	bioc	https://bioconductor.org/packages/DSS	GPL	DSS differential methylation (DML/DMR)
+minfi	bioc	https://bioconductor.org/packages/minfi	Artistic-2.0	minfi Illumina methylation arrays
+sesame	bioc	https://bioconductor.org/packages/sesame	MIT	SeSAMe Infinium array preprocessing
+chromhmm	pdf	https://compbio.mit.edu/ChromHMM/ChromHMM_manual.pdf	GPL-3.0	ChromHMM manual PDF
+pygenometracks	rtd	https://pygenometracks.readthedocs.io/en/latest/	GPL-3.0	pyGenomeTracks track plotting docs
+cooler	rtd	https://cooler.readthedocs.io/en/latest/	BSD-3-Clause	cooler Hi-C contact matrix format and CLI docs
+cooltools	rtd	https://cooltools.readthedocs.io/en/latest/	MIT	cooltools Hi-C analysis docs and notebooks
+pairtools	rtd	https://pairtools.readthedocs.io/en/latest/	MIT	pairtools Hi-C pairs processing docs
+hicexplorer	rtd	https://hicexplorer.readthedocs.io/en/latest/	GPL-3.0	HiCExplorer docs: tools and tutorials
+hic-pro	github	https://github.com/nservant/HiC-Pro	BSD-3-Clause	HiC-Pro pipeline: README and doc/ manual
+juicer	github	https://github.com/aidenlab/juicer	MIT	Juicer Hi-C pipeline: README and wiki
+mageck	site	https://sourceforge.net/p/mageck/wiki/Home/	unknown	MAGeCK wiki (SourceForge): count, test, mle, demos; crawl prefix /p/mageck/wiki/
+mageckflute	github	https://github.com/WubingZhang/MAGeCKFlute	GPL-3.0-or-later	MAGeCKFlute downstream analysis: README and vignettes (removed from Bioconductor)
+bagel2	github	https://github.com/hart-lab/bagel	MIT	BAGEL2 essential-gene Bayes factors: README and notebooks
+drugz	github	https://github.com/hart-lab/drugz	MIT	DrugZ chemogenetic interaction screens: README
+crisprcleanr	github	https://github.com/francescojm/CRISPRcleanR	MIT	CRISPRcleanR copy-number bias correction: README and vignette
+chronos	github	https://github.com/broadinstitute/chronos	BSD-3-Clause	Chronos (DepMap) gene effect model: README and vignette notebook
+crispresso2	github	https://github.com/pinellolab/CRISPResso2	custom (academic non-commercial)	CRISPResso2 genome-editing analysis: README
+crispresso2	site	https://docs.crispresso.com/	custom (academic non-commercial)	CRISPResso docs site: tools, parameters, output files
+cellprofiler	site	https://cellprofiler-manual.s3.amazonaws.com/CellProfiler-4.2.8/index.html	BSD-3-Clause	CellProfiler 4.2.8 manual (latest stable): every module and setting
+cellprofiler	github	https://github.com/CellProfiler/tutorials	BSD-3-Clause	CellProfiler tutorials and example pipelines
+cellpose	rtd	https://cellpose.readthedocs.io/en/latest/	BSD-3-Clause	Cellpose segmentation docs (CLI, GUI, training, Cellpose-SAM)
+stardist	github	https://github.com/stardist/stardist	BSD-3-Clause	StarDist nucleus segmentation: README and example notebooks
+napari	github	https://github.com/napari/docs	BSD-3-Clause	napari documentation sources (MyST Markdown) behind napari.org
+scikit-image	site	https://scikit-image.org/docs/stable/	BSD-3-Clause	scikit-image user guide, gallery and API
+imagej	github	https://github.com/imagej/imagej.github.io	CC-BY-3.0	ImageJ/Fiji wiki Markdown sources (imagej.net): plugins, TrackMate, scripting
+qupath	rtd	https://qupath.readthedocs.io/en/stable/	GPL-3.0	QuPath docs: digital pathology workflows, scripting
+ilastik	site	https://www.ilastik.org/documentation/	GPL/LGPL (see LICENSE)	ilastik workflow documentation
+deepcell	rtd	https://deepcell.readthedocs.io/en/master/	Apache-2.0	DeepCell (Mesmer) docs and examples
+micro-sam	github	https://github.com/computational-cell-analytics/micro-sam	MIT	Segment Anything for microscopy: README and docs
+mcmicro	site	https://mcmicro.org/	MIT	MCMICRO multiplexed tissue imaging pipeline docs
+bio-formats	rtd	https://bio-formats.readthedocs.io/en/latest/	GPL-2.0	Bio-Formats microscopy file formats docs (bfconvert, showinf)
+alphafold3	github	https://github.com/google-deepmind/alphafold3	Apache-2.0 (code; weights under separate terms)	AlphaFold 3: README and docs/ (input JSON, output, installation, performance)
+alphafold2	github	https://github.com/google-deepmind/alphafold	Apache-2.0	AlphaFold 2 / AlphaFold-Multimer: README
+colabfold	github	https://github.com/sokrypton/ColabFold	MIT	ColabFold: README (colabfold_batch, colabfold_search), notebooks
+localcolabfold	github	https://github.com/YoshitakaMo/localcolabfold	MIT	LocalColabFold local install and usage: README
+esm	github	https://github.com/facebookresearch/esm	MIT	ESM-2, ESMFold, ESM-IF1 (archived repo): README and examples
+esm	github	https://github.com/Biohub/esm	MIT	ESM C / ESM3 (formerly evolutionaryscale/esm): README and cookbook
+boltz	github	https://github.com/jwohlwend/boltz	MIT	Boltz-1/Boltz-2 structure and affinity: README, docs/prediction.md YAML format
+chai-1	github	https://github.com/chaidiscovery/chai-lab	Apache-2.0	Chai-1: README and examples
+protenix	github	https://github.com/bytedance/Protenix	Apache-2.0	Protenix (AlphaFold 3 reproduction): README and docs
+openfold	rtd	https://openfold.readthedocs.io/en/latest/	Apache-2.0	OpenFold docs: inference and training
+openfold3	github	https://github.com/aqlaboratory/openfold-3	Apache-2.0	OpenFold3: README and docs
+proteinmpnn	github	https://github.com/dauparas/ProteinMPNN	MIT	ProteinMPNN: README and example scripts
+ligandmpnn	github	https://github.com/dauparas/LigandMPNN	MIT	LigandMPNN: README with all options
+rfdiffusion	github	https://github.com/RosettaCommons/RFdiffusion	BSD (see LICENSE)	RFdiffusion: README (binders, motif scaffolding, symmetric design) and examples
+rfdiffusion-aa	github	https://github.com/baker-laboratory/rf_diffusion_all_atom	BSD (see LICENSE)	RFdiffusion All-Atom: README
+foundry	github	https://github.com/RosettaCommons/foundry	BSD-3-Clause	RosettaCommons foundry: RFdiffusion3, RoseTTAFold3 and MPNN model READMEs
+rosettafold-aa	github	https://github.com/baker-laboratory/RoseTTAFold-All-Atom	BSD (see LICENSE)	RoseTTAFold All-Atom: README
+bindcraft	github	https://github.com/martinpacesa/BindCraft	MIT	BindCraft binder design: README and settings
+boltzgen	github	https://github.com/HannesStark/boltzgen	MIT	BoltzGen generative binder design: README
+colabdesign	github	https://github.com/sokrypton/ColabDesign	Beerware	ColabDesign (AfDesign, ProteinMPNN, RFdiffusion in Colab): README and notebooks
+rfantibody	github	https://github.com/RosettaCommons/RFantibody	MIT	RFantibody antibody design: README
+immunebuilder	github	https://github.com/oxpig/ImmuneBuilder	BSD-3-Clause	ImmuneBuilder (ABodyBuilder2, NanoBodyBuilder2, TCRBuilder2): README
+anarci	github	https://github.com/oxpig/ANARCI	BSD-3-Clause	ANARCI antibody/TCR numbering: README
+evo2	github	https://github.com/ArcInstitute/evo2	Apache-2.0	Evo 2 DNA language model: README and notebooks
+alphagenome	github	https://github.com/google-deepmind/alphagenome	Apache-2.0	AlphaGenome API client: README, docs and colabs
+foldseek	github	https://github.com/steineggerlab/foldseek	GPL-3.0	Foldseek structural search: README and wiki
+mmseqs2	github	https://github.com/soedinglab/MMseqs2	MIT	MMseqs2: README and wiki user guide
+hh-suite	github	https://github.com/soedinglab/hh-suite	GPL-3.0	HH-suite (HHblits, HHsearch): README and wiki
+diamond	github	https://github.com/bbuchfink/diamond	GPL-3.0	DIAMOND protein aligner: README and wiki
+hmmer	pdf	http://eddylab.org/software/hmmer/Userguide.pdf	BSD-3-Clause	HMMER 3 User's Guide PDF
+interproscan	site	https://interproscan6.readthedocs.io/stable/	Apache-2.0	InterProScan 6 (Nextflow) docs
+interproscan	rtd	https://interproscan-docs.readthedocs.io/en/v5/	Apache-2.0	InterProScan 5 docs (still widely used)
+dssp	github	https://github.com/PDB-REDO/dssp	BSD-2-Clause	DSSP secondary structure assignment: README and doc/
+us-align	page	https://zhanggroup.org/US-align/	unknown	US-align / TM-align structure alignment page with options
+rosetta	site	https://docs.rosettacommons.org/docs/latest/Home	unknown	Rosetta documentation (applications, RosettaScripts, options)
+relion	rtd	https://relion.readthedocs.io/en/latest/	GPL-2.0	RELION cryo-EM docs and single-particle tutorial
+cryodrgn	github	https://github.com/ml-struct-bio/cryodrgn	GPL-3.0	cryoDRGN heterogeneous reconstruction: README and docs
+modelangelo	github	https://github.com/3dem/model-angelo	MIT	ModelAngelo automated cryo-EM model building: README
+haddock3	github	https://github.com/haddocking/haddock3	Apache-2.0	HADDOCK3 integrative (protein-protein) docking: docs/ and examples/
+biopython	site	https://biopython.org/docs/latest/Tutorial/	Biopython License / BSD-3-Clause	Biopython Tutorial and Cookbook (SeqIO, Bio.PDB, Entrez, alignments)
+gemmi	rtd	https://gemmi.readthedocs.io/en/latest/	MPL-2.0	gemmi macromolecular structure and mmCIF library docs
+biotite	site	https://www.biotite-python.org/latest/	BSD-3-Clause	Biotite tutorial, examples gallery and API
+prody	site	https://www.bahargroup.org/prody/manual/	MIT	ProDy manual (prody.csb.pitt.edu is unreachable)
+pdb-tools	github	https://github.com/haddocking/pdb-tools	Apache-2.0	pdb-tools PDB file manipulation scripts: README
+pymol	github	https://github.com/schrodinger/pymol-open-source	PyMOL open-source licence (BSD-like)	Open-source PyMOL: README, INSTALL, docs
+pymol	site	https://pymolwiki.org/index.php/Main_Page	GFDL-1.2	PyMOL Wiki: command reference, settings, scripts (MediaWiki)
+chimerax	site	https://www.cgl.ucsf.edu/chimerax/docs/user/index.html	unknown	UCSF ChimeraX User Guide: commands, tools, formats
+autodock-vina	rtd	https://autodock-vina.readthedocs.io/en/latest/	Apache-2.0	AutoDock Vina docs: basic, flexible, hydrated docking, Python API
+autodock-vina	github	https://github.com/forlilab/AutoDock-Vina	Apache-2.0	AutoDock Vina repo (moved from ccsb-scripps): example/ tutorial inputs and scripts
+autodock-gpu	github	https://github.com/forlilab/AutoDock-GPU	GPL-2.0	AutoDock-GPU (moved from ccsb-scripps): README and wiki
+autodock4	pdf	https://autodock.scripps.edu/wp-content/uploads/sites/56/2022/04/AutoDock4.2.6_UserGuide.pdf	GPL-2.0	AutoDock 4.2.6 User Guide PDF
+meeko	rtd	https://meeko.readthedocs.io/en/develop/	LGPL-2.1	Meeko docs: mk_prepare_ligand, mk_prepare_receptor, PDBQT, export
+molscrub	github	https://github.com/forlilab/molscrub	GPL-3.0	molscrub ligand protonation and conformer enumeration: README
+dimorphite-dl	github	https://github.com/durrantlab/dimorphite_dl	Apache-2.0	Dimorphite-DL protonation states: README
+ringtail	github	https://github.com/forlilab/Ringtail	LGPL-2.1	Ringtail virtual screening results database: README and docs
+smina	github	https://github.com/mwojcikowski/smina	Apache-2.0	smina (Vina fork, custom scoring, minimisation): README
+gnina	github	https://github.com/gnina/gnina	Apache-2.0	GNINA CNN-scored docking: README with full usage
+diffdock	github	https://github.com/gcorso/DiffDock	MIT	DiffDock / DiffDock-L diffusion docking: README
+uni-dock	github	https://github.com/dptech-corp/Uni-Dock	Apache-2.0	Uni-Dock GPU docking and unidocktools: README and docs
+rdock	site	https://rdock.github.io/documentation/	LGPL-3.0	rDock documentation (rbcavity, rbdock, parameter files)
+fpocket	github	https://github.com/Discngine/fpocket	MIT	fpocket pocket detection: README and doc/ manual
+p2rank	github	https://github.com/rdk/p2rank	MIT	P2Rank ligand-binding site prediction: README and misc/tutorials
+plip	github	https://github.com/pharmai/plip	GPL-2.0	PLIP protein-ligand interaction profiler: README and docs
+prolif	rtd	https://prolif.readthedocs.io/en/stable/	Apache-2.0	ProLIF interaction fingerprints docs and tutorials
+posebusters	rtd	https://posebusters.readthedocs.io/en/latest/	MIT	PoseBusters docking pose plausibility checks
+openbabel	rtd	https://open-babel.readthedocs.io/en/latest/	GPL-2.0	Open Babel docs: obabel, file formats, options
+rdkit	site	https://www.rdkit.org/docs/	BSD-3-Clause	RDKit docs: Getting Started, RDKit Book, Cookbook, API
+pdb2pqr	rtd	https://pdb2pqr.readthedocs.io/en/latest/	BSD-3-Clause	PDB2PQR protonation and charge assignment docs
+apbs	rtd	https://apbs.readthedocs.io/en/latest/	BSD-3-Clause	APBS electrostatics docs
+propka	rtd	https://propka.readthedocs.io/en/latest/	LGPL-2.1	PROPKA 3 pKa prediction docs
+chemprop	rtd	https://chemprop.readthedocs.io/en/latest/	MIT	Chemprop molecular property prediction docs
+deepchem	rtd	https://deepchem.readthedocs.io/en/latest/	MIT	DeepChem docs and tutorials
+openmm	site	https://docs.openmm.org/latest/userguide/	MIT / LGPL-2.1	OpenMM User Guide and Theory Guide
+openmm	site	https://openmm.github.io/openmm-cookbook/latest/	unknown	OpenMM Cookbook and tutorials (worked notebooks)
+openmmforcefields	github	https://github.com/openmm/openmmforcefields	MIT	openmmforcefields (AMBER, CHARMM, GAFF, SMIRNOFF templates): README
+openff-toolkit	site	https://docs.openforcefield.org/projects/toolkit/en/stable/	MIT	OpenFF Toolkit docs (SMIRNOFF force fields)
+openfe	site	https://docs.openfree.energy/en/stable/	MIT	OpenFE relative binding free energy docs
+pdbfixer	github	https://github.com/openmm/pdbfixer	MIT	PDBFixer: README; the manual is Manual.html in the repo root
+pdbfixer	page	https://raw.githubusercontent.com/openmm/pdbfixer/master/Manual.html	MIT	PDBFixer manual (raw HTML, served as text/plain)
+gromacs	site	https://manual.gromacs.org/current/	LGPL-2.1	GROMACS manual: user guide, gmx commands, mdp options, file formats
+gromacs	site	http://www.mdtutorials.com/gmx/	unknown	Justin Lemkul GROMACS tutorials (worked examples)
+mdanalysis	site	https://userguide.mdanalysis.org/stable/	LGPL-2.1	MDAnalysis User Guide (RTD custom domain)
+mdanalysis	site	https://docs.mdanalysis.org/stable/	LGPL-2.1-or-later	MDAnalysis API documentation
+mdtraj	rtd	https://mdtraj.readthedocs.io/en/stable/	LGPL-2.1	MDTraj 1.11 docs (official RTD build of mdtraj/mdtraj; www.mdtraj.org only hosts a stale 1.9.8.dev0 build on S3, where folder URLs return 403)
+ambertools	pdf	https://ambermd.org/doc12/Amber25.pdf	unknown	Amber 2025 Reference Manual (AmberTools25: tleap, antechamber, cpptraj, MMPBSA.py)
+ambertools	site	https://ambermd.org/tutorials/	unknown	Amber tutorials (worked examples)
+namd	site	https://www.ks.uiuc.edu/Research/namd/3.0/ug/	unknown	NAMD 3.0 User's Guide
+vmd	site	https://www.ks.uiuc.edu/Research/vmd/current/ug/	unknown	VMD User's Guide
+plumed	site	https://www.plumed.org/doc-v2.10/user-doc/html/	LGPL-3.0	PLUMED 2.10 manual (enhanced sampling, collective variables)
+parmed	site	https://parmed.github.io/ParmEd/html/	LGPL-2.1	ParmEd topology conversion docs
+acpype	github	https://github.com/alanwilter/acpype	GPL-3.0	ACPYPE (AnteChamber PYthon Parser interfacE): README
+packmol	site	https://m3g.github.io/packmol/	MIT	Packmol initial configuration docs
+gmx-mmpbsa	github	https://github.com/Valdes-Tresanco-MS/gmx_MMPBSA	GPL-3.0	gmx_MMPBSA: docs/ Markdown and examples
+martinize2	github	https://github.com/marrink-lab/vermouth-martinize	Apache-2.0	martinize2 / vermouth Martini coarse-graining: README and docs
+dia-nn	github	https://github.com/vdemichev/DiaNN	custom (see per-release LICENSE.txt)	DIA-NN: README is the full manual
+fragpipe	site	https://fragpipe.nesvilab.org/	GPL-3.0 (FragPipe GUI); MSFragger and IonQuant academic licence	FragPipe site and tutorials (docs/tutorial_*.html)
+msfragger	github	https://github.com/Nesvilab/MSFragger	academic licence	MSFragger: README and wiki (search parameters)
+openms	rtd	https://openms.readthedocs.io/en/latest/	BSD-3-Clause	OpenMS docs: TOPP tools and workflows
+pyopenms	rtd	https://pyopenms.readthedocs.io/en/latest/	BSD-3-Clause	pyOpenMS docs and examples
+sage	github	https://github.com/lazear/sage	MIT	Sage search engine: README and docs
+alphadia	github	https://github.com/MannLabs/alphadia	Apache-2.0	alphaDIA DIA search: README and docs
+alphapeptdeep	github	https://github.com/MannLabs/alphapeptdeep	Apache-2.0	AlphaPeptDeep spectrum and RT prediction: README and notebooks
+mokapot	rtd	https://mokapot.readthedocs.io/en/latest/	Apache-2.0	mokapot PSM rescoring docs
+percolator	github	https://github.com/percolator/percolator	Apache-2.0	Percolator: README and wiki
+casanovo	rtd	https://casanovo.readthedocs.io/en/latest/	Apache-2.0	Casanovo de novo peptide sequencing docs
+pyteomics	rtd	https://pyteomics.readthedocs.io/en/latest/	Apache-2.0	Pyteomics docs (mzML, mzIdentML, mass calculations)
+msstats	bioc	https://bioconductor.org/packages/MSstats	Artistic-2.0	MSstats protein significance analysis
+msstatstmt	bioc	https://bioconductor.org/packages/MSstatsTMT	Artistic-2.0	MSstatsTMT isobaric labelling analysis
+qfeatures	bioc	https://bioconductor.org/packages/QFeatures	Artistic-2.0	QFeatures quantitative MS data
+spectra	bioc	https://bioconductor.org/packages/Spectra	Artistic-2.0	Spectra MS data infrastructure
+msconvert	page	https://proteowizard.sourceforge.io/tools/msconvert.html	Apache-2.0	ProteoWizard msconvert options
+thermorawfileparser	github	https://github.com/compomics/ThermoRawFileParser	Apache-2.0	ThermoRawFileParser RAW to mzML/MGF: README
+olinkanalyze	cran	https://cran.r-project.org/package=OlinkAnalyze	AGPL-3.0	OlinkAnalyze (Olink NPX data) CRAN manual and vignettes
+somadataio	cran	https://cran.r-project.org/package=SomaDataIO	MIT	SomaDataIO (SomaScan ADAT files) CRAN manual and vignettes
+xcms	bioc	https://bioconductor.org/packages/xcms	GPL-2.0-or-later	xcms LC/GC-MS preprocessing vignettes and manual
+camera	bioc	https://bioconductor.org/packages/CAMERA	GPL-2.0-or-later	CAMERA adduct and isotope annotation
+metaboannotation	bioc	https://bioconductor.org/packages/MetaboAnnotation	Artistic-2.0	MetaboAnnotation feature annotation
+ropls	bioc	https://bioconductor.org/packages/ropls	CeCILL	ropls PCA, PLS(-DA), OPLS(-DA)
+metaboanalystr	github	https://github.com/xia-lab/MetaboAnalystR	MIT	MetaboAnalystR: README and vignettes
+mzmine	github	https://github.com/mzmine/mzmine_documentation	MIT	mzmine documentation Markdown sources (mkdocs site mzmine.github.io/mzmine_documentation)
+sirius	site	https://v6.docs.sirius-ms.io/	AGPL-3.0	SIRIUS 6 docs (CSI:FingerID, CANOPUS); the software needs an account, the docs are public
+ms-dial	site	https://systemsomicslab.github.io/msdial5tutorial/	unknown	MS-DIAL 5 tutorial
+matchms	rtd	https://matchms.readthedocs.io/en/latest/	Apache-2.0	matchms spectral matching docs
+mixcr	github	https://github.com/milaboratory/docs	unknown	MiLaboratories docs sources (docs/mixcr, mkdocs Markdown); MiXCR itself needs a licence key
+immunarch	site	https://immunarch.com/	Apache-2.0	immunarch pkgdown site: vignettes and reference
+immcantation	rtd	https://immcantation.readthedocs.io/en/stable/	AGPL-3.0	Immcantation portal (pRESTO, Change-O, SHazaM, alakazam, TIgGER, SCOPer)
+igblast	site	https://ncbi.github.io/igblast/	public domain (US government work)	IgBLAST documentation
+dandelion	rtd	https://sc-dandelion.readthedocs.io/en/latest/	AGPL-3.0	dandelion single-cell BCR/TCR docs
+tcrdist3	rtd	https://tcrdist3.readthedocs.io/en/latest/	MIT	tcrdist3 TCR distance docs
+screpertoire	bioc	https://bioconductor.org/packages/scRepertoire	MIT	scRepertoire single-cell repertoire analysis
+airr	site	https://docs.airr-community.org/en/stable/	CC-BY-4.0	AIRR Community standards (Rearrangement TSV schema, MiAIRR)
+immuneml	site	https://docs.immuneml.uio.no/latest/	AGPL-3.0	immuneML AIRR machine-learning docs
+trust4	github	https://github.com/liulab-dfci/TRUST4	MIT	TRUST4 TCR/BCR assembly from RNA-seq: README
+optitype	github	https://github.com/FRED-2/OptiType	BSD-3-Clause	OptiType HLA class I typing: README
+arcashla	github	https://github.com/RabadanLab/arcasHLA	GPL-3.0	arcasHLA HLA typing from RNA-seq: README
+hla-la	github	https://github.com/DiltheyLab/HLA-LA	GPL-3.0	HLA*LA graph-based HLA typing: README
+t1k	github	https://github.com/mourisl/T1K	MIT	T1K HLA/KIR genotyping: README
+hibag	bioc	https://bioconductor.org/packages/HIBAG	GPL-3.0	HIBAG HLA imputation from SNP data
+mhcflurry	site	https://openvax.github.io/mhcflurry/	Apache-2.0	MHCflurry peptide-MHC binding prediction docs
+pvactools	rtd	https://pvactools.readthedocs.io/en/latest/	BSD-3-Clause-Clear	pVACtools neoantigen prediction docs
+immunedeconv	github	https://github.com/omnideconv/immunedeconv	GPL-2.0-or-later	immunedeconv immune cell deconvolution: README and vignettes
+flowcore	bioc	https://bioconductor.org/packages/flowCore	Artistic-2.0	flowCore flow cytometry FCS data
+catalyst	bioc	https://bioconductor.org/packages/CATALYST	GPL-2.0-or-later	CATALYST mass cytometry preprocessing and differential analysis
+flowsom	bioc	https://bioconductor.org/packages/FlowSOM	GPL-2.0-or-later	FlowSOM cytometry clustering
+primer3	page	https://primer3.org/manual.html	GPL-2.0	Primer3 manual (all input tags)
+emboss	site	https://emboss.sourceforge.net/apps/	GPL	EMBOSS application documentation (sequence analysis CLI tools)
+# --- HPC, bash and pipelines, statistics, plotting, office files and 3D ---
+slurm	site	https://slurm.schedmd.com/documentation.html	GPL-2.0-or-later	Official Slurm docs: user/admin guides + man pages (sbatch, srun, squeue, sacct, salloc, scancel, sinfo, scontrol, sstat), job_array.html, heterogeneous_jobs.html; site root is all docs; skip slides/PDF talks and news
+slurm	site	https://docs.nersc.gov/jobs/	unknown	NERSC job-script guide: worked sbatch examples (arrays, dependencies, multi-node, GPUs, workflow tools); site-specific bits are labelled
+slurm	page	https://docs.alliancecan.ca/wiki/Running_jobs	unknown	Digital Research Alliance of Canada: practical Slurm job-submission tutorial (see also /wiki/Job_arrays)
+oxford-arc	rtd	https://arc-user-guide.readthedocs.io/en/latest/	unknown	University of Oxford ARC/HTC cluster user guide: submission scripts, job scheduling, SLURM reference + FAQs, software modules
+pbs	pdf	https://help.altair.com/2024.1.0/PBS%20Professional/PBSUserGuide2024.1.pdf	proprietary (Altair), public download	PBS Professional 2024.1 User's Guide (qsub/qstat, job arrays); same commands as OpenPBS; openpbs.org was down (503)
+pbs	pdf	https://help.altair.com/2024.1.0/PBS%20Professional/PBSReferenceGuide2024.1.pdf	proprietary (Altair), public download	PBS Professional 2024.1 Reference Guide: every command, option, resource and attribute
+htcondor	rtd	https://htcondor.readthedocs.io/en/latest/	Apache-2.0	HTCondor manual: users' manual (submit files, DAGMan workflows), admin, man pages
+hpc-carpentry	github	https://github.com/carpentries-incubator/hpc-intro	CC BY 4.0	HPC Carpentry 'Introduction to HPC' lesson: Markdown episodes (ssh, scheduler, modules, transferring files, parallel jobs)
+bash	page	https://www.gnu.org/software/bash/manual/bash.html	GFDL-1.3	GNU Bash Reference Manual, one page (Bash 5.3). KEPT despite url_check failure: confirmed HTTP 200 over IPv6 on 2026-10-27; www.gnu.org drops this machine's IPv4 connections (timeouts) after request bursts, so throttle hard and retry later or over IPv6; a bare 'Mozilla/5.0' UA got 403, default UA works
+bash-guide	site	https://mywiki.wooledge.org/BashGuide/	unknown (MoinMoin wiki)	Greg's Wiki BashGuide (crawl /BashGuide/ subpages); skip ?action= links
+bash-guide	site	https://mywiki.wooledge.org/BashFAQ/	unknown (MoinMoin wiki)	Greg's Wiki BashFAQ/001..: idioms with worked answers; skip ?action= links
+bash-guide	page	https://mywiki.wooledge.org/BashPitfalls	unknown (MoinMoin wiki)	Common Bash mistakes and correct forms
+pure-bash-bible	github	https://github.com/dylanaraps/pure-bash-bible	MIT	README: pure-Bash snippets (strings, arrays, loops, file handling) in place of external commands
+shell-novice	github	https://github.com/swcarpentry/shell-novice	CC BY 4.0	Software Carpentry Unix Shell lesson: Markdown episodes (pipes and filters, loops, scripts, find/grep)
+coreutils	page	https://www.gnu.org/software/coreutils/manual/coreutils.html	GFDL-1.3	GNU Coreutils manual, one page (sort, cut, join, paste, tr, uniq, wc, head/tail, split, ls, cp, ...). KEPT despite url_check failure: confirmed HTTP 200 over IPv6 on 2026-10-27; www.gnu.org drops this machine's IPv4 connections (timeouts) after request bursts, so throttle hard and retry later or over IPv6; a bare 'Mozilla/5.0' UA got 403, default UA works
+gawk	page	https://www.gnu.org/software/gawk/manual/gawk.html	GFDL-1.3	GAWK: Effective AWK Programming, one page, with many example programs. KEPT despite url_check failure: confirmed HTTP 200 over IPv6 on 2026-10-27; www.gnu.org drops this machine's IPv4 connections (timeouts) after request bursts, so throttle hard and retry later or over IPv6; a bare 'Mozilla/5.0' UA got 403, default UA works
+sed	page	https://www.gnu.org/software/sed/manual/sed.html	GFDL-1.3	GNU sed manual, one page, incl. example sed scripts. KEPT despite url_check failure: confirmed HTTP 200 over IPv6 on 2026-10-27; www.gnu.org drops this machine's IPv4 connections (timeouts) after request bursts, so throttle hard and retry later or over IPv6; a bare 'Mozilla/5.0' UA got 403, default UA works
+grep	page	https://www.gnu.org/software/grep/manual/grep.html	GFDL-1.3	GNU grep manual, one page (options, regex syntax, usage examples). KEPT despite url_check failure: confirmed HTTP 200 over IPv6 on 2026-10-27; www.gnu.org drops this machine's IPv4 connections (timeouts) after request bursts, so throttle hard and retry later or over IPv6; a bare 'Mozilla/5.0' UA got 403, default UA works
+findutils	page	https://www.gnu.org/software/findutils/manual/find.html	GFDL-1.3	GNU Findutils manual, one page: find, xargs, locate, worked examples. KEPT despite url_check failure: confirmed HTTP 200 over IPv6 on 2026-10-27; www.gnu.org drops this machine's IPv4 connections (timeouts) after request bursts, so throttle hard and retry later or over IPv6; a bare 'Mozilla/5.0' UA got 403, default UA works
+gnu-make	page	https://www.gnu.org/software/make/manual/make.html	GFDL-1.3	GNU Make manual, one page (rules, pattern rules, automatic variables, functions); Makefiles as pipelines. KEPT despite url_check failure: confirmed HTTP 200 over IPv6 on 2026-10-27; www.gnu.org drops this machine's IPv4 connections (timeouts) after request bursts, so throttle hard and retry later or over IPv6; a bare 'Mozilla/5.0' UA got 403, default UA works
+datamash	page	https://www.gnu.org/software/datamash/manual/datamash.html	GFDL-1.3	GNU datamash manual: column statistics, groupby, transpose on TSV. KEPT despite url_check failure: confirmed HTTP 200 over IPv6 on 2026-10-27; www.gnu.org drops this machine's IPv4 connections (timeouts) after request bursts, so throttle hard and retry later or over IPv6; a bare 'Mozilla/5.0' UA got 403, default UA works
+gnu-parallel	site	https://www.gnu.org/software/parallel/	GFDL-1.3 / CC BY-SA 4.0	GNU Parallel docs: parallel.html (man), parallel_tutorial.html, parallel_examples.html, parallel_design, env_parallel, sem, parset, parsort, sql. KEPT despite url_check failure: confirmed HTTP 200 over IPv6 on 2026-10-27; www.gnu.org drops this machine's IPv4 connections (timeouts) after request bursts, so throttle hard and retry later or over IPv6; a bare 'Mozilla/5.0' UA got 403, default UA works
+gnu-parallel	pdf	https://zenodo.org/records/1146014/files/GNU_Parallel_2018.pdf	CC BY-SA 4.0	Book 'GNU Parallel 2018' by Ole Tange (Zenodo 10.5281/zenodo.1146014), 0.5 MB
+jq	page	https://jqlang.org/manual/	CC BY 3.0 (docs), MIT (code)	jq manual, one page: filters, builtins, examples
+miller	rtd	https://miller.readthedocs.io/en/latest/	BSD-2-Clause	Miller (mlr) docs: verbs, DSL, CSV/TSV/JSON recipes, many worked examples
+csvkit	rtd	https://csvkit.readthedocs.io/en/latest/	MIT	csvkit tutorial + per-tool reference (csvcut, csvgrep, csvjoin, csvstat, csvsql, in2csv)
+csvtk	site	https://bioinf.shenwei.me/csvtk/	MIT	csvtk usage (all subcommands with examples) and tutorial; MkDocs static site
+tmux	page	https://man.openbsd.org/tmux.1	ISC	tmux(1) man page (sessions, windows, key bindings, commands) for long jobs on login nodes
+rsync	page	https://download.samba.org/pub/rsync/rsync.1	GPL-3.0-or-later	rsync(1) man page served as HTML (options, filter rules, examples)
+snakemake	rtd	https://snakemake.readthedocs.io/en/stable/	MIT	Snakemake docs: tutorial, rules, config, profiles, cluster/cloud execution, wrappers, CLI reference
+snakemake	site	https://snakemake.github.io/snakemake-plugin-catalog/	MIT	Snakemake plugin catalog: executor plugins (slurm, cluster-generic, lsf, googlebatch...) and storage plugins with full option docs
+nextflow	site	https://docs.seqera.io/nextflow/	Apache-2.0	Official Nextflow docs (www.nextflow.io/docs/latest/ redirects here); Docusaurus static HTML; incl. reference/ (directives, CLI, config, stdlib), executors, containers
+nextflow	github	https://github.com/nextflow-io/training	CC BY-NC-SA 4.0	Nextflow training (Hello Nextflow, nf-core, side quests): Markdown in docs/en/ (skip other language folders)
+nf-core	site	https://nf-co.re/docs/	MIT	nf-core docs: get_started, running (configuration, offline, reference genomes, troubleshooting), developing, specifications, nf-core-tools CLI
+nf-core	github	https://github.com/nf-core/configs	MIT	Institutional config profiles: docs/*.md + conf/*.config (Slurm/PBS/SGE executor settings for real clusters)
+nf-core-rnaseq	github	https://github.com/nf-core/rnaseq	MIT	nf-core/rnaseq (RNA-seq alignment/quantification + QC): README, docs/usage.md (parameters, samplesheet), docs/output.md, nextflow_schema.json
+nf-core-scrnaseq	github	https://github.com/nf-core/scrnaseq	MIT	nf-core/scrnaseq (single-cell RNA-seq): README, docs/usage.md (parameters, samplesheet), docs/output.md, nextflow_schema.json
+nf-core-methylseq	github	https://github.com/nf-core/methylseq	MIT	nf-core/methylseq (bisulfite/EM-seq methylation): README, docs/usage.md (parameters, samplesheet), docs/output.md, nextflow_schema.json
+nf-core-atacseq	github	https://github.com/nf-core/atacseq	MIT	nf-core/atacseq (ATAC-seq): README, docs/usage.md (parameters, samplesheet), docs/output.md, nextflow_schema.json
+nf-core-chipseq	github	https://github.com/nf-core/chipseq	MIT	nf-core/chipseq (ChIP-seq): README, docs/usage.md (parameters, samplesheet), docs/output.md, nextflow_schema.json
+nf-core-cutandrun	github	https://github.com/nf-core/cutandrun	MIT	nf-core/cutandrun (CUT&RUN / CUT&Tag): README, docs/usage.md (parameters, samplesheet), docs/output.md, nextflow_schema.json
+nf-core-smrnaseq	github	https://github.com/nf-core/smrnaseq	MIT	nf-core/smrnaseq (small RNA-seq): README, docs/usage.md (parameters, samplesheet), docs/output.md, nextflow_schema.json
+nf-core-rnafusion	github	https://github.com/nf-core/rnafusion	MIT	nf-core/rnafusion (RNA fusion detection): README, docs/usage.md (parameters, samplesheet), docs/output.md, nextflow_schema.json
+nf-core-raredisease	github	https://github.com/nf-core/raredisease	MIT	nf-core/raredisease (rare-disease germline variant calling and ranking): README, docs/usage.md (parameters, samplesheet), docs/output.md, nextflow_schema.json
+nf-core-phaseimpute	github	https://github.com/nf-core/phaseimpute	MIT	nf-core/phaseimpute (phasing and genotype imputation): README, docs/usage.md (parameters, samplesheet), docs/output.md, nextflow_schema.json
+nf-core-ampliseq	github	https://github.com/nf-core/ampliseq	MIT	nf-core/ampliseq (amplicon (16S/ITS) sequencing): README, docs/usage.md (parameters, samplesheet), docs/output.md, nextflow_schema.json
+nf-core-mag	github	https://github.com/nf-core/mag	MIT	nf-core/mag (metagenome assembly and binning): README, docs/usage.md (parameters, samplesheet), docs/output.md, nextflow_schema.json
+nf-core-taxprofiler	github	https://github.com/nf-core/taxprofiler	MIT	nf-core/taxprofiler (metagenomic taxonomic profiling): README, docs/usage.md (parameters, samplesheet), docs/output.md, nextflow_schema.json
+nf-core-viralrecon	github	https://github.com/nf-core/viralrecon	MIT	nf-core/viralrecon (viral consensus/variant calling): README, docs/usage.md (parameters, samplesheet), docs/output.md, nextflow_schema.json
+nf-core-fetchngs	github	https://github.com/nf-core/fetchngs	MIT	nf-core/fetchngs (download FASTQ + metadata from SRA/ENA/DDBJ/GEO): README, docs/usage.md (parameters, samplesheet), docs/output.md, nextflow_schema.json
+nf-core-differentialabundance	github	https://github.com/nf-core/differentialabundance	MIT	nf-core/differentialabundance (differential expression/abundance reports): README, docs/usage.md (parameters, samplesheet), docs/output.md, nextflow_schema.json
+wdl	github	https://github.com/openwdl/wdl	BSD-3-Clause	WDL specification: SPEC.md on default branch wdl-1.3 (current); wdl-2.0 branch = next major version
+wdl	site	https://openwdl.org/docs/	BSD-3-Clause	OpenWDL docs: getting started, language guide, design patterns, production guide, stdlib (docs.openwdl.org redirects here; old openwdl/docs repo archived 2026-08)
+cromwell	rtd	https://cromwell.readthedocs.io/en/stable/	BSD-3-Clause	Cromwell (WDL engine) docs: tutorials, backends incl. SLURM/SGE/LSF HPC configs, call caching
+miniwdl	rtd	https://miniwdl.readthedocs.io/en/latest/	MIT	miniwdl (WDL runner/linter) docs: getting started, runner config, Python API
+cwl	github	https://github.com/common-workflow-language/user_guide	CC BY 4.0	Common Workflow Language user guide: Markdown topics in src/ with example .cwl files
+apptainer	site	https://apptainer.org/docs/user/latest/	BSD-3-Clause	Apptainer user guide: build/run/exec/shell, definition files, bind mounts, GPU, MPI, OCI images
+singularity	site	https://docs.sylabs.io/guides/latest/user-guide/	BSD-3-Clause	SingularityCE user guide (Sylabs fork, still common on clusters)
+docker	github	https://github.com/docker/docs	Apache-2.0	Docker docs (Hugo): Markdown in content/ (manuals: engine, build, compose; reference: CLI, Dockerfile; guides); skip content/includes and data/ yaml
+conda	site	https://docs.conda.io/projects/conda/en/latest/	BSD-3-Clause	conda docs: getting started, user guide (environments, channels, config), command reference (conda.readthedocs.io is 404, so crawl this prefix)
+mamba	rtd	https://mamba.readthedocs.io/en/latest/	BSD-3-Clause	mamba and micromamba docs: installation, user guide, micromamba usage, configuration
+pixi	github	https://github.com/prefix-dev/pixi	BSD-3-Clause	pixi (conda-ecosystem project/env manager) docs: Markdown in docs/ (source of pixi.sh)
+uv	github	https://github.com/astral-sh/uv	MIT OR Apache-2.0	uv (Python package/project manager) docs: Markdown in docs/ (source of docs.astral.sh/uv)
+renv	site	https://rstudio.github.io/renv/	MIT	renv (R project environments) pkgdown site: reference + articles
+lmod	rtd	https://lmod.readthedocs.io/en/latest/	MIT	Lmod docs: module commands for users, modulefile writing (Lua/Tcl), admin
+environment-modules	rtd	https://modules.readthedocs.io/en/latest/	GPL-2.0-or-later	Environment Modules (Tcl modules) docs: module(1), modulefile(5), cookbook
+spack	rtd	https://spack.readthedocs.io/en/latest/	Apache-2.0 OR MIT	Spack package manager docs: basic usage, environments, packaging guide
+easybuild	site	https://docs.easybuild.io/	GPL-2.0	EasyBuild docs: easyconfigs, toolchains, module naming; MkDocs static site
+python-docx	rtd	https://python-docx.readthedocs.io/en/latest/	MIT	python-docx user guide + API (documents, paragraphs, runs, tables, styles, sections, headers)
+docxtpl	rtd	https://docxtpl.readthedocs.io/en/latest/	LGPL-2.1	docxtpl (Jinja2 templates in .docx): tags, RichText, InlineImage, subdocs, tables
+docxtpl	github	https://github.com/elapouya/python-docx-template	LGPL-2.1	Worked examples: tests/*.py with matching templates in tests/templates/ (one per feature)
+openpyxl	rtd	https://openpyxl.readthedocs.io/en/stable/	MIT	openpyxl tutorial + guides (styles, charts, formulas, conditional formatting, pandas) + API
+xlsxwriter	site	https://xlsxwriter.readthedocs.io/	BSD-2-Clause	XlsxWriter docs (single-version RTD root; /en/latest/ is 404): workbook/worksheet/format/chart API, tutorials, pandas, example list
+xlsxwriter	github	https://github.com/jmcnamara/XlsxWriter	BSD-2-Clause	examples/ folder: ~200 runnable example scripts (charts, formats, tables, data validation)
+python-pptx	rtd	https://python-pptx.readthedocs.io/en/latest/	MIT	python-pptx user guide + API (slides, shapes, tables, charts, placeholders)
+jinja	site	https://jinja.palletsprojects.com/en/stable/	BSD-3-Clause	Jinja template designer docs + API (the template syntax docxtpl uses)
+officer	site	https://ardata-fr.github.io/officeverse/	unknown	officeverse book (David Gohel, updated 2026-08): officer for Word/PowerPoint/RTF/Excel, officedown, flextable, rvg, mschart
+officer	site	https://davidgohel.github.io/officer/	MIT	officer pkgdown site: function reference + articles
+flextable	site	https://ardata-fr.github.io/flextable-book/	unknown	Using the flextable R package (book): table design, formatting, layout, Word/PowerPoint/HTML/PDF output
+flextable	site	https://davidgohel.github.io/flextable/	GPL-3	flextable pkgdown site: function reference + articles
+openxlsx2	site	https://janmarvin.github.io/openxlsx2/	MIT	openxlsx2 pkgdown site: reference + vignettes (basics, styling, charts, formulas, conditional formatting)
+writexl	cran	https://cran.r-project.org/package=writexl	BSD-2-Clause	writexl reference manual (write_xlsx); small package
+readxl	site	https://readxl.tidyverse.org/	MIT	readxl pkgdown site: reference + articles (sheet geometry, cell/column types, multiple sheets)
+gtsummary	site	https://www.danieldsjoberg.com/gtsummary/	MIT	gtsummary pkgdown site: tbl_summary/tbl_regression tutorials, gallery, reference
+gt	site	https://gt.rstudio.com/	MIT	gt (R display tables) pkgdown site: reference + articles
+great-tables	site	https://posit-dev.github.io/great-tables/	MIT	Great Tables (Python port of gt): get-started guide, examples, API reference
+kableextra	site	https://haozhu233.github.io/kableExtra/	MIT	kableExtra: HTML and LaTeX/PDF table vignettes + reference
+knitr	page	https://yihui.org/knitr/options/	GPL-2.0-or-later	knitr chunk options reference (one page)
+rmarkdown	site	https://pkg.yihui.org/rmarkdown-book/	CC BY-NC-SA 4.0	R Markdown: The Definitive Guide (bookdown.org/yihui/rmarkdown/ redirects here)
+rmarkdown	site	https://pkg.yihui.org/rmarkdown-cookbook/	CC BY-NC-SA 4.0	R Markdown Cookbook: short task-oriented recipes (bookdown.org/yihui/rmarkdown-cookbook/ redirects here)
+quarto	github	https://github.com/quarto-dev/quarto-web	MIT (Quarto)	Quarto docs: .qmd sources in docs/ (get-started, guide, authoring, computations, output-formats incl. docx/typst, reference); quarto.org/docs/ has no index page (404), so use the repo
+pandoc	page	https://pandoc.org/MANUAL.html	GPL-2.0-or-later	Pandoc User's Guide, one page: options, Markdown extensions, templates, reference.docx, citations
+pandoc	page	https://pandoc.org/lua-filters.html	GPL-2.0-or-later	Pandoc Lua filters guide + Lua API reference
+pandas	site	https://pandas.pydata.org/docs/user_guide/	BSD-3-Clause	pandas User Guide (10 minutes, IO incl. Excel, groupby, reshaping, merging, time series, visualization)
+pandas	site	https://pandas.pydata.org/docs/getting_started/	BSD-3-Clause	Getting started: intro tutorials + comparisons with R, SQL, spreadsheets, Stata, SAS
+polars	site	https://docs.pola.rs/user-guide/	MIT	Polars user guide: expressions, lazy API, joins, IO, SQL, migration from pandas
+numpy	site	https://numpy.org/doc/stable/user/	BSD-3-Clause	NumPy user guide: absolute beginners, fundamentals (indexing, broadcasting, dtypes), how-tos
+pyarrow	site	https://arrow.apache.org/docs/python/	Apache-2.0	PyArrow docs: Parquet/Feather/CSV IO, datasets, compute, pandas interop
+data-table	site	https://rdatatable.gitlab.io/data.table/	MPL-2.0	R data.table pkgdown site: reference + vignettes (intro, reference semantics, keys, joins, reshape, .SD, fread/fwrite)
+dplyr	site	https://dplyr.tidyverse.org/	MIT	dplyr pkgdown site: reference + articles (introduction, grouping, two-table verbs, colwise, rowwise)
+tidyr	site	https://tidyr.tidyverse.org/	MIT	tidyr pkgdown site: pivoting, rectangling, nesting, reference
+readr	site	https://readr.tidyverse.org/	MIT	readr pkgdown site: read_csv/read_tsv, column types, locales
+r4ds	site	https://r4ds.hadley.nz/	CC BY-NC-ND 3.0 US	R for Data Science (2e) book: transform, tidy, import, visualize, program, communicate with Quarto
+statsmodels	site	https://www.statsmodels.org/stable/	BSD-3-Clause	statsmodels docs: user guide, formula API, regression/GLM/mixed models, examples notebooks, API reference
+scipy-stats	site	https://docs.scipy.org/doc/scipy/tutorial/stats.html	BSD-3-Clause	SciPy statistics tutorial incl. tutorial/stats/ subpages (distributions, hypothesis tests, resampling)
+scipy-stats	site	https://docs.scipy.org/doc/scipy/reference/stats.html	BSD-3-Clause	scipy.stats API reference; follow only reference/generated/scipy.stats.* pages (the /reference/ prefix also holds all other SciPy modules)
+duckdb	site	https://duckdb.org/docs/stable/	MIT	DuckDB docs (stable): SQL reference, CSV/Parquet/JSON import, clients (Python, R, CLI), guides
+ggplot2	site	https://ggplot2.tidyverse.org/	MIT	ggplot2 pkgdown site: full reference with examples + articles
+ggplot2	site	https://ggplot2-book.org/	unknown	ggplot2: Elegant Graphics for Data Analysis (3e), Quarto book (sources: github.com/hadley/ggplot2-book)
+svglite	site	https://svglite.r-lib.org/	GPL-2.0-or-later	svglite pkgdown site: reference + articles (fonts, scaling)
+patchwork	site	https://patchwork.data-imaginist.com/	MIT	patchwork pkgdown site: guides (assembly, layout, annotation) + reference
+cowplot	site	https://wilkelab.org/cowplot/	GPL-2	cowplot pkgdown site: plot_grid, themes, annotations vignettes
+ggrepel	site	https://ggrepel.slowkow.com/	GPL-3	ggrepel pkgdown site: non-overlapping labels, examples article
+complexheatmap	site	https://jokergoo.github.io/ComplexHeatmap-reference/book/	MIT	ComplexHeatmap Complete Reference (bookdown): heatmaps, annotations, legends, oncoPrint, UpSet
+matplotlib	site	https://matplotlib.org/stable/users/index.html	Matplotlib License (PSF-based)	Matplotlib user guide (/stable/users/: quick start, figures/axes, artists, colors, text, animations)
+matplotlib	site	https://matplotlib.org/stable/tutorials/index.html	Matplotlib License (PSF-based)	Matplotlib tutorials (/stable/tutorials/: pyplot, images, lifecycle, artists)
+matplotlib	site	https://matplotlib.org/stable/gallery/index.html	Matplotlib License (PSF-based)	Matplotlib example gallery (/stable/gallery/): hundreds of worked plotting scripts
+seaborn	site	https://seaborn.pydata.org/	BSD-3-Clause	seaborn docs: tutorial (tutorial.html + tutorial/*), objects interface, API reference, example gallery
+plotnine	site	https://plotnine.org/	MIT	plotnine (ggplot grammar for Python): guide, reference with examples, gallery; Quarto static site
+plotly	github	https://github.com/plotly/plotly.py	MIT	Plotly Python docs: Markdown tutorials in doc/python/ (source of plotly.com/python)
+altair	site	https://altair-viz.github.io/	BSD-3-Clause	Vega-Altair docs: user guide (encodings, marks, transforms, interactivity), gallery, API
+bokeh	site	https://docs.bokeh.org/en/latest/	BSD-3-Clause	Bokeh docs: user guide, gallery, reference
+blender-python-api	site	https://docs.blender.org/api/current/	GPL-2.0-or-later (Blender); docs (c) Blender Authors	Blender Python API reference (bpy, bmesh, mathutils, gpu; quickstart and best-practice pages) for Blender 5.2; full HTML zip: https://docs.blender.org/api/current/blender_python_reference_5_2.zip (~100 MB)
+blender-manual	site	https://docs.blender.org/manual/en/latest/modeling/	CC BY-SA 4.0	Blender manual: modeling (meshes, curves, surfaces), modifiers/ and geometry_nodes/ (all node pages); whole manual as HTML zip: https://docs.blender.org/manual/en/latest/blender_manual_html.zip (~360 MB)
+blender-manual	site	https://docs.blender.org/manual/en/latest/advanced/	CC BY-SA 4.0	Blender manual: advanced (command-line arguments for headless rendering, scripting, app templates, extensions)
+blender-manual	site	https://docs.blender.org/manual/en/latest/render/	CC BY-SA 4.0	Blender manual: rendering (Cycles, EEVEE, shader nodes, materials, color management)
+gltf-blender-io	github	https://github.com/KhronosGroup/glTF-Blender-IO	Apache-2.0	Blender glTF 2.0 importer/exporter: manual in docs/ (export options, materials, animation)
+molecular-nodes	site	https://bradyajohnston.github.io/MolecularNodes/	GPL-3.0	Molecular Nodes (Blender add-on for PDB/mmCIF/MD structures): tutorials, node reference, Python API, examples; Quarto site (sources: github.com/BradyAJohnston/MolecularNodes docs/)
+trimesh	site	https://trimesh.org/	MIT	trimesh docs: examples, API reference (loading, repair, booleans, ray tests, export)
+trimesh	github	https://github.com/mikedh/trimesh	MIT	examples/ notebooks and scripts
+open3d	site	https://www.open3d.org/docs/release/	MIT	Open3D docs: tutorials (geometry, pipelines/registration, reconstruction, visualization) + Python API
+pytorch3d	github	https://github.com/facebookresearch/pytorch3d	BSD-3-Clause	PyTorch3D: docs/notes/*.md (meshes, renderer, batching, cameras) and docs/tutorials/*.ipynb
+pytorch3d	rtd	https://pytorch3d.readthedocs.io/en/latest/	BSD-3-Clause	PyTorch3D API reference (rendered docstrings)
+kaolin	rtd	https://kaolin.readthedocs.io/en/latest/	Apache-2.0	NVIDIA Kaolin (3D deep learning) docs: tutorials + API
+pymeshlab	rtd	https://pymeshlab.readthedocs.io/en/latest/	GPL-3.0	PyMeshLab docs: tutorials + full filter list with parameters
+libigl	site	https://libigl.github.io/tutorial/	MPL-2.0	libigl C++ tutorial (chapters with worked examples: discrete geometry, deformation, parametrization, remeshing)
+libigl	site	https://libigl.github.io/libigl-python-bindings/	MPL-2.0	libigl Python bindings: install + API reference
+pyvista	site	https://docs.pyvista.org/	MIT	PyVista docs: user guide, examples gallery, API reference
+vtk	site	https://docs.vtk.org/en/latest/	BSD-3-Clause	VTK documentation: getting started, design, file formats, Python/C++ usage
+vtk	site	https://examples.vtk.org/site/	BSD-3-Clause	VTK examples (Python, C++, Java, JS) with source code
+vedo	github	https://github.com/marcomusy/vedo	MIT	vedo (VTK-based 3D analysis/plotting): README + examples/ (hundreds of scripts)
+polyscope	site	https://polyscope.run/py/	MIT	Polyscope Python docs: meshes, point clouds, volume grids, quantities, screenshots
+meshio	github	https://github.com/nschloe/meshio	MIT	meshio README: supported mesh formats, Python API, CLI (convert, info)
+manifold	github	https://github.com/elalish/manifold	Apache-2.0	Manifold (robust mesh booleans, used by OpenSCAD/Blender): README, docs, bindings/python examples
+mitsuba	rtd	https://mitsuba.readthedocs.io/en/stable/	BSD-3-Clause	Mitsuba 3 renderer docs: tutorials, scene format, plugin reference, Python API
+gmsh	page	https://gmsh.info/doc/texinfo/gmsh.html	GPL-2.0-or-later	Gmsh reference manual, one page (.geo scripting, Python API, meshing options)
+threejs	github	https://github.com/mrdoob/three.js	MIT	three.js: docs/pages/*.html.md (API docs as Markdown), manual/pages/*.html, examples/*.html
+threejs	site	https://threejs.org/manual/pages/creating-a-scene.html	MIT	three.js manual pages (static HTML under /manual/pages/; page list in https://threejs.org/manual/list.json); threejs.org/docs/ is JS-rendered, use the repo row
+react-three-fiber	github	https://github.com/pmndrs/react-three-fiber	MIT	React Three Fiber docs: Markdown in docs/ (getting started, API, tutorials)
+babylonjs	github	https://github.com/BabylonJS/Documentation	Apache-2.0	Babylon.js docs: Markdown in content/ (source of doc.babylonjs.com, a JS app)
+gltf	page	https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html	Khronos spec copyright (repo CC BY 4.0 / Apache-2.0)	glTF 2.0 specification, one page (asset structure, accessors, materials, animation, GLB)
+gltf	github	https://github.com/KhronosGroup/glTF	CC BY 4.0 / Apache-2.0	glTF repo: extensions/2.0/ READMEs (KHR_materials_*, KHR_texture_transform, KHR_draco_mesh_compression, ...)
+gltf	github	https://github.com/KhronosGroup/glTF-Tutorials	CC BY 4.0	glTF tutorial (gltfTutorial/ Markdown chapters with minimal example files)
+openusd	github	https://github.com/PixarAnimationStudios/OpenUSD	TOST-1.0 (modified Apache-2.0)	OpenUSD docs/ (rst/md: tutorials tut_*.rst, user_guides/, glossary, spec, USDZ, schemas); default branch dev; ignore source code
+openusd	github	https://github.com/NVIDIA-Omniverse/OpenUSD-Code-Samples	Apache-2.0	OpenUSD code samples: Python/C++/USDA snippets with Markdown write-ups under source/
+openscad	page	https://en.wikibooks.org/wiki/OpenSCAD_User_Manual/Print_version	CC BY-SA 4.0	OpenSCAD User Manual, Wikibooks print version (whole manual on one page, ~680 KB); do not crawl the /wiki/ prefix (all of Wikibooks)
+openscad	page	https://openscad.org/cheatsheet/	unknown	OpenSCAD language cheat sheet (syntax, primitives, transforms, functions)
+cadquery	rtd	https://cadquery.readthedocs.io/en/latest/	Apache-2.0	CadQuery docs: quickstart, concepts, workplanes, selectors, assemblies, examples, API
+build123d	rtd	https://build123d.readthedocs.io/en/latest/	Apache-2.0	build123d docs: tutorials, builder/algebra modes, objects/operations reference, examples
+freecad	github	https://github.com/FreeCAD/FreeCAD-documentation	CC0-1.0 (repo); wiki CC BY 3.0	FreeCAD wiki as Markdown (archived 2025-01 snapshot): wiki/*.md English pages incl. scripting (Python_scripting_tutorial, Part_scripting, Scripted_objects, FeaturePython, PySide); skip wiki/translations/ and wiki/images/
+freecad	page	https://wiki.freecad.org/Python_scripting_tutorial	CC BY 3.0	Current FreeCAD wiki page: Python scripting tutorial
+freecad	page	https://wiki.freecad.org/FreeCAD_Scripting_Basics	CC BY 3.0	Current FreeCAD wiki page: scripting basics
+freecad	page	https://wiki.freecad.org/Topological_data_scripting	CC BY 3.0	Current FreeCAD wiki page: Part/OCC topological data scripting
+freecad	page	https://wiki.freecad.org/Part_scripting	CC BY 3.0	Current FreeCAD wiki page: Part workbench scripting
+freecad	page	https://wiki.freecad.org/Sketcher_scripting	CC BY 3.0	Current FreeCAD wiki page: Sketcher scripting
+freecad	page	https://wiki.freecad.org/Scripted_objects	CC BY 3.0	Current FreeCAD wiki page: scripted (FeaturePython) objects
+freecad	page	https://wiki.freecad.org/Mesh_Scripting	CC BY 3.0	Current FreeCAD wiki page: Mesh scripting
+freecad	page	https://wiki.freecad.org/Code_snippets	CC BY 3.0	Current FreeCAD wiki page: code snippets
+pymol	site	https://pymolwiki.org/index.php/Category:Commands	GFDL-1.2	PyMOL Wiki command reference; whole wiki under /index.php/ is PyMOL usage; skip ?action= and Special: pages
+# --- visual explanation: diagrams, figures and animation as code; biology visualisation ---
+manim	github	https://github.com/ManimCommunity/manim	MIT	Manim Community: README, docs/source reST (tutorials, guides, examples.rst with scene code), example_scenes/*.py. Not the site: docs.manim.community robots.txt has 'Disallow: /' before 'Allow: /en/stable/', which Python's first-match robotparser reads as disallowed
+manimgl	github	https://github.com/3b1b/manim	MIT	ManimGL (3Blue1Brown's manim): README, docs/source reST (getting started, mobjects, animations, example scenes), example_scenes.py
+motion-canvas	site	https://motioncanvas.io/docs/	MIT	Motion Canvas docs (TypeScript, generator-based animation): quickstart, scenes, signals, flow, tweening, transitions, components, rendering; Docusaurus pages are pre-rendered
+remotion	site	https://www.remotion.dev/docs/	Remotion License (source-available; companies above a size limit need a paid licence)	Remotion docs (videos in React): fundamentals, compositions, sequences, animating properties, rendering, API; over 1,000 pages, so --max-pages 400 takes the core first
+mdn-svg	site	https://developer.mozilla.org/en-US/docs/Web/SVG/Tutorials/	CC BY-SA 2.5 (prose), CC0 (code samples)	MDN SVG tutorials incl. 'SVG from scratch' (the old /Web/SVG/Tutorial moved here in 2025): shapes, paths, fills and strokes, gradients, patterns, text, transforms, clipping, filters
+mdn-svg	site	https://developer.mozilla.org/en-US/docs/Web/SVG/Reference/Element/	CC BY-SA 2.5 (prose), CC0 (code samples)	extra: MDN SVG element reference, one page per element with examples
+mdn-canvas	site	https://developer.mozilla.org/en-US/docs/Web/API/Canvas_API/Tutorial/	CC BY-SA 2.5 (prose), CC0 (code samples)	MDN Canvas tutorial: shapes, styles and colours, text, images, transformations, compositing, basic animations, pixel manipulation
+p5js	site	https://p5js.org/reference/	LGPL-2.1 (reference text comes from the p5.js source); website code MIT	p5.js reference: about 680 entries, each with description and example sketch; raise --max-pages to 800 for all
+p5js	site	https://p5js.org/tutorials/	unknown	p5.js tutorials (about 30): get started, shapes, colour, animation, interactivity, data, WebGL/3D
+svgwrite	rtd	https://svgwrite.readthedocs.io/en/latest/	MIT	svgwrite (Python SVG writer): overview, elements, attributes, examples; HTML zip offered. Project is in maintenance mode, docs complete
+drawsvg	github	https://github.com/cduck/drawsvg	MIT	drawsvg 2 (Python SVG drawing and animation, Jupyter): long README with examples, docs/ (mkdocs), examples/
+cairosvg	page	https://cairosvg.org/documentation/	LGPL-3.0	CairoSVG docs, one page: SVG to PNG/PDF/PS conversion, command line and Python API, options
+tikz-pgf	pdf	https://mirrors.ctan.org/graphics/pgf/base/doc/generic/pgf/pgfmanual.pdf	LPPL-1.3c / GPL-2.0	PGF/TikZ manual from CTAN (about 1,300 pages, 9.5 MB): tutorials, TikZ syntax, libraries, graph drawing, data visualization, math engine
+pgfplots	pdf	https://mirrors.ctan.org/graphics/pgf/contrib/pgfplots/doc/pgfplots.pdf	GPL-3.0	pgfplots manual from CTAN (about 570 pages, 12.9 MB): 2D/3D plots in TikZ, axes, legends, colormaps, tables
+chemfig	pdf	https://mirrors.ctan.org/macros/generic/chemfig/chemfig-en.pdf	LPPL-1.3c	chemfig manual (English) from CTAN: molecules (bonds, rings, Lewis structures) and reaction schemes in LaTeX
+graphviz	site	https://graphviz.org/	EPL-1.0 (Graphviz); docs licence not stated	graphviz.org from the root: the doc folders (/doc/info/, /docs/attrs/, /Gallery/) have no index pages, so a narrower start finds nothing. DOT language, one page per attribute and attribute type, layouts, output formats, shapes, arrows, colours, gallery with DOT source; about 450 pages, raise --max-pages to 600
+graphviz	pdf	https://graphviz.org/pdf/dotguide.pdf	EPL-1.0	'Drawing graphs with dot' user guide (Gansner, Koutsofios, North)
+graphviz-python	rtd	https://graphviz.readthedocs.io/en/stable/	MIT	graphviz Python package: build DOT from Python, render, Jupyter display, examples; no HTML zip, crawled
+mermaid	github	https://github.com/mermaid-js/mermaid/tree/develop/packages/mermaid/src/docs	MIT	Mermaid docs Markdown (source of mermaid.js.org): flowchart, sequence, class, state, ER, gantt, mindmap, timeline, sankey, block, architecture syntax, configuration
+plantuml	pdf	https://pdf.plantuml.net/PlantUML_Language_Reference_Guide_en.pdf	GPL-3.0 (PlantUML); guide licence not stated	PlantUML Language Reference Guide (English, Feb 2025, 10 MB): every diagram type, styling, skinparams
+d2	github	https://github.com/d2lang/d2-docs	BSD-3-Clause	D2 docs Markdown (source of d2lang.com; repo moved from terrastruct/d2-docs): tour (shapes, connections, containers, styles, layouts, grid and sequence diagrams), examples
+sbgn	pdf	https://sbgn.github.io/downloads/specifications/pd_level1_version2_1.pdf	CC BY 4.0	SBGN Process Description Level 1 Version 2.1 (current PD spec; J Integr Bioinform 2026, doi 10.1515/jib-2025-0018), 88 pages
+sbgn	pdf	https://raw.githubusercontent.com/combine-org/combine-specifications/main/specifications/files/sbgn.er.level-1.version-2.pdf	unknown	SBGN Entity Relationship Level 1 Version 2 (current ER spec; JIB 2015, doi 10.2390/biecoll-jib-2015-264), COMBINE specifications copy linked from sbgn.github.io
+sbgn	pdf	https://raw.githubusercontent.com/combine-org/combine-specifications/main/specifications/files/sbgn.af.level-1.version-1.2.pdf	unknown	SBGN Activity Flow Level 1 Version 1.2 (current AF spec; JIB 2015, doi 10.2390/biecoll-jib-2015-265), COMBINE specifications copy
+sbgn	pdf	https://sbgn.github.io/downloads/usermanual/sbgn_PD-level1-user-public.pdf	unknown	SBGN PD Level 1 user manual, for people drawing maps rather than software developers
+escher	rtd	https://escher.readthedocs.io/en/latest/	MIT	Escher metabolic pathway maps: getting started, building maps, Python/Jupyter and JavaScript APIs, map file format; no HTML zip, crawled
+d3	github	https://github.com/d3/d3	ISC	D3 docs Markdown (docs/, source of d3js.org): selections, scales, shapes, axes, transitions, force, hierarchy, chord, geo, zoom
+vega-lite	site	https://vega.github.io/vega-lite/docs/	BSD-3-Clause	Vega-Lite docs: marks, encoding, transforms, view composition, parameters and selections, scales, config. Embedded example specs are loaded by JavaScript, so pages keep the prose and inline JSON only
+vega-lite	site	https://vega.github.io/vega-lite/tutorials/getting_started.html	BSD-3-Clause	Vega-Lite tutorials (the folder has no index page, so the crawl starts at the first tutorial, which links the rest under /tutorials/): getting started, exploring data, figures, streaming
+observable-plot	github	https://github.com/observablehq/plot	ISC	Observable Plot docs Markdown (docs/, source of observablehq.com/plot): marks, scales, transforms, interactions, facets
+plotly-r	site	https://plotly-r.com/	CC BY-NC-ND 3.0 US	Carson Sievert, 'Interactive web-based data visualization with R, plotly, and shiny' (online book)
+plotly-r	github	https://github.com/plotly/plotly.r-docs	unknown	R Markdown sources of plotly.com/r and plotly.com/ggplot2: about 240 chart-type pages with code
+circlize	site	https://jokergoo.github.io/circlize_book/book/	MIT (circlize); book licence not stated	Zuguang Gu, 'Circular Visualization in R' (online book): circular layout, tracks, links, genomic circos plots, chord diagrams
+circlize	cran	https://cran.r-project.org/package=circlize	MIT	circlize reference manual and vignettes
+pycirclize	site	https://moshi4.github.io/pyCirclize/	MIT	pyCirclize (Circos plots in Python): getting started, chord diagrams, genome and phylogenetic tracks, API
+gviz	bioc	https://bioconductor.org/packages/Gviz	Artistic-2.0	Gviz genome track plots (GeneRegionTrack, DataTrack, AlignmentsTrack ...): vignette and reference manual
+karyoploter	bioc	https://bioconductor.org/packages/karyoploteR	Artistic-2.0	karyoploteR whole-genome and karyotype plots: vignette and reference manual
+karyoploter	site	https://bernatgel.github.io/karyoploter_tutorial/	CC BY 4.0	karyoploteR tutorial and examples (Bernat Gel): one page per plotting function, with code
+dna-features-viewer	github	https://github.com/Edinburgh-Genome-Foundry/DnaFeaturesViewer	MIT	DNA Features Viewer (Python gene, plasmid and annotation maps from GenBank): README with examples, docs/ reST, examples/*.py
+logomaker	rtd	https://logomaker.readthedocs.io/en/latest/	MIT	logomaker (Python sequence logos): tutorial, examples, API; no HTML zip, crawled
+ggseqlogo	cran	https://cran.r-project.org/package=ggseqlogo	LGPL-2 | LGPL-2.1 | LGPL-3	ggseqlogo (sequence logos in ggplot2): vignette and reference manual
+gggenes	site	https://wilkox.org/gggenes/	GPL-2.0	extra: gggenes (gene arrow maps in ggplot2 for operons and gene clusters): introduction and reference
+upsetr	cran	https://cran.r-project.org/package=UpSetR	MIT	UpSetR set-intersection plots: vignettes (basic usage, queries, attribute plots, set metadata) and reference manual
+complexupset	site	https://krassowski.github.io/complex-upset/	MIT	extra: ComplexUpset (UpSet plots built on ggplot2): docs and worked examples
+upsetplot	rtd	https://upsetplot.readthedocs.io/en/stable/	BSD-3-Clause	extra: UpSetPlot (UpSet plots in Python): docs and example gallery; no HTML zip, crawled
+gganimate	site	https://gganimate.com/	MIT	extra: gganimate (animated ggplot2 figures: transitions, views, shadows, easing) and its reference
+cytoscape	rtd	https://manual.cytoscape.org/en/stable/	LGPL-2.1	Cytoscape desktop user manual: networks, styles (visual mapping), layouts, apps, automation; no HTML zip, crawled
+rcy3	bioc	https://bioconductor.org/packages/RCy3	MIT	RCy3: drive Cytoscape from R (vignettes on styles, importing data, network analysis, figures)
+py4cytoscape	rtd	https://py4cytoscape.readthedocs.io/en/latest/	MIT	py4cytoscape: drive Cytoscape from Python; tutorials and function reference; no HTML zip, crawled
+cytoscape-js	page	https://js.cytoscape.org/	MIT	Cytoscape.js full documentation, one page (0.9 MB): graph model, selectors, style, layouts, animation, events, extensions
+networkx	page	https://networkx.org/documentation/stable/reference/drawing.html	BSD-3-Clause	NetworkX drawing reference: Matplotlib (nx_pylab), Graphviz (AGraph, pydot), layouts, LaTeX/TikZ export
+networkx	page	https://networkx.org/documentation/stable/reference/generated/networkx.drawing.nx_pylab.display.html	BSD-3-Clause	nx.display, the newer drawing interface: all parameters
+networkx	page	https://networkx.org/documentation/stable/reference/generated/networkx.drawing.nx_pylab.draw_networkx.html	BSD-3-Clause	nx.draw_networkx: all parameters
+networkx	site	https://networkx.org/documentation/stable/auto_examples/drawing/	BSD-3-Clause	NetworkX drawing gallery: example scripts with code (labels and colours, colormaps, multipartite and circular layouts, 3D, custom node icons)
+3dmol	site	https://3dmol.csb.pitt.edu/doc/	BSD-3-Clause	3Dmol.js docs (JSDoc): GLViewer API (addModel, setStyle, addSurface, addLabel, animate ...), style and selection specs, tutorials
+py3dmol	page	https://raw.githubusercontent.com/3dmol/3Dmol.js/master/py3Dmol/README.md	BSD-3-Clause	py3Dmol README (Jupyter wrapper); its methods mirror the 3Dmol.js GLViewer API in the row above. The 3Dmol.js repository is about 1 GB, so not fetched as a github row
+molstar	site	https://molstar.org/docs/v5/	MIT	Mol* developer docs v5 (/docs/ redirects here): plugin instance, data and state, selections, transforms, file formats, extensions
+molstar	site	https://molstar.org/viewer-docs/	MIT	Mol* Viewer user manual: interface, selections, display, measurements, images and movies, cheat sheet
+molviewspec	site	https://molstar.org/mol-view-spec-docs/	MIT	extra: MolViewSpec, Mol* scenes described from Python or JSON (builder API, examples)
+ngl	page	https://nglviewer.org/ngl/api/manual/index.html	MIT	NGL Viewer manual (one page): usage, colouring, representations, selection language, custom shapes, file formats, interaction controls, scripting
+nglview	site	https://nglviewer.org/nglview/latest/	MIT	nglview (NGL widget in Jupyter): installation, usage, API
+shiny	site	https://shiny.posit.co/r/articles/	GPL-3.0 (R shiny); site text licence not stated	Shiny for R articles: build (reactivity, UI, layouts, modules, dynamic UI), improve, share. /r/getstarted/ is a JavaScript redirect, so it is left out
+shiny	site	https://mastering-shiny.org/	CC BY-NC-ND 4.0 (text), CC0 (code)	Hadley Wickham, 'Mastering Shiny' (online book)
+shiny-py	site	https://shiny.posit.co/py/docs/overview.html	MIT (py-shiny); site text licence not stated	Shiny for Python docs under /py/docs/: reactivity, UI, modules, Express and Core syntax
+shiny-py	site	https://shiny.posit.co/py/components/	MIT (py-shiny); site text licence not stated	Shiny for Python component gallery: inputs and outputs, each with code
+streamlit	github	https://github.com/streamlit/docs	Apache-2.0	Streamlit docs Markdown (content/, source of docs.streamlit.io): get started, concepts, API reference, tutorials, knowledge base; archive about 98 MB
+fundamentals-dataviz	site	https://clauswilke.com/dataviz/	CC BY-NC-ND 4.0	Claus O. Wilke, 'Fundamentals of Data Visualization' (online book): amounts, distributions, proportions, colour, axes, redundant coding, compound figures, image formats
+ten-simple-rules-figures	page	https://journals.plos.org/ploscompbiol/article?id=10.1371/journal.pcbi.1003833	CC BY 4.0	Rougier, Droettboom and Bourne (2014) 'Ten Simple Rules for Better Figures', PLOS Comput Biol; robots.txt asks for Crawl-delay 30
+ten-simple-rules-figures	page	https://journals.plos.org/ploscompbiol/article?id=10.1371/journal.pcbi.1008259	CC BY 4.0	extra: Hattab, Rhyne and Heider (2020) 'Ten simple rules to colorize biological data visualization', PLOS Comput Biol
+scientific-visualization-book	pdf	https://inria.hal.science/hal-03427242/document	CC BY-NC-SA 4.0 (book), BSD-2-Clause (code)	extra: Nicolas Rougier, 'Scientific Visualization: Python + Matplotlib' (2021, open access on HAL, 103 MB PDF)
+# --- causal inference: packages and free textbooks ---
+dowhy	site	https://www.pywhy.org/dowhy/v0.14/	MIT	DoWhy 0.14 (current release) docs: model/identify/estimate/refute, graphical causal models (GCM), rendered example notebooks, API; versioned path, move it on a new release
+econml	site	https://www.pywhy.org/EconML/	MIT	EconML docs: DML, DR learners, causal/orthogonal forests, meta-learners, OrthoIV/DRIV, inference, interpretability, API reference
+econml	github	https://github.com/py-why/EconML/tree/main/notebooks	MIT	EconML example notebooks (DML, DRIV, causal forests, case studies); notebooks over 2 MB are skipped
+causalml	rtd	https://causalml.readthedocs.io/en/latest/	Apache-2.0	Uber CausalML: meta-learners (S/T/X/R/DR), uplift trees and forests, propensity, sensitivity, examples; htmlzip offered
+doubleml	site	https://docs.doubleml.org/stable/	BSD-3-Clause	DoubleML user guide (PLR, PLIV, IRM, IIVM, DiD, RDD, sensitivity), Python and R examples, API (stable)
+doubleml	cran	https://cran.r-project.org/package=DoubleML	MIT + file LICENSE	DoubleML R package: 3 vignettes + reference manual
+causal-learn	rtd	https://causal-learn.readthedocs.io/en/latest/	MIT	causal discovery: PC, FCI, CD-NOD, GES, exact search, LiNGAM, GIN, Granger, CI tests, graph utilities
+pgmpy	site	https://pgmpy.org/	MIT	pgmpy: Bayesian networks, structure learning, causal inference (do-operator, backdoor/frontdoor adjustment), examples, API
+linearmodels	site	https://bashtage.github.io/linearmodels/iv/	NCSA	linearmodels IV docs: IV2SLS, IVLIML, IVGMM, absorbing regression, examples, formulas, reference (stable; /devel/ left out)
+linearmodels	site	https://bashtage.github.io/linearmodels/panel/	NCSA	linearmodels panel docs: PanelOLS fixed effects, between/first-difference/random effects, clustered SEs, examples
+causalpy	rtd	https://causalpy.readthedocs.io/en/stable/	Apache-2.0	PyMC Labs CausalPy: Bayesian synthetic control, DiD, regression discontinuity/kink, ITS, IV, examples
+pyfixest	site	https://pyfixest.org/	MIT	pyfixest: fixed-effects OLS/IV/Poisson, DiD and event studies (did2s, Sun-Abraham, local projections), textbook replications, reference; py-econometrics.github.io/pyfixest redirects here
+tigramite	page	https://jakobrunge.github.io/tigramite/	GPL-3.0	one-page Tigramite API docs: PCMCI/PCMCI+/LPCMCI time-series causal discovery, CI tests, causal effect estimation
+tigramite	github	https://github.com/jakobrunge/tigramite/tree/master/tutorials	GPL-3.0	Tigramite tutorial notebooks
+pygformula	rtd	https://pygformula.readthedocs.io/en/latest/	MIT	Harvard CAUSALab parametric g-formula in Python: time-varying treatments, interventions, censoring, competing events
+pysensemakr	rtd	https://pysensemakr.readthedocs.io/en/latest/	MIT	Python sensemakr: omitted-variable-bias sensitivity (robustness value, benchmarking), notebooks, API
+ananke	rtd	https://ananke.readthedocs.io/en/latest/	Apache-2.0	Ananke: causal graphs (DAG/ADMG), ID algorithm, semiparametric estimation, notebooks
+dagitty	cran	https://cran.r-project.org/package=dagitty	GPL-2	dagitty R package: adjustment sets, implied conditional independences, instruments; vignette + manual
+dagitty	pdf	https://www.dagitty.net/manual-3.x.pdf	GPL-2 (software)	DAGitty 3.x manual (web tool, 13 pp)
+dagitty	site	https://www.dagitty.net/learn/	unknown	DAGitty learning pages: d-separation, graph roles, Simpson's paradox, single-door criterion, Table 2 fallacy, cheat-sheet PDF
+ggdag	cran	https://cran.r-project.org/package=ggdag	MIT + file LICENSE	tidy DAGs in R: 3 vignettes (intro to DAGs, bias structures, ggdag usage) + manual
+pcalg	cran	https://cran.r-project.org/package=pcalg	GPL (>= 2)	PC/FCI/RFCI/GES structure learning, IDA intervention effects, adjustment criteria; vignette + manual
+bnlearn	cran	https://cran.r-project.org/package=bnlearn	GPL (>= 2)	bnlearn reference manual (no vignettes on CRAN)
+bnlearn	site	https://www.bnlearn.com/examples/	CC BY-SA	bnlearn worked examples: structure learning, fitting, interventions, cpquery, bootstrap, missing data
+bnlearn	pdf	https://www.jstatsoft.org/article/download/v035i03/394	CC BY 3.0	Scutari 2010, JSS 35(3): Learning Bayesian Networks with the bnlearn R Package
+matchit	cran	https://cran.r-project.org/package=MatchIt	GPL (>= 2)	MatchIt: 5 vignettes (matching methods, assessing balance, estimating effects, sampling weights) + manual
+weightit	cran	https://cran.r-project.org/package=WeightIt	GPL (>= 2)	WeightIt: propensity/entropy/energy/CBPS weights, MSMs; 3 vignettes + manual
+cobalt	cran	https://cran.r-project.org/package=cobalt	GPL (>= 2)	cobalt balance tables and love plots: 7 vignettes + manual
+twang	cran	https://cran.r-project.org/package=twang	GPL-3 | file LICENSE	twang GBM propensity scores (binary, multinomial, MNPS, iptw): 3 vignettes + manual
+optmatch	cran	https://cran.r-project.org/package=optmatch	MIT + file LICENSE	optimal full and pair matching: 3 vignettes + manual
+matching	cran	https://cran.r-project.org/package=Matching	GPL-3	Sekhon's Matching and GenMatch: reference manual
+matching	pdf	https://www.jstatsoft.org/article/download/v042i07/504	CC BY 3.0	Sekhon 2011, JSS 42(7): the Matching package for R
+psweight	cran	https://cran.r-project.org/package=PSweight	GPL (>= 2)	PSweight overlap/IPW/matching weights and augmented estimators: vignette + manual
+cbps	cran	https://cran.r-project.org/package=CBPS	GPL (>= 2)	covariate balancing propensity score: reference manual
+ipw	cran	https://cran.r-project.org/package=ipw	MIT + file LICENSE	ipw: inverse probability weights for marginal structural models: reference manual
+aipw	cran	https://cran.r-project.org/package=AIPW	GPL-3	AIPW doubly robust estimation with SuperLearner/tmle3 libraries: 2 vignettes + manual
+propensity	cran	https://cran.r-project.org/package=propensity	MIT + file LICENSE	r-causal propensity-score weights (ATE/ATT/ATO/ATM): vignette + manual
+halfmoon	cran	https://cran.r-project.org/package=halfmoon	MIT + file LICENSE	r-causal balance and weighting diagnostics (mirror histograms, ESS): manual
+tmle	cran	https://cran.r-project.org/package=tmle	BSD_3_clause + file LICENSE | GPL-2	tmle reference manual (no vignettes on CRAN)
+tmle	pdf	https://www.jstatsoft.org/article/download/v051i13/653	CC BY 3.0	Gruber and van der Laan 2012, JSS 51(13): tmle: An R Package for Targeted Maximum Likelihood Estimation
+tmle3	github	https://github.com/tlverse/tmle3	GPL-3	tlverse tmle3 (not on CRAN): README, vignettes, Rd manual
+sl3	github	https://github.com/tlverse/sl3	GPL-3	tlverse sl3 super learner used by tmle3: README, vignettes, Rd manual
+superlearner	github	https://github.com/ecpolley/SuperLearner	GPL-3	SuperLearner: README, Guide-to-SuperLearner vignette (missing from the CRAN page), Rd manual
+ltmle	cran	https://cran.r-project.org/package=ltmle	GPL-2	ltmle longitudinal TMLE: README + manual
+ltmle	pdf	https://www.jstatsoft.org/article/download/v081i01/1153	CC BY 3.0	Lendle et al. 2017, JSS 81(1): ltmle for longitudinal data
+lmtp	cran	https://cran.r-project.org/package=lmtp	AGPL-3	lmtp modified treatment policies: README + manual
+lmtp	site	https://www.beyondtheate.com/	unknown	Beyond the ATE workshop by the lmtp authors (Williams, Diaz): static, dynamic and modified treatment policies, survival, multivariate exposures with lmtp in R
+gformula	cran	https://cran.r-project.org/package=gfoRmula	GPL-3	gfoRmula parametric g-formula (Harvard CAUSALab): 2 vignettes + manual
+grf	site	https://grf-labs.github.io/grf/	GPL-3.0	grf pkgdown site: 12 articles (causal forests, RATE, policy learning, survival, diagnostics, transport), algorithm REFERENCE, function reference; covers the CRAN vignette and manual
+bartcause	cran	https://cran.r-project.org/package=bartCause	GPL (>= 2)	bartCause BART causal effects: reference manual
+hdm	cran	https://cran.r-project.org/package=hdm	MIT + file LICENSE	hdm double-selection lasso, high-dimensional IV and treatment effects: vignette + manual
+marginaleffects	site	https://marginaleffects.com/	GPL (>= 3) (package); book text unknown	marginaleffects site with the Model to Meaning book: G-computation, IPW, matching, causal estimands, R and Python reference
+synth	cran	https://cran.r-project.org/package=Synth	GPL (>= 2)	Synth synthetic control: reference manual (no vignettes)
+synth	pdf	https://www.jstatsoft.org/article/download/v042i13/510	CC BY 3.0	Abadie, Diamond, Hainmueller 2011, JSS 42(13): Synth: An R Package for Synthetic Control Methods
+tidysynth	cran	https://cran.r-project.org/package=tidysynth	MIT + file LICENSE	tidysynth: README walkthrough + manual
+gsynth	cran	https://cran.r-project.org/package=gsynth	MIT + file LICENSE	gsynth generalized synthetic control: reference manual
+gsynth	site	https://yiqingxu.org/packages/gsynth/	MIT	gsynth user guide (gsynth, IFE/MC, plots); 406 to browser User-Agents, 200 to the downloader's
+fect	cran	https://cran.r-project.org/package=fect	MIT + file LICENSE	fect counterfactual estimators for panel data: reference manual
+fect	site	https://yiqingxu.org/packages/fect/	MIT	fect user guide: FEct/IFE/MC, estimands, inference, HTE, sensitivity, panel tools, cheat sheet
+augsynth	github	https://github.com/ebenmichael/augsynth	MIT	augmented synthetic control (not on CRAN): README, vignettes (single and staggered adoption), Rd manual
+synthdid	github	https://github.com/synth-inference/synthdid	GPL (>= 2) | BSD_3_clause + file LICENSE	synthetic difference-in-differences (not on CRAN): README, vignettes, Rd manual
+did	cran	https://cran.r-project.org/package=did	GPL-3	Callaway and Sant'Anna did: 5 vignettes (DiD basics, multiple periods, pre-testing, extensions) + manual
+fixest	cran	https://cran.r-project.org/package=fixest	GPL-3	fixest fixed-effects estimation, IV, event studies (sunab): 5 vignettes + manual
+did2s	cran	https://cran.r-project.org/package=did2s	MIT + file LICENSE	Gardner two-stage DiD and event-study estimators: vignette + manual
+didimputation	cran	https://cran.r-project.org/package=didimputation	MIT + file LICENSE	Borusyak-Jaravel-Spiess imputation DiD: README + manual
+honestdid	github	https://github.com/asheshrambachan/HonestDiD	MIT	HonestDiD (Rambachan-Roth) parallel-trends sensitivity: README with worked examples + Rd manual (the CRAN 0.2.8 page has no vignettes)
+bacondecomp	cran	https://cran.r-project.org/package=bacondecomp	MIT + file LICENSE	Goodman-Bacon decomposition of TWFE DiD: vignette + manual
+etwfe	cran	https://cran.r-project.org/package=etwfe	MIT + file LICENSE	Wooldridge extended TWFE DiD: vignette + manual
+causalimpact	cran	https://cran.r-project.org/package=CausalImpact	Apache License 2.0 | file LICENSE	CausalImpact Bayesian structural time-series effects: vignette + manual
+rdrobust	cran	https://cran.r-project.org/package=rdrobust	GPL-3	rdrobust RD estimation, bandwidth selection, rdplot: reference manual
+rddensity	cran	https://cran.r-project.org/package=rddensity	GPL-3	rddensity manipulation (density) tests for RD: reference manual
+cattaneo-rd-book	pdf	https://rdpackages.github.io/references/Cattaneo-Idrobo-Titiunik_2020_CUP.pdf	unknown	Cattaneo, Idrobo, Titiunik: A Practical Introduction to RD Designs: Foundations (author manuscript on the rdpackages site, 117 pp; arXiv 1911.09511)
+cattaneo-rd-book	pdf	https://rdpackages.github.io/references/Cattaneo-Idrobo-Titiunik_2024_CUP.pdf	unknown	Cattaneo, Idrobo, Titiunik: A Practical Introduction to RD Designs: Extensions (author manuscript, 104 pp; arXiv 2301.08958)
+ivreg	cran	https://cran.r-project.org/package=ivreg	GPL (>= 2)	ivreg 2SLS with diagnostics: 2 vignettes + manual
+estimatr	cran	https://cran.r-project.org/package=estimatr	MIT + file LICENSE	estimatr lm_robust, iv_robust, difference_in_means, horvitz_thompson: 3 vignettes + manual
+mediation	cran	https://cran.r-project.org/package=mediation	GPL (>= 2)	mediation (Imai et al.): 2 vignettes + manual
+cmaverse	github	https://github.com/BS1125/CMAverse	GPL-3	CMAverse causal mediation suite (not on CRAN): README, vignettes, Rd manual
+medflex	cran	https://cran.r-project.org/package=medflex	GPL-2	medflex natural effect models: 2 vignettes + manual
+evalue	cran	https://cran.r-project.org/package=EValue	GPL-2	E-values for unmeasured confounding and selection bias: 5 vignettes + manual
+sensemakr	cran	https://cran.r-project.org/package=sensemakr	GPL-3	sensemakr omitted-variable-bias sensitivity (Cinelli-Hazlett): 2 vignettes + manual
+tipr	cran	https://cran.r-project.org/package=tipr	MIT + file LICENSE	tipr tipping-point sensitivity analysis (r-causal): manual
+hernan-robins-whatif	pdf	https://miguelhernan.org/s/hernanrobins_WhatIf_19aug26.pdf	all rights reserved; free download from the authors	Hernan and Robins, Causal Inference: What If, 19 Aug 2026 revision (365 pp); the hsph.harvard.edu book page now redirects to a profile, the book lives on miguelhernan.org/whatifbook and the file name changes with each revision
+hernan-robins-whatif	site	https://remlapmot.github.io/cibookex-r/	GPL-3.0	R and Stata code for What If Part II (Shi, McGrath, Palmer bookdown)
+hernan-robins-whatif	github	https://github.com/jrfiedler/causal_inference_python_code	unknown	Python notebooks for What If chapters 11-17 (linked from the book page)
+causal-mixtape	site	https://mixtape.scunning.com/	free online; all rights reserved (Yale University Press)	Cunningham, Causal Inference: The Remix (2nd ed., online work in progress): DAGs, potential outcomes, unconfoundedness, RD, IV, DiD, synthetic control with R/Stata
+causal-mixtape	site	https://mixtape-1ed.netlify.app/	free online; all rights reserved (Yale University Press)	Cunningham, Causal Inference: The Mixtape, complete 1st edition online
+the-effect	site	https://theeffectbook.net/	free online version permitted by Chapman & Hall/CRC	Huntington-Klein, The Effect: research design, causal diagrams, matching, regression, fixed effects, DiD, IV, RD, event studies
+neal-intro-causal	pdf	https://www.bradyneal.com/Introduction_to_Causal_Inference-Dec17_2020-Neal.pdf	unknown	Brady Neal, Introduction to Causal Inference course notes (Dec 2020, 132 pp)
+elements-causal-inference	pdf	https://mitp-content-server.mit.edu/books/content/sectbyfn/books_pres_0/11283/11283.pdf	CC BY-NC-ND 4.0	Peters, Janzing, Scholkopf, Elements of Causal Inference (MIT Press 2017 open access, 289 pp, 27 MB)
+tlverse-handbook	site	https://tlverse.org/tlverse-handbook/	CC BY 4.0	tlverse handbook: roadmap, super learning (sl3), TMLE (tmle3), stochastic and optimal treatment regimes, mediation
+r-causal-book	site	https://www.r-causal.org/	CC BY-NC-SA 4.0	Barrett, D'Agostino McGowan, Gerke, Causal Inference in R: DAGs, propensity scores, weighting, g-computation, sensitivity
+causal-brave-true	site	https://matheusfacure.github.io/python-causality-handbook/landing-page.html	MIT	Facure, Causal Inference for the Brave and True (Python): 25+ chapters from RCTs to DML and synthetic DiD; start page because the folder root is a meta-refresh
+causalml-book	pdf	https://causalml-book.org/chapters/CausalML_book_2022.pdf	free online distribution by the authors	Chernozhukov, Hansen, Kallus, Spindler, Syrgkanis, Applied Causal Inference Powered by ML and AI: whole book, online version 0.1.2 of 3 May 2026 (509 pp) despite the file name
+causalml-book	github	https://github.com/CausalAIBook/MetricsMLNotebooks	MIT	companion notebooks of the CausalML book (Python .ipynb kept; R .irnb is not a kept file type)
+wager-causal-book	pdf	https://web.stanford.edu/~swager/causal_inf_book.pdf	unknown	Wager, Causal Inference: A Statistical Learning Approach (author draft of 8 Sep 2026, 270 pp)
+ding-first-course	pdf	https://arxiv.org/pdf/2305.18793	CC BY 4.0	Peng Ding, A First Course in Causal Inference (arXiv, latest version)
+ml-ci-tutorial	site	https://bookdown.org/halflearned/ml-ci-tutorial/	unknown	Stanford GSB ML-based causal inference tutorial (Hadad et al.): ATE, HTE, policy evaluation and learning with grf in R
+modern-causal-inference	site	https://alejandroschuler.github.io/mci/	unknown	Schuler and van der Laan, Introduction to Modern Causal Inference: identification, efficiency theory, building efficient estimators (TMLE, one-step)
+stci	site	https://chabefer.github.io/STCI/	GPL-3.0	Chabe-Ferret, Statistical Tools for Causal Inference: RCTs, natural experiments, observational methods, power, meta-analysis
+# --- drug discovery and development: tools, APIs and public regulatory guidelines ---
+pytdc	github	https://github.com/mims-harvard/TDC	MIT	Therapeutics Data Commons (PyTDC): README, docs sources, examples and tutorial notebooks
+pytdc	rtd	https://tdc.readthedocs.io/en/main/	MIT	PyTDC API docs (no htmlzip: crawled)
+pytdc	site	https://tdcommons.ai/	unknown	tdcommons.ai: task and dataset descriptions (ADMET, DTI, clinical trial outcome), benchmark groups, data functions (splits, evaluators, oracles)
+chembl	site	https://chembl.gitbook.io/chembl-interface-documentation/	unknown	ChEMBL interface documentation (GitBook): web services (REST API), downloads, FAQs on assays, activities, targets, drugs
+chembl	github	https://github.com/chembl/chembl_webresource_client	Apache-2.0	chembl_webresource_client: official Python client for the ChEMBL REST API; README and demo notebook
+chembl	github	https://github.com/chembl/training_notebooks	unknown	ChEMBL training notebooks: REST API and webresource client examples
+chembl-structure-pipeline	github	https://github.com/chembl/ChEMBL_Structure_Pipeline	MIT	ChEMBL structure pipeline: standardiser, get_parent, checker used to curate ChEMBL molecules
+pubchempy	site	https://docs.pubchempy.org/en/latest/	MIT	PubChemPy docs: Python wrapper of PubChem PUG REST (searching, properties, identifiers, downloads); RTD on a custom domain
+pubchem	github	https://github.com/IUPAC/WFChemCookbook/tree/main/book/datasources	CC BY 4.0	IUPAC FAIR Chemistry Cookbook data-source recipes: PubChem PUG REST (three notebooks) and PUG View; stands in for the bot-blocked PubChem docs
+admet-ai	github	https://github.com/swansonk14/admet_ai	MIT	ADMET-AI: Chemprop-based ADMET prediction on TDC datasets with DrugBank reference percentiles; README and docs
+datamol	site	https://docs.datamol.io/stable/	Apache-2.0	datamol docs: RDKit-based molecule processing, standardisation, conformers, fragments, tutorials
+molfeat	site	https://molfeat-docs.datamol.io/stable/	Apache-2.0	molfeat docs: molecular featurisers (fingerprints, descriptors, pretrained embeddings), tutorials
+medchem	site	https://medchem-docs.datamol.io/stable/	Apache-2.0	medchem docs: medicinal chemistry filters, structural alerts, rules (Lilly MedChem, PAINS, NIBR), complexity, tutorials
+useful-rdkit-utils	rtd	https://useful-rdkit-utils.readthedocs.io/en/latest/	MIT	useful_rdkit_utils API docs (Pat Walters): descriptors, ring systems, REOS filters, splits (no htmlzip: crawled)
+useful-rdkit-utils	github	https://github.com/PatWalters/useful_rdkit_utils	MIT	useful_rdkit_utils README and example notebooks
+mordred	github	https://github.com/JacksonBurns/mordred-community	BSD-3-Clause	mordred-community: maintained fork of the mordred 2D/3D descriptor calculator; README, docs, examples
+mordred	site	https://mordred-descriptor.github.io/documentation/master/	BSD-3-Clause	original mordred docs (unmaintained upstream; descriptor list and API still apply to the fork)
+teachopencadd	github	https://github.com/volkamerlab/teachopencadd	CC BY 4.0	TeachOpenCADD talktorials: ChEMBL/PubChem data acquisition, ADME filters, fingerprints, clustering, ML QSAR, pharmacophores, docking
+reinvent4	github	https://github.com/MolecularAI/REINVENT4	Apache-2.0	REINVENT 4 generative molecular design: README, notebooks, config examples (de novo, scaffold hopping, R-group, linker, scoring)
+aizynthfinder	site	https://molecularai.github.io/aizynthfinder/	MIT	AiZynthFinder retrosynthesis planning docs: configuration, Python interface, scoring, analysis
+opentargets-platform	github	https://github.com/opentargets/platform-docs	unknown	Open Targets Platform docs (GitBook source in Markdown): target-disease evidence by data source, association scoring, drug, target, credible sets, GraphQL API, data downloads, BigQuery; data CC0 1.0
+openfda	github	https://github.com/FDA/open.fda.gov/tree/master/src/pages	CC0 1.0	openFDA website source pages: query parameters, advanced syntax, paging, dates and ranges, downloads, licence, terms (most endpoint text is in YAML, which the downloader skips)
+openfda	cran	https://cran.r-project.org/package=openFDA	GPL (>= 3)	openFDA R client: building openFDA API queries (drug event, label, NDC) from R; vignettes
+ctrdata	cran	https://cran.r-project.org/package=ctrdata	MIT + file LICENSE	ctrdata: retrieve and analyse trials from ClinicalTrials.gov (API v2), EU CTR/CTIS, ISRCTN; vignettes; stands in for the JavaScript-only CT.gov API docs
+clintrialx	cran	https://cran.r-project.org/package=clintrialx	Apache License 2.0	clintrialx: query ClinicalTrials.gov API and the AACT PostgreSQL database from R; vignettes
+nlmixr2	site	https://nlmixr2.org/	GPL (>= 3)	nlmixr2 site (pkgdown): population PK/PD with FOCEi, SAEM, priors, censoring, mixture models, covariates, worked examples
+nlmixr2	cran	https://cran.r-project.org/package=nlmixr2est	GPL (>= 3)	nlmixr2est: estimation routines; reference manual and vignettes
+rxode2	site	https://nlmixr2.github.io/rxode2/	GPL (>= 3)	rxode2 pkgdown site: ODE model syntax, dosing event tables, simulation with variability; articles and reference
+rxode2	site	https://nlmixr2.github.io/rxode2-manual/	unknown	rxode2 user manual (bookdown)
+mrgsolve	site	https://mrgsolve.org/docs/	GPL (>= 2)	mrgsolve pkgdown site: reference and articles for ODE-based PK/PD simulation
+mrgsolve	site	https://mrgsolve.org/user-guide/	unknown	mrgsolve user guide (model specification blocks, data sets, dosing events, matrices, topics)
+pknca	cran	https://cran.r-project.org/package=PKNCA	AGPL-3	PKNCA non-compartmental analysis: reference manual and vignettes (intervals, AUC methods, half-life, BLQ, superposition)
+poped	cran	https://cran.r-project.org/package=PopED	LGPL (>= 3)	PopED optimal design for population PK/PD studies: reference manual and vignettes
+ncappc	cran	https://cran.r-project.org/package=ncappc	GPL-3	ncappc: NCA calculations and NCA-based posterior predictive checks of population models; vignettes
+xpose	cran	https://cran.r-project.org/package=xpose	LGPL-3	xpose: goodness-of-fit diagnostics and VPCs for NONMEM/nlmixr2 models; vignettes
+pharmpy	site	https://pharmpy.github.io/latest/	LGPL-3.0	Pharmpy docs (Python pharmacometrics): NONMEM/nlmixr2 model handling, modelling tools (covsearch, ruvsearch, AMD), results parsing
+boin	cran	https://cran.r-project.org/package=BOIN	GPL-2	BOIN Bayesian optimal interval design (single agent, combination, waterfall): reference manual
+dfcrm	cran	https://cran.r-project.org/package=dfcrm	GPL-2	dfcrm continual reassessment method (CRM, TITE-CRM, skeleton calibration): reference manual
+escalation	cran	https://cran.r-project.org/package=escalation	GPL (>= 3)	escalation: modular dose-finding designs (3+3, CRM, BOIN, EffTox, stopping rules, simulation, dose paths); vignettes
+crmpack	cran	https://cran.r-project.org/package=crmPack	GPL (>= 2)	crmPack: object-oriented model-based dose escalation designs (logistic models, increments, stopping, dual endpoints); vignettes
+trialr	cran	https://cran.r-project.org/package=trialr	GPL (>= 3)	trialr: Bayesian clinical trial designs in Stan (CRM, EffTox, BEBOP); vignettes
+rpact	cran	https://cran.r-project.org/package=rpact	LGPL-3	rpact confirmatory adaptive and group-sequential designs: reference manual and vignettes
+rpact	site	https://www.rpact.org/vignettes/	LGPL-3	rpact worked examples: planning, boundaries, sample size reassessment, survival, enrichment, multi-arm (MAMS), analysis
+gsdesign	cran	https://cran.r-project.org/package=gsDesign	GPL (>= 3)	gsDesign group sequential design: spending functions, boundaries, sample size, survival; reference manual and vignettes
+openebgm	cran	https://cran.r-project.org/package=openEBGM	GPL-2 | GPL-3	openEBGM: DuMouchel gamma-Poisson shrinker (EBGM, EB05) disproportionality scores for adverse event data; vignettes
+pvlrt	cran	https://cran.r-project.org/package=pvLRT	GPL-3	pvLRT: likelihood ratio test-based signal detection (including zero-inflated Poisson) for FAERS-type data; reference manual
+sequential	cran	https://cran.r-project.org/package=Sequential	GPL-2	Sequential: exact MaxSPRT sequential analysis for Poisson and binomial data (post-marketing drug and vaccine safety surveillance); reference manual
+cioms	pdf	https://cioms.ch/wp-content/uploads/2018/03/WG8-Signal-Detection.pdf	unknown	CIOMS Working Group VIII (2010): Practical aspects of signal detection in pharmacovigilance (disproportionality methods, BCPNN, MGPS); free download
+ich-guidelines	pdf	https://database.ich.org/sites/default/files/ICH_E6%28R3%29_Step4_FinalGuideline_2025_0106.pdf	ICH copyright, reuse with acknowledgement	ICH E6(R3) Good clinical practice, final 6 Jan 2025
+ich-guidelines	pdf	https://database.ich.org/sites/default/files/E8-R1_Guideline_Step4_2021_1006.pdf	ICH copyright, reuse with acknowledgement	ICH E8(R1) General considerations for clinical studies (2021)
+ich-guidelines	pdf	https://database.ich.org/sites/default/files/E9_Guideline.pdf	ICH copyright, reuse with acknowledgement	ICH E9 Statistical principles for clinical trials (1998)
+ich-guidelines	pdf	https://database.ich.org/sites/default/files/E9-R1_Step4_Guideline_2019_1203.pdf	ICH copyright, reuse with acknowledgement	ICH E9(R1) Addendum on estimands and sensitivity analysis (2019)
+ich-guidelines	pdf	https://database.ich.org/sites/default/files/E4_Guideline.pdf	ICH copyright, reuse with acknowledgement	ICH E4 Dose-response information to support drug registration
+ich-guidelines	pdf	https://database.ich.org/sites/default/files/E5_R1__Guideline.pdf	ICH copyright, reuse with acknowledgement	ICH E5(R1) Ethnic factors in the acceptability of foreign clinical data
+ich-guidelines	pdf	https://database.ich.org/sites/default/files/E10_Guideline.pdf	ICH copyright, reuse with acknowledgement	ICH E10 Choice of control group and related issues in clinical trials
+ich-guidelines	pdf	https://database.ich.org/sites/default/files/E17EWG_Step4_2017_1116.pdf	ICH copyright, reuse with acknowledgement	ICH E17 Multi-regional clinical trials (2017)
+ich-guidelines	pdf	https://database.ich.org/sites/default/files/ICH_E11A_Guideline_Step4_2024_0821.pdf	ICH copyright, reuse with acknowledgement	ICH E11A Pediatric extrapolation (2024)
+ich-guidelines	pdf	https://database.ich.org/sites/default/files/E14_Guideline.pdf	ICH copyright, reuse with acknowledgement	ICH E14 Clinical evaluation of QT/QTc prolongation and proarrhythmic potential
+ich-guidelines	pdf	https://database.ich.org/sites/default/files/E14-S7B_QAs_Step4_2022_0221.pdf	ICH copyright, reuse with acknowledgement	ICH E14/S7B Q&As on clinical and nonclinical QT/QTc evaluation (2022)
+ich-guidelines	pdf	https://database.ich.org/sites/default/files/E2A_Guideline.pdf	ICH copyright, reuse with acknowledgement	ICH E2A Clinical safety data management: expedited reporting
+ich-guidelines	pdf	https://database.ich.org/sites/default/files/E2E_Guideline.pdf	ICH copyright, reuse with acknowledgement	ICH E2E Pharmacovigilance planning
+ich-guidelines	pdf	https://database.ich.org/sites/default/files/M3_R2__Guideline.pdf	ICH copyright, reuse with acknowledgement	ICH M3(R2) Nonclinical safety studies for human clinical trials and marketing authorisation (2009)
+ich-guidelines	pdf	https://database.ich.org/sites/default/files/M10_Guideline_Step4_2022_0524.pdf	ICH copyright, reuse with acknowledgement	ICH M10 Bioanalytical method validation and study sample analysis (2022; adopted by FDA Nov 2022, replaces FDA BMV 2018)
+ich-guidelines	pdf	https://database.ich.org/sites/default/files/ICH_M12_Step4_Guideline_2024_0521.pdf	ICH copyright, reuse with acknowledgement	ICH M12 Drug interaction studies (2024)
+ich-guidelines	pdf	https://database.ich.org/sites/default/files/S7A_Guideline.pdf	ICH copyright, reuse with acknowledgement	ICH S7A Safety pharmacology studies for human pharmaceuticals
+ich-guidelines	pdf	https://database.ich.org/sites/default/files/S7B_Guideline.pdf	ICH copyright, reuse with acknowledgement	ICH S7B Nonclinical evaluation of delayed ventricular repolarisation (QT)
+ich-guidelines	pdf	https://database.ich.org/sites/default/files/S6_R1_Guideline_0.pdf	ICH copyright, reuse with acknowledgement	ICH S6(R1) Preclinical safety evaluation of biotechnology-derived pharmaceuticals
+ich-guidelines	pdf	https://database.ich.org/sites/default/files/S9_Guideline.pdf	ICH copyright, reuse with acknowledgement	ICH S9 Nonclinical evaluation for anticancer pharmaceuticals
+ich-guidelines	pdf	https://database.ich.org/sites/default/files/Q8%28R2%29%20Guideline.pdf	ICH copyright, reuse with acknowledgement	ICH Q8(R2) Pharmaceutical development (QbD, design space)
+ich-guidelines	pdf	https://database.ich.org/sites/default/files/ICH_Q9%28R1%29_Guideline_Step4_2022_1219.pdf	ICH copyright, reuse with acknowledgement	ICH Q9(R1) Quality risk management (2023)
+ich-guidelines	pdf	https://database.ich.org/sites/default/files/Q10%20Guideline.pdf	ICH copyright, reuse with acknowledgement	ICH Q10 Pharmaceutical quality system
+ich-guidelines	pdf	https://www.fda.gov/media/184747/download	ICH copyright, reuse with acknowledgement	ICH M15 General principles for model-informed drug development (Step 4 Jan 2026; FDA-published copy, June 2026)
+ich-guidelines	pdf	https://www.fda.gov/media/188961/download	ICH copyright, reuse with acknowledgement	ICH E20 Adaptive designs for clinical trials, Step 2 draft (June 2025; FDA-published copy); not final
+fda-guidance	pdf	https://www.fda.gov/media/72309/download	public domain (US government work)	Estimating the maximum safe starting dose in initial clinical trials in adult healthy volunteers (2005; first-in-human, HED, MRSD)
+fda-guidance	pdf	https://www.fda.gov/media/115172/download	public domain (US government work)	Expansion cohorts: use in first-in-human trials to expedite oncology drug development (2022)
+fda-guidance	pdf	https://www.fda.gov/media/164555/download	public domain (US government work)	Optimizing the dosage of drugs and biologics for oncologic diseases (Project Optimus, 2024)
+fda-guidance	pdf	https://www.fda.gov/media/78495/download	public domain (US government work)	Adaptive designs for clinical trials of drugs and biologics (2019)
+fda-guidance	pdf	https://www.fda.gov/media/190505/download	public domain (US government work)	Use of Bayesian methodology in clinical trials of drugs and biological products (draft, Jan 2026)
+fda-guidance	pdf	https://www.fda.gov/media/121320/download	public domain (US government work)	Enrichment strategies for clinical trials to support effectiveness (2019)
+fda-guidance	pdf	https://www.fda.gov/media/162416/download	public domain (US government work)	Multiple endpoints in clinical trials (2022)
+fda-guidance	pdf	https://www.fda.gov/media/148910/download	public domain (US government work)	Adjusting for covariates in randomized clinical trials (2023)
+fda-guidance	pdf	https://www.fda.gov/media/78504/download	public domain (US government work)	Non-inferiority clinical trials to establish effectiveness (2016)
+fda-guidance	pdf	https://www.fda.gov/media/120060/download	public domain (US government work)	Framework for the FDA real-world evidence program (2018)
+fda-guidance	pdf	https://www.fda.gov/media/171667/download	public domain (US government work)	Considerations for the use of RWD and RWE to support regulatory decision-making (2023)
+fda-guidance	pdf	https://www.fda.gov/media/152503/download	public domain (US government work)	RWD: assessing electronic health records and medical claims data (2024)
+fda-guidance	pdf	https://www.fda.gov/media/154449/download	public domain (US government work)	RWD: assessing registries to support regulatory decision-making (2023)
+fda-guidance	pdf	https://www.fda.gov/media/177128/download	public domain (US government work)	RWE: considerations regarding non-interventional studies (draft, 2024)
+fda-guidance	pdf	https://www.fda.gov/media/128793/download	public domain (US government work)	Population pharmacokinetics (2022)
+fda-guidance	pdf	https://www.fda.gov/media/71277/download	public domain (US government work)	Exposure-response relationships: study design, data analysis and regulatory applications (2003)
+fda-guidance	pdf	https://www.fda.gov/media/101469/download	public domain (US government work)	Physiologically based pharmacokinetic analyses: format and content (2018)
+fda-guidance	pdf	https://www.fda.gov/media/71546/download	public domain (US government work)	Good pharmacovigilance practices and pharmacoepidemiologic assessment (2005, reissued 2025)
+fda-guidance	pdf	https://www.fda.gov/media/184830/download	public domain (US government work)	Considerations for the use of artificial intelligence to support regulatory decision-making for drugs and biologics (draft, Jan 2025)
+ema-guidelines	pdf	https://www.ema.europa.eu/en/documents/scientific-guideline/guideline-strategies-identify-and-mitigate-risks-first-human-and-early-clinical-trials-investigational-medicinal-products-revision-1_en.pdf	EMA copyright, reproduction with acknowledgement	EMA first-in-human guideline: strategies to identify and mitigate risks in FIH and early clinical trials (EMEA/CHMP/SWP/28367/07 Rev. 1, 2017; MABEL, starting dose, escalation)
+ema-guidelines	pdf	https://www.ema.europa.eu/en/documents/scientific-guideline/guideline-investigation-bioequivalence-rev1_en.pdf	EMA copyright, reproduction with acknowledgement	EMA guideline on the investigation of bioequivalence (CPMP/EWP/QWP/1401/98 Rev. 1)
+ema-guidelines	pdf	https://www.ema.europa.eu/en/documents/scientific-guideline/guideline-reporting-results-population-pharmacokinetic-analyses_en.pdf	EMEA copyright, non-commercial reproduction with acknowledgement	EMA guideline on reporting the results of population pharmacokinetic analyses (CHMP/EWP/185990/06)
+ema-guidelines	pdf	https://www.ema.europa.eu/en/documents/scientific-guideline/guideline-reporting-physiologically-based-pharmacokinetic-pbpk-modelling-and-simulation_en.pdf	EMA copyright, reproduction with acknowledgement	EMA guideline on reporting PBPK modelling and simulation (2018)
+ema-guidelines	pdf	https://www.ema.europa.eu/en/documents/scientific-guideline/guideline-good-pharmacovigilance-practices-gvp-module-ix-signal-management-rev-1_en.pdf	EMA/HMA copyright, reproduction with acknowledgement	EU GVP Module IX Signal management (Rev 1)
+ema-guidelines	pdf	https://www.ema.europa.eu/en/documents/scientific-guideline/guideline-good-pharmacovigilance-practices-gvp-module-ix-addendum-i-methodological-aspects-signal-detection-spontaneous-reports-suspected-adverse-reactions_en.pdf	EMA/HMA copyright, reproduction with acknowledgement	EU GVP Module IX Addendum I: methodological aspects of signal detection from spontaneous reports (disproportionality, ROR, thresholds)
+# --- pharmacogenomics, pharmacokinetics and biomechanics ---
+pharmcat	github	https://github.com/PharmGKB/PharmCAT/tree/development/docs	MPL-2.0	PharmCAT docs (Markdown source of pharmcat.clinpgx.org): running PharmCAT, VCF preprocessor, Named Allele Matcher, Phenotyper, Reporter, methods, genes and drugs covered
+pypgx	rtd	https://pypgx.readthedocs.io/en/latest/	MIT	PyPGx docs: star-allele calling from NGS and arrays, CNV detection, CLI and Python API, gene table (no HTML zip: crawled)
+aldy	rtd	https://aldy.readthedocs.io/en/latest/	Aldy licence (IURTC, non-commercial research use only)	Aldy 4 docs: star-allele calling with ILP, CN configurations, database format, API (no HTML zip: crawled)
+cyrius	github	https://github.com/Illumina/Cyrius	PolyForm-Strict-1.0.0	Cyrius: CYP2D6 star-allele caller for WGS (README: method, usage, output)
+stellarpgx	github	https://github.com/SBIMB/StellarPGx	MIT	StellarPGx Nextflow pipeline: star alleles in CYP genes from WGS by graph genotyping (README)
+stargazer	page	https://stargazer.gs.washington.edu/stargazerweb/	unknown	Stargazer star-allele caller: one-page manual (intro, target genes, publications); superseded by PyPGx
+cpic	page	https://github.com/cpicpgx/cpic-data/wiki	unknown	CPIC database and REST API (PostgREST) documentation: data models, endpoints, example queries (single wiki page)
+cpic	pdf	https://files.cpicpgx.org/data/guideline/publication/G6PD/2022/36049896.pdf	unknown	CPIC guideline: G6PD genotype and medication use (2022)
+cpic	pdf	https://files.cpicpgx.org/data/guideline/publication/NSAID/2020/32189324.pdf	unknown	CPIC guideline: CYP2C9 and NSAIDs (2020)
+cpic	pdf	https://files.cpicpgx.org/data/guideline/publication/PPI/2020/32770672.pdf	unknown	CPIC guideline: CYP2C19 and proton pump inhibitors (2020)
+cpic	pdf	https://files.cpicpgx.org/data/guideline/publication/TCA/2016/27997040.pdf	unknown	CPIC guideline: CYP2D6, CYP2C19 and tricyclic antidepressants (2016 update)
+cpic	pdf	https://files.cpicpgx.org/data/guideline/publication/abacavir/2014/24561393.pdf	unknown	CPIC guideline: HLA-B and abacavir (2014 update)
+cpic	pdf	https://files.cpicpgx.org/data/guideline/publication/allopurinol/2015/26094938.pdf	unknown	CPIC guideline: HLA-B and allopurinol (2015 update)
+cpic	pdf	https://files.cpicpgx.org/data/guideline/publication/aminoglycosides/2021/34032273.pdf	unknown	CPIC guideline: MT-RNR1 and aminoglycosides (2021)
+cpic	pdf	https://files.cpicpgx.org/data/guideline/publication/atazanavir/2015/26417955.pdf	unknown	CPIC guideline: UGT1A1 and atazanavir (2015)
+cpic	pdf	https://files.cpicpgx.org/data/guideline/publication/atomoxetine/2019/30801677.pdf	unknown	CPIC guideline: CYP2D6 and atomoxetine (2019)
+cpic	pdf	https://files.cpicpgx.org/data/guideline/publication/beta_blockers/2024/38951961.pdf	unknown	CPIC guideline: CYP2D6, ADRB1, ADRB2, ADRA2C, GRK4, GRK5 and beta-blockers (2024)
+cpic	pdf	https://files.cpicpgx.org/data/guideline/publication/carbamazepine/2017/29392710.pdf	unknown	CPIC guideline: HLA-A, HLA-B and carbamazepine/oxcarbazepine (2017 update)
+cpic	pdf	https://files.cpicpgx.org/data/guideline/publication/clopidogrel/2022/35034351.pdf	unknown	CPIC guideline: CYP2C19 and clopidogrel (2022 update)
+cpic	pdf	https://files.cpicpgx.org/data/guideline/publication/efavirenz/2019/31006110.pdf	unknown	CPIC guideline: CYP2B6 and efavirenz (2019)
+cpic	pdf	https://files.cpicpgx.org/data/guideline/publication/fluoropyrimidines/2017/29152729.pdf	unknown	CPIC guideline: DPYD and fluoropyrimidines (2017 update)
+cpic	pdf	https://files.cpicpgx.org/data/guideline/publication/hydralazine/2025/40974042.pdf	unknown	CPIC guideline: NAT2 and hydralazine (2025)
+cpic	pdf	https://files.cpicpgx.org/data/guideline/publication/ivacaftor/2014/24598717.pdf	unknown	CPIC guideline: CFTR and ivacaftor (2014)
+cpic	pdf	https://files.cpicpgx.org/data/guideline/publication/methadone/2024/38863207.pdf	unknown	CPIC guideline: CYP2B6 and methadone (2024)
+cpic	pdf	https://files.cpicpgx.org/data/guideline/publication/ondansetron/2026/41979467.pdf	unknown	CPIC guideline: CYP2D6 and ondansetron/tropisetron (2026 update)
+cpic	pdf	https://files.cpicpgx.org/data/guideline/publication/opioids/2020/33387367.pdf	unknown	CPIC guideline: CYP2D6, OPRM1, COMT and opioid therapy (2020; replaces the codeine guideline)
+cpic	pdf	https://files.cpicpgx.org/data/guideline/publication/pegintron/2013/24096968.pdf	unknown	CPIC guideline: IFNL3 (IL28B) and peginterferon-alpha regimens (2013)
+cpic	pdf	https://files.cpicpgx.org/data/guideline/publication/phenytoin/2020/32779747.pdf	unknown	CPIC guideline: CYP2C9, HLA-B and phenytoin (2020 update)
+cpic	pdf	https://files.cpicpgx.org/data/guideline/publication/serotonin_reuptake_inhibitor_antidepressants/2023/37032427.pdf	unknown	CPIC guideline: CYP2D6, CYP2C19, CYP2B6, SLC6A4, HTR2A and serotonin reuptake inhibitor antidepressants (2023; replaces the 2015 SSRI guideline)
+cpic	pdf	https://files.cpicpgx.org/data/guideline/publication/statins/2022/publication.pdf	unknown	CPIC guideline: SLCO1B1, ABCG2, CYP2C9 and statins (2022; replaces the simvastatin guideline)
+cpic	pdf	https://files.cpicpgx.org/data/guideline/publication/tacrolimus/2015/25801146.pdf	unknown	CPIC guideline: CYP3A5 and tacrolimus (2015)
+cpic	pdf	https://files.cpicpgx.org/data/guideline/publication/tamoxifen/2017/29385237.pdf	unknown	CPIC guideline: CYP2D6 and tamoxifen (2017)
+cpic	pdf	https://files.cpicpgx.org/data/guideline/publication/thiopurines/2026/41618934.pdf	unknown	CPIC guideline: TPMT, NUDT15 and thiopurines (2026 update)
+cpic	pdf	https://files.cpicpgx.org/data/guideline/publication/volatile_anesthetic_succinylcholine/2018/30499100.pdf	unknown	CPIC guideline: RYR1, CACNA1S and volatile anaesthetics/succinylcholine (2018)
+cpic	pdf	https://files.cpicpgx.org/data/guideline/publication/voriconazole/2016/27981572.pdf	unknown	CPIC guideline: CYP2C19 and voriconazole (2016)
+cpic	pdf	https://files.cpicpgx.org/data/guideline/publication/warfarin/2017/28198005.pdf	unknown	CPIC guideline: CYP2C9, VKORC1, CYP4F2 and warfarin (2017 update)
+osp-suite	github	https://github.com/Open-Systems-Pharmacology/docs	unknown	Open Systems Pharmacology Suite manual v12 (GitBook Markdown source of docs.open-systems-pharmacology.org): PBPK theory, PK-Sim, MoBi, R toolbox
+ospsuite-r	github	https://github.com/Open-Systems-Pharmacology/OSPSuite-R	GPL-2.0	ospsuite R package (not on CRAN): README and vignettes for running PK-Sim/MoBi simulations from R
+mrgsolve	site	https://mrgsolve.org/vignettes/	GPL-2.0-or-later	mrgsolve vignettes: worked PK/PD simulation examples
+linpk	cran	https://cran.r-project.org/package=linpk	GPL-3.0	linpk linear (1-3 compartment) PK models: reference manual and vignette
+mapbayr	site	https://felicienll.github.io/mapbayr/	GPL-3.0	mapbayr pkgdown site: MAP-Bayesian estimation of individual PK parameters (model-informed precision dosing), articles and reference
+pkpdsim	cran	https://cran.r-project.org/package=PKPDsim	MIT	PKPDsim PK/PD simulation: reference manual and vignettes
+torsten	site	https://metrumresearchgroup.github.io/Torsten/	BSD-3-Clause	Torsten PK/PD library for Stan: compartment models, ODE event handling, population models, examples
+psn	github	https://github.com/UUPharmacometrics/PsN/tree/master/doc	GPL-2.0	PsN (Perl-speaks-NONMEM) user guides as LaTeX sources in doc/ (~45: common options, execute, VPC/NPC, bootstrap, SCM, SSE, CDD, LLP, SIR, FREM, simeval, qa, NCA ...)
+basic-pk	site	https://www.boomer.org/c/p4/index.php?Loc=Visitor	unknown	Basic Pharmacokinetics online course (David Bourne): 32 chapters on ADME, compartment models, clearance, bioavailability, dosing regimens, NCA; crawl prefix /c/p4/
+iuphar-pep	page	https://pharmacologyeducation.org/drug-absorption/	CC-BY-NC-ND-4.0	IUPHAR Pharmacology Education Project: drug absorption (url_check 403 is UA-specific: page exists, 200 with the downloader UA)
+iuphar-pep	page	https://pharmacologyeducation.org/drug-distribution/	CC-BY-NC-ND-4.0	IUPHAR Pharmacology Education Project: drug distribution (url_check 403 is UA-specific: page exists, 200 with the downloader UA)
+iuphar-pep	page	https://pharmacologyeducation.org/drug-metabolism/	CC-BY-NC-ND-4.0	IUPHAR Pharmacology Education Project: drug metabolism (url_check 403 is UA-specific: page exists, 200 with the downloader UA)
+iuphar-pep	page	https://pharmacologyeducation.org/drug-excretion/	CC-BY-NC-ND-4.0	IUPHAR Pharmacology Education Project: drug excretion (url_check 403 is UA-specific: page exists, 200 with the downloader UA)
+iuphar-pep	page	https://pharmacologyeducation.org/clinical-pharmacokinetics/	CC-BY-NC-ND-4.0	IUPHAR Pharmacology Education Project: clinical pharmacokinetics (half-life, clearance, volume, loading and maintenance doses) (url_check 403 is UA-specific: page exists, 200 with the downloader UA)
+iuphar-pep	page	https://pharmacologyeducation.org/therapeutic-drug-monitoring/	CC-BY-NC-ND-4.0	IUPHAR Pharmacology Education Project: therapeutic drug monitoring (url_check 403 is UA-specific: page exists, 200 with the downloader UA)
+iuphar-pep	page	https://pharmacologyeducation.org/individual-variation-in-drug-response/	CC-BY-NC-ND-4.0	IUPHAR Pharmacology Education Project: individual variation in drug response (pharmacogenetics, age, disease) (url_check 403 is UA-specific: page exists, 200 with the downloader UA)
+iuphar-pep	page	https://pharmacologyeducation.org/drug-interactions/	CC-BY-NC-ND-4.0	IUPHAR Pharmacology Education Project: pharmacokinetic and pharmacodynamic drug interactions (url_check 403 is UA-specific: page exists, 200 with the downloader UA)
+opensim	github	https://github.com/opensim-org/opensim-core	Apache-2.0	opensim-core (OpenSim 4.x with Moco): README, doc/APIGuide.md, doc/Moco/MocoCheatSheet.pdf, Bindings examples (Python/Java/MATLAB scripting)
+opensim-creator	site	https://docs.opensimcreator.com/manual/en/latest/	Apache-2.0	OpenSim Creator manual: building musculoskeletal models, tutorials (Sphinx)
+opencap	github	https://github.com/opencap-org/opencap-core	Apache-2.0	OpenCap core: smartphone markerless motion capture pipeline (pose estimation, triangulation, OpenSim scaling and IK)
+opencap	github	https://github.com/opencap-org/opencap-processing	Apache-2.0	OpenCap processing: kinematic/kinetic analyses and muscle-driven simulations of OpenCap data, example scripts
+simbody	github	https://github.com/simbody/simbody	Apache-2.0	Simbody multibody dynamics: README plus Simbody/doc PDFs (Theory Manual, User Guide, Advanced Programming Guide)
+mujoco	site	https://mujoco.readthedocs.io/en/stable/overview.html	Apache-2.0	MuJoCo documentation: overview, computation, modelling (MJCF XML reference), programming, APIs (root page is a JS redirect, so the crawl starts here; prefix /en/stable/)
+myosuite	rtd	https://myosuite.readthedocs.io/en/latest/	Apache-2.0	MyoSuite: MuJoCo musculoskeletal models and tasks for motor-control learning (no HTML zip: crawled)
+biorbd	github	https://github.com/pyomeca/biorbd	MIT	biorbd rigid-body biomechanics library: README (model file format, kinematics, dynamics, muscles), examples
+bioptim	github	https://github.com/pyomeca/bioptim	MIT	bioptim optimal control for biomechanics: README (OCP setup, dynamics, objectives, constraints, solvers), examples
+pyomeca	site	https://pyomeca.github.io/	Apache-2.0	pyomeca docs (mkdocs): biomechanical data objects (markers, analogs, rototrans), processing, API reference
+pyomeca	github	https://github.com/pyomeca/pyomeca	Apache-2.0	pyomeca README and notebooks
+ezc3d	github	https://github.com/pyomeca/ezc3d	MIT	ezc3d C3D reader/writer (C++, Python, MATLAB): README describes the C3D structure (header, parameters, data)
+c3d	pdf	https://www.c3d.org/docs/C3D_User_Guide.pdf	unknown	The C3D File Format: A Technical User Guide (c3d.org)
+febio	pdf	https://raw.githubusercontent.com/febiosoftware/FEBio/develop/Documentation/FEBio_User_Manual.pdf	MIT	FEBio 4 user manual (PDF in the FEBio repo, built 2026-08)
+febio	pdf	https://raw.githubusercontent.com/febiosoftware/FEBio/develop/Documentation/FEBio_Theory_Manual.pdf	MIT	FEBio 4 theory manual: continuum mechanics, constitutive models, biphasic/multiphasic theory, contact (PDF in the FEBio repo, built 2026-08)
+deeplabcut	site	https://deeplabcut.github.io/DeepLabCut/README.html	LGPL-3.0	DeepLabCut docs (Jupyter Book): markerless pose estimation, project workflow, multi-animal, 3D, model zoo; prefix /DeepLabCut/ (root page is a JS redirect)
+openpose	github	https://github.com/CMU-Perceptual-Computing-Lab/openpose	OpenPose academic non-commercial licence	OpenPose: README and doc/ (demo, output format, Python/C++ API, installation, FAQ)
+pose2sim	github	https://github.com/perfanalytics/pose2sim	BSD-3-Clause	Pose2Sim: markerless multi-camera kinematics to OpenSim (README is the full manual)
+bmc-notes	github	https://github.com/BMClab/BMC/tree/master/notebooks	CC-BY-4.0	Notes on Scientific Computing for Biomechanics and Motor Control (Marcos Duarte, Renato Watanabe): 88 marimo .py guides (kept as example scripts)
+learn-multibody-dynamics	site	https://moorepants.github.io/learn-multibody-dynamics/	CC-BY-4.0	Learn Multibody Dynamics (Jason K. Moore, TU Delft): open textbook, kinematics to equations of motion with SymPy
+kineticstoolkit	site	https://kineticstoolkit.uqam.ca/doc/	Apache-2.0	Kinetics Toolkit (Felix Chenier): Python biomechanics docs and tutorials (time series, filtering, kinematics, rigid-body geometry)
+# --- HLA and KIR analysis ---
+hla-tapas	github	https://github.com/immunogenomics/HLA-TAPAS	unknown	HLA-TAPAS: MakeReference, SNP2HLA (Beagle 4.1), HLAassoc amino-acid omnibus tests and multi-ancestry fine-mapping; READMEs per module
+snp2hla	site	https://software.broadinstitute.org/mpg/snp2hla/	unknown	original SNP2HLA: imputation of classical HLA alleles and amino acids, SNP2HLA and MakeReference manuals
+cookhla	github	https://github.com/WansonChoi/CookHLA	non-commercial academic use (README)	CookHLA HLA imputation with Beagle 4/5 and adaptive genetic map; README with options and examples
+hatk	github	https://github.com/WansonChoi/HATK	non-commercial academic use (README)	HLA Analysis Toolkit: IMGT2Seq, bMarkerGenerator (amino-acid markers), NomenCleaner, omnibus test, logistic regression, meta-analysis, Manhattan/heatmap (docs/)
+deep-hla	github	https://github.com/tatsuhikonaito/DEEP-HLA	CC BY-NC-ND 3.0	DEEP*HLA deep-learning HLA imputation: training, imputation, amino-acid imputation
+hla-imp3	page	https://imp.science.unimelb.edu.au/hla/documentation	unknown	HLA*IMP:03 documentation: data preparation, reference files, output (web service; account needed only to upload)
+hla-imp3	page	https://imp.science.unimelb.edu.au/hla/instructions	unknown	HLA*IMP:03 instructions: phased HAPS/SAMPLE input, SNP arrays, strand alignment
+kir-imp	page	https://imp.science.unimelb.edu.au/kir/documentation	unknown	KIR*IMP documentation: KIR copy number and A/B haplotype imputation from phased SNPs
+hla-hd	page	https://w3.genome.med.kyoto-u.ac.jp/HLA-HD/	academic and non-commercial use	HLA-HD manual page: installation, dictionary update, hlahd.sh options, tips (download needs a request form; docs open)
+hla-hd	pdf	https://w3.genome.med.kyoto-u.ac.jp/HLA-HD/demo/hlahd-demo.v1.pdf	academic and non-commercial use	HLA-HD demo run walkthrough (PDF)
+hisat-genotype	site	https://daehwankimlab.github.io/hisat-genotype/	GPL-3.0	HISAT-genotype site: manual and HLA typing tutorial (graph reference, typing, assembly, output)
+xhla	github	https://github.com/humanlongevity/HLA	non-commercial academic use (LICENSE)	xHLA HLA typing from WGS/WES: README and notebook
+kourami	github	https://github.com/Kingsford-Group/kourami	BSD-3-Clause	Kourami graph-guided HLA assembly and typing: README and preprocessing.md
+seq2hla	github	https://github.com/TRON-Bioinformatics/seq2HLA	MIT	seq2HLA HLA typing and expression from RNA-seq: README
+spechla	github	https://github.com/deepomicslab/SpecHLA	MIT	SpecHLA full-length HLA typing, phasing and LOH detection from short/long reads: README and examples
+netmhcpan	page	https://services.healthtech.dtu.dk/services/NetMHCpan-4.2/2-Instructions.php	unknown	NetMHCpan-4.2 instructions: input types, alleles, peptide lengths, thresholds
+netmhcpan	page	https://services.healthtech.dtu.dk/services/NetMHCpan-4.2/3-Output_format.php	unknown	NetMHCpan-4.2 output format: EL/BA scores, %Rank, strong/weak binders
+netmhciipan	page	https://services.healthtech.dtu.dk/services/NetMHCIIpan-4.3/2-Instructions.php	unknown	NetMHCIIpan-4.3 instructions (HLA class II peptide binding)
+netmhciipan	page	https://services.healthtech.dtu.dk/services/NetMHCIIpan-4.3/3-Output_format.php	unknown	NetMHCIIpan-4.3 output format
+midashla	bioc	https://bioconductor.org/packages/midasHLA	MIT	MiDAS: HLA/KIR association analysis with alleles, amino acids, expression and KIR ligand interactions (tutorial + quick start)
+ping	github	https://github.com/Hollenbach-lab/PING	MIT	PING KIR genotyping (copy number and alleles) from short reads: README
+hla-analyses-tutorial	github	https://github.com/immunogenomics/HLA_analyses_tutorial	GPL-3.0	Raychaudhuri lab tutorial: HLA QC and imputation notebook, association with classical alleles, amino acids, omnibus and conditional tests
+ipd-imgt-hla	site	https://www.ebi.ac.uk/ipd/imgt/hla/about/	CC BY-ND	IPD-IMGT/HLA about and help pages: FAQ, antigen FAQ, genomics, tools (EBI robots Crawl-delay 10)
+ipd-imgt-hla	page	https://raw.githubusercontent.com/ANHIG/IMGTHLA/Latest/README.md	CC BY-ND	IMGTHLA repository README: release files, Allelelist, alignments, FASTA, hla.dat
+ipd-imgt-hla	page	https://raw.githubusercontent.com/ANHIG/IMGTHLA/Latest/Manual.md	CC BY-ND	IPD-IMGT/HLA flat-file (hla.dat) format manual
+ipd-imgt-hla	page	https://raw.githubusercontent.com/ANHIG/IMGTHLA/Latest/wmda/README.md	CC BY-ND	WMDA files: hla_nom, rel_dna_ser, rel_ser_ser (allele-to-serology relations)
+ipd-kir	site	https://www.ebi.ac.uk/ipd/kir/about/	CC BY-ND	IPD-KIR about pages: KIR gene, allele, haplotype and genotype nomenclature
+ipd-kir	page	https://raw.githubusercontent.com/ANHIG/IPDKIR/Latest/README.md	CC BY-ND	IPDKIR repository README: release files
+hla-nomenclature	page	https://hla.alleles.org/pages/nomenclature/naming_alleles/	CC BY-ND	WHO HLA allele naming: fields, colons, expression suffixes
+hla-nomenclature	page	https://hla.alleles.org/pages/nomenclature/assigning_suffixes/	CC BY-ND	rules for N, L, S, C, A, Q suffixes
+hla-nomenclature	page	https://hla.alleles.org/pages/nomenclature/nomenclature_update_april_2010/	CC BY-ND	2010 change to colon-delimited allele names
+hla-nomenclature	page	https://hla.alleles.org/pages/nomenclature/nomenclature_before_2010/	CC BY-ND	pre-2010 allele names (A*0201 style) as used in older papers and panels
+hla-nomenclature	page	https://hla.alleles.org/pages/antigens/naming_hla_antigens/	CC BY-ND	naming of serologically defined HLA antigens
+hla-nomenclature	page	https://hla.alleles.org/pages/antigens/broads_and_splits/	CC BY-ND	broad and split serological antigens
+hla-nomenclature	page	https://hla.alleles.org/pages/p&g_groups/g_groups/	CC BY-ND	G groups (identical nucleotide sequence in the antigen-binding domains)
+hla-nomenclature	page	https://hla.alleles.org/pages/p&g_groups/p_groups/	CC BY-ND	P groups (identical protein sequence in the antigen-binding domains)
+hla-nomenclature	page	https://hla.alleles.org/pages/wmda/wmda/	CC BY-ND	WMDA nomenclature files explained
+hla-nomenclature	page	https://hla.alleles.org/pages/other/hla_dictionary/	CC BY-ND	HLA Dictionary: serological equivalents of alleles
+hla-nomenclature	page	https://hla.alleles.org/pages/other/definitions/	CC BY-ND	definitions of histocompatibility typing terms and resolution
+hla-nomenclature	page	https://hla.alleles.org/pages/other/sequence_formats/	CC BY-ND	alignment and sequence file formats
+hla-nomenclature	page	https://hla.alleles.org/pages/other/drb_haplotypes/	CC BY-ND	HLA-DRB gene content of DR haplotypes
+hla-nomenclature	page	https://hla.alleles.org/pages/genes/genes_list/	CC BY-ND	list of HLA genes with descriptions
+hla-nomenclature	page	https://hla.alleles.org/pages/about/	CC BY-ND	about the WHO Nomenclature Committee and HLA.alleles.org
+afnd	page	https://www.allelefrequencies.net/faqs/	unknown	Allele Frequency Net Database FAQs
+afnd	page	https://www.allelefrequencies.net/api-documentation/	unknown	AFND API: endpoints for allele, haplotype and genotype frequencies
+afnd	page	https://www.allelefrequencies.net/populations/how-to-submit/	unknown	AFND submission guidelines and population data standards
+immunotation	bioc	https://bioconductor.org/packages/immunotation	GPL-3	immunotation: HLA nomenclature conversion, MAC codes, AFND frequency queries from R
+hlatools	cran	https://cran.r-project.org/package=HLAtools	GPL (>= 3)	HLAtools: IPD-IMGT/HLA alignments, allele-name conversion across nomenclature epochs, GL strings
+bigdawg	github	https://github.com/IgDAWG/BIGDAWG	GPL (>= 3)	BIGDAWG case-control tests of HLA haplotypes, loci and amino acids (archived on CRAN 2026-09-27; GitHub is current)
+pypop	github	https://github.com/alexlancaster/pypop	GPL-2.0	PyPop population genetics of HLA and other multi-allelic data (Hardy-Weinberg, haplotypes, homozygosity); website/ rst docs
+py-ard	github	https://github.com/nmdp-bioinformatics/py-ard	LGPL-3.0	py-ard: HLA typing reduction to G/P/lg/lgx/exon/U2, MAC codes, serology

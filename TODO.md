@@ -1,6 +1,6 @@
 # tinyGPT: to do
 
-Last updated 11 October 2026.
+Last updated 27 October 2026.
 
 ## Data
 
@@ -9,11 +9,21 @@ Last updated 11 October 2026.
       (undo: `compact /u /s:"$env:USERPROFILE\ai_training_data" /i /q`).
 
 - [ ] **Rebuild the dataset.** `datasets\` is empty (bio_all is gone). Rebuild with `python run_pipeline.py build`
-      (about 2 h) once the downloads below have added more text. It picks up the 4,527-term `keywords.txt`.
+      (about 2 h) once the downloads below have added more text. It picks up the 22,650-term `keywords.txt`.
 - [ ] **arXiv download** is running (21 subject areas, `--wait 8-12`). Rerun the same command to continue;
       add `--update` for new papers.
-- [ ] **bioRxiv and medRxiv:** first runs still to do, each in its own window:
-      `python download_rxiv.py --server biorxiv` and `--server medrxiv` (the bioRxiv harvest takes hours).
+- [ ] **bioRxiv and medRxiv** downloads are running. After the 27 October keyword update, rerun each with
+      `--rebuild-list` so the list uses the new terms (also `download_arxiv.py --rebuild-list` and
+      `youtube_transcripts.py --recheck-off-topic`).
+- [ ] **Software documentation** (`download_docs.py`, 1,205 sources for 919 tools in `doc_sources.tsv`) is running;
+      rerun the same command to continue or retry failed rows. Five sites refuse scripts: save the GCTA, SMR, GSMR,
+      LDAK and KING manual pages from the browser into a folder and convert them with `convert_to_markdown.py`.
+      www.gnu.org (bash, coreutils, gawk, sed, grep, make, parallel manuals) timed out on 27 October; the next run
+      retries it.
+- [ ] **NVIDIA SimReady 3D assets** (SimReady Central, more than 2,000 OpenUSD assets on Hugging Face; licence per
+      asset, often CC BY 4.0, some non-commercial): a converter that keeps the prim hierarchy, part names, sizes,
+      materials and physics settings as text (vertex arrays replaced by counts) into `ai_training_data\3d`. Needs
+      `usd-core` (approval: `python -m pip install usd-core`).
 - [ ] **Retry 4 arXiv papers** that failed on the page-number bug (fixed in 341f88f): remove their rows
       (`pdf failed: ... invalid literal for int()`) from `_arxiv_meta\report.tsv`, then rerun.
 - [ ] **Code data** (planned): Stack-Edu (Python, R) first, then The Stack v2 subsets, Bioconductor/CRAN,
@@ -69,11 +79,17 @@ Last updated 11 October 2026.
 
 - [ ] Organise the local-ai scripts into folders (asked for earlier; moving files must not break running jobs).
 - [ ] Rename "tinyGPT" (pending).
-- [ ] Describe `download_rxiv.py` and the 21 arXiv areas in the learning guide too (only HOW_TO_RUN has them), then
-      rebuild the DOCX with `guide\build_guide.py`.
 - [ ] `AUDIT_2026-10-01.md` (local, not committed) contains a home-folder path; delete it or keep it local.
 
 ## Ideas
+
+- [ ] **Count overlapping keyword matches once.** `data_prep.py` counts every term that matches, so one mention of
+      "linear regression" scores both "linear regression" and "regression" (two distinct terms of the three needed).
+      Phrases inside phrases ('China Kadoorie Biobank' and 'China Kadoorie') do the same. Counting each stretch of
+      text once (the longest match) would make the distinct-term rule mean what it says; `tools/kw_covered.py
+      --nested` lists the nested pairs. Measure the keep rate before and after on FineWeb-Edu and peS2o samples.
+- [ ] **SFT pairs from the software documentation:** question-and-answer pairs ("run REGENIE step 1 on these
+      files") made from `software_doc`, so the model learns to write the commands, not only to recognise them.
 
 - [ ] Clinical-trial success classifier: AACT (ClinicalTrials.gov) labels plus genetic evidence (Open Targets,
       colocalisation, MR), gradient-boosted trees, a time-based split for testing.
