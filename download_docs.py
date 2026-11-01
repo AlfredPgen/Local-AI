@@ -61,7 +61,9 @@ Outputs (all under --out, default %USERPROFILE%\ai_training_data\software_doc):
                            chars, date, label (the row's folder, kept for good so that adding
                            or moving rows never hands one row's folder to another). Rows with
                            status ok or empty are skipped by later runs (--refresh redoes
-                           them); errors are tried again, and so are partial rows (files kept,
+                           them); errors are tried again (except refusals by the site:
+                           robots.txt, HTTP 401/403 or an AI-training opt-out, which only
+                           --retry-blocked tries again), and so are partial rows (files kept,
                            but cut short by a server or network that kept failing, or a
                            converter that could not run on this machine). A row that finds no
                            files keeps the files of its earlier run.
@@ -2251,6 +2253,16 @@ def write_manifest(path, rows):
     os.replace(path + ".part", path)
 
 
+# errors that will not change on a rerun: the site refuses this script (robots.txt, HTTP 401/403,
+# an AI-training opt-out). Rows that failed this way are skipped unless --retry-blocked is given.
+_BLOCKED_RE = re.compile(r"^error: (robots\.txt of \S+ (disallows|says Content-Signal)|\S+ answers HTTP 40[13] to this "
+                         r"User-Agent)")
+
+
+def blocked(entry):
+    return bool(entry) and bool(_BLOCKED_RE.match(entry.get("status") or ""))
+
+
 def finished(entry):
     return bool(entry) and (entry.get("status") or "").split(" ")[0] in FINISHED
 
@@ -2348,6 +2360,9 @@ def parse_args(argv=None):
                    help="output folder (default %%USERPROFILE%%\\ai_training_data\\software_doc)")
     p.add_argument("--only", help="TOOL[,TOOL]: only these tools' rows")
     p.add_argument("--refresh", action="store_true", help="download finished rows again")
+    p.add_argument("--retry-blocked", action="store_true",
+                   help="also try rows that failed because the site refuses this script (robots.txt, HTTP 401/403, "
+                        "an AI-training opt-out); they are skipped otherwise")
     p.add_argument("--max-pages", type=int, default=400, help="pages per site/rtd row (default 400)")
     p.add_argument("--wait", default="1-2", help="random pause between two requests to one host, MIN-MAX seconds "
                                                  "(default 1-2)")
@@ -2413,8 +2428,11 @@ def main(argv=None):
     clean_leftovers(args.out)
     ax._lower_priority()
     todo = [r for r in rows if args.refresh or not finished(manifest.get((r["tool"], r["kind"], r["url"])))]
-    print(f"{len(rows)} rows in {args.sources}; {len(rows) - len(todo)} finished, {len(todo)} to fetch into "
-          f"{args.out}", flush=True)
+    refused = [r for r in todo if not args.retry_blocked and blocked(manifest.get((r["tool"], r["kind"], r["url"])))]
+    todo = [r for r in todo if r not in refused]
+    print(f"{len(rows)} rows in {args.sources}; {len(rows) - len(todo) - len(refused)} finished, {len(refused)} "
+          f"refused by their site earlier (--retry-blocked tries them), {len(todo)} to fetch into {args.out}",
+          flush=True)
     if not todo:
         return
     pdf_problem = check_pdf_route()
