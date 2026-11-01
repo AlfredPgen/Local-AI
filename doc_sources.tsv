@@ -746,7 +746,7 @@ pandoc	page	https://pandoc.org/MANUAL.html	GPL-2.0-or-later	Pandoc User's Guide,
 pandoc	page	https://pandoc.org/lua-filters.html	GPL-2.0-or-later	Pandoc Lua filters guide + Lua API reference
 pandas	site	https://pandas.pydata.org/docs/user_guide/	BSD-3-Clause	pandas User Guide (10 minutes, IO incl. Excel, groupby, reshaping, merging, time series, visualization)
 pandas	site	https://pandas.pydata.org/docs/getting_started/	BSD-3-Clause	Getting started: intro tutorials + comparisons with R, SQL, spreadsheets, Stata, SAS
-polars	site	https://docs.pola.rs/user-guide/	MIT	Polars user guide: expressions, lazy API, joins, IO, SQL, migration from pandas
+polars	github	https://github.com/pola-rs/polars/tree/main/docs	MIT	Markdown sources of the JavaScript-built docs.pola.rs; Polars user guide: expressions, lazy API, joins, IO, SQL, migration from pandas
 numpy	site	https://numpy.org/doc/stable/user/	BSD-3-Clause	NumPy user guide: absolute beginners, fundamentals (indexing, broadcasting, dtypes), how-tos
 pyarrow	site	https://arrow.apache.org/docs/python/	Apache-2.0	PyArrow docs: Parquet/Feather/CSV IO, datasets, compute, pandas interop
 data-table	site	https://rdatatable.gitlab.io/data.table/	MPL-2.0	R data.table pkgdown site: reference + vignettes (intro, reference semantics, keys, joins, reshape, .SD, fread/fwrite)
@@ -757,7 +757,7 @@ r4ds	site	https://r4ds.hadley.nz/	CC BY-NC-ND 3.0 US	R for Data Science (2e) boo
 statsmodels	site	https://www.statsmodels.org/stable/	BSD-3-Clause	statsmodels docs: user guide, formula API, regression/GLM/mixed models, examples notebooks, API reference
 scipy-stats	site	https://docs.scipy.org/doc/scipy/tutorial/stats.html	BSD-3-Clause	SciPy statistics tutorial incl. tutorial/stats/ subpages (distributions, hypothesis tests, resampling)
 scipy-stats	site	https://docs.scipy.org/doc/scipy/reference/stats.html	BSD-3-Clause	scipy.stats API reference; follow only reference/generated/scipy.stats.* pages (the /reference/ prefix also holds all other SciPy modules)
-duckdb	site	https://duckdb.org/docs/stable/	MIT	DuckDB docs (stable): SQL reference, CSV/Parquet/JSON import, clients (Python, R, CLI), guides
+duckdb	github	https://github.com/duckdb/duckdb-web/tree/main/docs	MIT	Markdown sources of duckdb.org/docs; DuckDB docs (stable): SQL reference, CSV/Parquet/JSON import, clients (Python, R, CLI), guides
 ggplot2	site	https://ggplot2.tidyverse.org/	MIT	ggplot2 pkgdown site: full reference with examples + articles
 ggplot2	site	https://ggplot2-book.org/	unknown	ggplot2: Elegant Graphics for Data Analysis (3e), Quarto book (sources: github.com/hadley/ggplot2-book)
 svglite	site	https://svglite.r-lib.org/	GPL-2.0-or-later	svglite pkgdown site: reference + articles (fonts, scaling)
@@ -832,7 +832,7 @@ p5js	site	https://p5js.org/reference/	LGPL-2.1 (reference text comes from the p5
 p5js	site	https://p5js.org/tutorials/	unknown	p5.js tutorials (about 30): get started, shapes, colour, animation, interactivity, data, WebGL/3D
 svgwrite	rtd	https://svgwrite.readthedocs.io/en/latest/	MIT	svgwrite (Python SVG writer): overview, elements, attributes, examples; HTML zip offered. Project is in maintenance mode, docs complete
 drawsvg	github	https://github.com/cduck/drawsvg	MIT	drawsvg 2 (Python SVG drawing and animation, Jupyter): long README with examples, docs/ (mkdocs), examples/
-cairosvg	page	https://cairosvg.org/documentation/	LGPL-3.0	CairoSVG docs, one page: SVG to PNG/PDF/PS conversion, command line and Python API, options
+cairosvg	github	https://github.com/Kozea/CairoSVG	LGPL-3.0	README and docs folder; CairoSVG docs, one page: SVG to PNG/PDF/PS conversion, command line and Python API, options
 tikz-pgf	pdf	https://mirrors.ctan.org/graphics/pgf/base/doc/generic/pgf/pgfmanual.pdf	LPPL-1.3c / GPL-2.0	PGF/TikZ manual from CTAN (about 1,300 pages, 9.5 MB): tutorials, TikZ syntax, libraries, graph drawing, data visualization, math engine
 pgfplots	pdf	https://mirrors.ctan.org/graphics/pgf/contrib/pgfplots/doc/pgfplots.pdf	GPL-3.0	pgfplots manual from CTAN (about 570 pages, 12.9 MB): 2D/3D plots in TikZ, axes, legends, colormaps, tables
 chemfig	pdf	https://mirrors.ctan.org/macros/generic/chemfig/chemfig-en.pdf	LPPL-1.3c	chemfig manual (English) from CTAN: molecules (bonds, rings, Lewis structures) and reaction schemes in LaTeX
