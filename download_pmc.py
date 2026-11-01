@@ -804,6 +804,7 @@ def parse_args(argv=None):
     p.add_argument("--meta", help="folder for list.tsv and report.tsv (default: _<out name>_meta next to --out, "
                                   "which data_prep --text-root skips)")
     p.add_argument("--query", default=DEFAULT_QUERY, help="Europe PMC search query")
+    p.add_argument("--journals", help="instead of --query: open-access full-text papers of these journals, separated by semicolons, as Europe PMC abbreviates them ('STAR Protoc;MethodsX;J Vis Exp'); no inner quotes needed, which PowerShell would strip")
     p.add_argument("--sort", default="CITED desc", help="Europe PMC sort, e.g. 'CITED desc' or 'P_PDATE_D desc'")
     p.add_argument("--max-papers", type=int, default=100_000)
     p.add_argument("--workers", type=int, default=2, help="requests in flight (the 3-per-second limit applies to all)")
@@ -835,6 +836,9 @@ def parse_args(argv=None):
     if args.max_papers < 1:
         p.error("--max-papers must be >= 1")
     # %USERPROFILE% / $HOME / ~ are expanded here too: PowerShell leaves %VAR% as it is
+    if args.journals:
+        names = [j.strip().strip('"') for j in args.journals.split(";") if j.strip()]
+        args.query = "OPEN_ACCESS:y AND HAS_FT:y AND (" + " OR ".join(f'JOURNAL:"{j}"' for j in names) + ")"
     args.out = os.path.abspath(os.path.expanduser(os.path.expandvars(args.out)))
     if args.meta:
         args.meta = os.path.expanduser(os.path.expandvars(args.meta))
