@@ -1217,3 +1217,1103 @@ hlatools	cran	https://cran.r-project.org/package=HLAtools	GPL (>= 3)	HLAtools: I
 bigdawg	github	https://github.com/IgDAWG/BIGDAWG	GPL (>= 3)	BIGDAWG case-control tests of HLA haplotypes, loci and amino acids (archived on CRAN 2026-09-27; GitHub is current)
 pypop	github	https://github.com/alexlancaster/pypop	GPL-2.0	PyPop population genetics of HLA and other multi-allelic data (Hardy-Weinberg, haplotypes, homozygosity); website/ rst docs
 py-ard	github	https://github.com/nmdp-bioinformatics/py-ard	LGPL-3.0	py-ard: HLA typing reduction to G/P/lg/lgx/exon/U2, MAC codes, serology
+# --- added 2026-11-01: JavaScript, three.js, genomics databases ---
+threejs	page	https://threejs.org/docs/llms-full.txt	MIT	three.js full API reference in one text file (all classes, methods, properties); the github row alone is capped by --max-pages
+threejs-manual	github	https://github.com/mrdoob/three.js/tree/dev/manual	MIT	three.js manual (manual/pages/*.html, about 240 tutorial pages) from the dev branch
+mdn-javascript	github	https://github.com/mdn/content/tree/main/files/en-us/web/javascript	CC BY-SA 2.5	MDN JavaScript Guide and Reference (Markdown sources)
+typescript	github	https://github.com/microsoft/TypeScript-Website/tree/v2/packages/documentation/copy/en	CC BY 4.0	TypeScript handbook, reference and tutorials (Markdown sources)
+nodejs	github	https://github.com/nodejs/node/tree/main/doc/api	MIT	Node.js API documentation (Markdown sources)
+ensembl-rest	site	https://rest.ensembl.org/documentation/	Apache-2.0	Ensembl REST API endpoint documentation
+ensembl-help	site	https://www.ensembl.org/info/docs/	unknown	Ensembl help and documentation (data, tools, API, FTP, genome browser)
+uniprot-manual	github	https://github.com/ebi-uniprot/uniprot-manual	CC BY 4.0	UniProt help pages and manual (website help is JS-rendered; these are the Markdown sources)
+uniprot-rest-api	github	https://github.com/ebi-uniprot/uniprot-rest-api	CC BY 4.0	UniProt REST API
+rcsb-pdb	site	https://www.rcsb.org/docs/	CC0 1.0	RCSB PDB user documentation (structures, search, tools, deposition)
+rcsb-data-api	site	https://data.rcsb.org/	CC0 1.0	RCSB PDB Data API and Search API documentation (robots.txt blocks parts of it; allowed pages only)
+alphafold-db	site	https://alphafold.ebi.ac.uk/faq	CC BY 4.0	AlphaFold Protein Structure Database FAQ and help
+clinvar-repo	github	https://github.com/ncbi/clinvar	unknown	NCBI ClinVar repository documentation (ncbi.nlm.nih.gov docs pages refuse scripts)
+dbsnp-repo	github	https://github.com/ncbi/dbsnp	unknown	NCBI dbSNP documentation and scripts' READMEs (ncbi.nlm.nih.gov docs pages refuse scripts)
+ncbi-datasets	github	https://github.com/ncbi/datasets	unknown	NCBI Datasets command-line tools and API documentation
+ncbi-datasets-docs	site	https://www.ncbi.nlm.nih.gov/datasets/docs/v2/	unknown	NCBI Datasets documentation site (genomes, genes, taxonomy, REST API)
+ucsc-genome-browser	site	https://genome.ucsc.edu/goldenPath/help/	unknown	UCSC Genome Browser user guide, file formats, track hubs, database help
+ucsc-genome-browser	site	https://genome.ucsc.edu/FAQ/	unknown	UCSC Genome Browser FAQ
+ucsc-genome-browser	page	https://genome.ucsc.edu/goldenPath/help/api.html	unknown	UCSC Genome Browser REST API
+string-db	site	https://string-db.org/help/	CC BY 4.0	STRING help, data access and REST API
+human-protein-atlas	site	https://www.proteinatlas.org/about/help	CC BY-SA 4.0	Human Protein Atlas help, data access and downloads
+opengwas-api	github	https://github.com/MRCIEU/opengwas-api	unknown	IEU OpenGWAS API repository documentation
+opengwas-api	site	https://api.opengwas.io/	unknown	IEU OpenGWAS API documentation
+gencode	site	https://www.gencodegenes.org/human/	unknown	GENCODE human annotation: release notes, gene types, tags
+gencode	page	https://www.gencodegenes.org/pages/data_format.html	unknown	GENCODE GTF/GFF3 data format and field definitions
+hgnc	site	https://www.genenames.org/help/	CC0 1.0	HGNC / genenames.org help, nomenclature guidelines and REST API
+mane	page	https://www.ncbi.nlm.nih.gov/refseq/MANE/	unknown	MANE (Matched Annotation from NCBI and EMBL-EBI) Select and Plus Clinical overview
+cellxgene-census	site	https://chanzuckerberg.github.io/cellxgene-census/	MIT	CZ CELLxGENE Discover Census documentation (Python and R API, data schema, tutorials)
+human-cell-atlas	site	https://data.humancellatlas.org/guides	unknown	Human Cell Atlas Data Portal user guides and data-access documentation
+kegg-rest	page	https://www.kegg.jp/kegg/rest/keggapi.html	unknown	KEGG REST API documentation (the API page only; KEGG data licence is restrictive)
+pan-ukbb	site	https://pan.ukbb.broadinstitute.org/docs/	unknown	Pan-UK Biobank documentation (multi-ancestry GWAS: methods, data, QC, downloads)
+finngen	site	https://finngen.gitbook.io/documentation/	unknown	FinnGen documentation (endpoints, GWAS, data release, methods)
+ukb-rap	site	https://dnanexus.gitbook.io/uk-biobank-rap	unknown	UK Biobank Research Analysis Platform (DNAnexus) documentation
+annotationhub	bioc	https://bioconductor.org/packages/AnnotationHub	Artistic-2.0	AnnotationHub vignettes and reference manual
+gtex-pipeline	github	https://github.com/broadinstitute/gtex-pipeline	BSD-3-Clause	GTEx pipeline READMEs (gtexportal.org disallows all crawlers in robots.txt and is JS-rendered)
+gnomad-methods	site	https://broadinstitute.github.io/gnomad_methods/	MIT	gnomad Python package documentation (gnomad.broadinstitute.org/help is disallowed by robots.txt)
+# --- more databases: cancer, clinical variants, ontologies, pathways, epigenomics, structures, drugs, microbiome, model organisms, archives, cohorts ---
+cbioportal	site	https://docs.cbioportal.org/	AGPL-3.0	cBioPortal user guide and API
+cbioportal	github	https://github.com/cBioPortal/cbioportal-frontend	AGPL-3.0	cBioPortal frontend docs
+cbioportal-datahub	github	https://github.com/cBioPortal/datahub	unknown	cBioPortal study data notes
+gdc	site	https://docs.gdc.cancer.gov/Encyclopedia/	public domain (NCI)	GDC encyclopedia
+icgc-argo	site	https://docs.icgc-argo.org/	unknown	ICGC ARGO platform docs
+icgc-argo	github	https://github.com/icgc-argo/argo-docs	unknown	ARGO docs source
+depmap	github	https://github.com/broadinstitute/depmap_omics	unknown	DepMap omics pipelines
+depmap	github	https://github.com/broadinstitute/depmap-portal	unknown	DepMap portal
+depmap	bioc	https://bioconductor.org/packages/depmap	unknown	DepMap Bioconductor data package
+oncokb	github	https://github.com/oncokb/oncokb-annotator	AGPL-3.0	OncoKB annotator
+tcgabiolinks	bioc	https://bioconductor.org/packages/TCGAbiolinks	GPL-3.0	TCGA/GDC download in R
+genomicdatacommons	bioc	https://bioconductor.org/packages/GenomicDataCommons	Artistic-2.0	GDC R client
+cbioportaldata	bioc	https://bioconductor.org/packages/cBioPortalData	AGPL-3.0	cBioPortal data in R
+curatedtcgadata	bioc	https://bioconductor.org/packages/curatedTCGAData	Artistic-2.0	curated TCGA
+multiassayexperiment	bioc	https://bioconductor.org/packages/MultiAssayExperiment	Artistic-2.0	multi-omic container
+maftools	bioc	https://bioconductor.org/packages/maftools	MIT	MAF analysis
+clingen	site	https://reg.clinicalgenome.org/doc/	CC BY 4.0	ClinGen Allele Registry
+lovd	site	https://www.lovd.nl/3.0/docs/	GPL-3.0	LOVD3 manual
+lovd	github	https://github.com/LOVDnl/LOVD3	GPL-3.0	LOVD3 source with docs
+hgvs-nomenclature	site	https://hgvs-nomenclature.org/stable/	CC BY 4.0	HGVS variant nomenclature
+biocommons-hgvs	rtd	https://hgvs.readthedocs.io/en/stable/	Apache-2.0	hgvs python package
+ga4gh-vrs	rtd	https://vrs.ga4gh.org/en/stable/	Apache-2.0	GA4GH variant representation
+ga4gh-vrs	github	https://github.com/ga4gh/vrs-python	Apache-2.0	vrs-python
+ga4gh-beacon	github	https://github.com/ga4gh-beacon/beacon-v2	Apache-2.0	Beacon v2
+ga4gh-refget	github	https://github.com/ga4gh/refget	Apache-2.0	refget
+ga4gh-phenopackets	rtd	https://phenopacket-schema.readthedocs.io/en/latest/	CC BY 4.0	phenopacket schema
+gene-ontology	github	https://github.com/geneontology/go-site	CC0-1.0	GO site and formats
+gene-ontology	github	https://github.com/geneontology/go-annotation	CC0-1.0	GO annotation conventions
+hpo	github	https://github.com/obophenotype/human-phenotype-ontology	CC BY 4.0	HPO source and docs
+hpo	site	https://obophenotype.github.io/human-phenotype-ontology/	CC BY 4.0	HPO docs
+mondo	site	https://mondo.monarchinitiative.org/	CC BY 4.0	Mondo disease ontology
+mondo	github	https://github.com/monarch-initiative/mondo	CC BY 4.0	Mondo repo
+monarch	site	https://monarch-initiative.github.io/monarch-app/	BSD-3-Clause	Monarch app
+monarch	github	https://github.com/monarch-initiative/monarch-app	BSD-3-Clause	Monarch app repo
+efo	github	https://github.com/EBISPOT/efo	Apache-2.0	Experimental Factor Ontology
+efo	site	https://www.ebi.ac.uk/efo/	Apache-2.0	EFO home
+ols	github	https://github.com/EBISPOT/ols4	Apache-2.0	Ontology Lookup Service 4
+uberon	site	https://obophenotype.github.io/uberon/	CC BY 3.0	Uberon docs
+uberon	github	https://github.com/obophenotype/uberon	CC BY 3.0	Uberon repo
+cell-ontology	site	https://obophenotype.github.io/cell-ontology/	CC BY 4.0	Cell Ontology docs
+cell-ontology	github	https://github.com/obophenotype/cell-ontology	CC BY 4.0	Cell Ontology repo
+chebi	site	https://www.ebi.ac.uk/chebi/aboutChebiForward.do	CC BY 4.0	ChEBI about
+chebi	github	https://github.com/ebi-chebi/ChEBI	CC BY 4.0	ChEBI repo
+obo-foundry	github	https://github.com/OBOFoundry/OBOFoundry.github.io	CC0-1.0	OBO Foundry site
+robot	site	http://robot.obolibrary.org/	BSD-3-Clause	ROBOT ontology tool
+owltools	github	https://github.com/owlcollab/owltools	BSD-3-Clause	OWLTools
+bioregistry	rtd	https://bioregistry.readthedocs.io/en/latest/	MIT	Bioregistry
+identifiers-org	site	https://docs.identifiers.org/	unknown	identifiers.org docs
+umls	site	https://www.nlm.nih.gov/research/umls/knowledge_sources/metathesaurus/	public (data licensed)	UMLS Metathesaurus docs
+wikipathways	bioc	https://bioconductor.org/packages/rWikiPathways	MIT	rWikiPathways
+msigdb	site	https://docs.gsea-msigdb.org/	CC BY 4.0	GSEA and MSigDB docs
+msigdb	cran	https://cran.r-project.org/package=msigdbr	MIT	msigdbr
+msigdb	page	https://www.gsea-msigdb.org/gsea/msigdb/collections.jsp	CC BY 4.0	MSigDB collections
+biogrid	site	https://wiki.thebiogrid.org/	MIT	BioGRID wiki
+psi-mi	github	https://github.com/HUPO-PSI/psi-mi-CV	CC BY 4.0	PSI-MI CV
+pathway-commons	site	https://www.pathwaycommons.org/pc2/	unknown	Pathway Commons web service
+biopax	github	https://github.com/BioPAX/specification	unknown	BioPAX spec
+omnipath	rtd	https://omnipath.readthedocs.io/en/latest/	MIT	OmniPath python client
+omnipath	site	https://r.omnipathdb.org/	MIT	OmnipathR docs
+omnipath	github	https://github.com/saezlab/omnipath	MIT	OmniPath repo
+harmonizome	page	https://maayanlab.cloud/Harmonizome/documentation	unknown	Harmonizome API
+ihec	site	https://ihec-epigenomes.org/	unknown	IHEC portal docs
+ihec	github	https://github.com/IHEC/ihec-assay-standards	unknown	IHEC assay standards
+roadmap-epigenomics	site	https://egg2.wustl.edu/roadmap/web_portal/	unknown	Roadmap portal
+chip-atlas	github	https://github.com/inutano/chip-atlas	unknown	ChIP-Atlas docs
+chip-atlas	github	https://github.com/inutano/chip-atlas/wiki	unknown	ChIP-Atlas wiki
+jaspar	site	https://jaspar.elixir.no/docs/	CC BY 4.0	JASPAR docs
+jaspar	bioc	https://bioconductor.org/packages/JASPAR2024	CC BY 4.0	JASPAR2024 R
+jaspar	bioc	https://bioconductor.org/packages/TFBSTools	GPL-2.0	TFBSTools
+pyjaspar	github	https://github.com/asntech/pyjaspar	GPL-3.0	pyJASPAR
+screen	github	https://github.com/weng-lab/SCREEN	MIT	SCREEN repo
+epimap	site	https://compbio.mit.edu/epimap/	unknown	EpiMap
+fantom5	site	https://fantom.gsc.riken.jp/5/	CC BY 4.0	FANTOM5
+igv	site	https://igv.org/doc/desktop/	MIT	IGV desktop
+igv	site	https://igv.org/doc/igvjs/	MIT	igv.js
+igv	github	https://github.com/igvteam/igv-reports	MIT	igv-reports
+eqtl-catalogue	site	https://www.ebi.ac.uk/eqtl/Methods/	unknown	eQTL Catalogue methods
+eqtl-catalogue	github	https://github.com/eQTL-Catalogue/eQTL-Catalogue-resources	unknown	eQTL Catalogue resources
+eqtl-catalogue	github	https://github.com/eQTL-Catalogue/qtlmap	MIT	eQTL Catalogue pipeline
+eqtl-catalogue	github	https://github.com/eQTL-Catalogue/eQTL-SumStats	Apache-2.0	eQTL sumstats API
+eqtlgen	site	https://www.eqtlgen.org/	unknown	eQTLGen consortium
+allen-brain	site	https://help.brain-map.org/	unknown	Allen Institute help
+allen-brain	rtd	https://allensdk.readthedocs.io/en/latest/	unknown	AllenSDK
+synapse	site	https://help.synapse.org/docs/	unknown	Synapse docs
+synapse	rtd	https://python-docs.synapse.org/	Apache-2.0	synapseclient
+pdbe	site	https://www.ebi.ac.uk/pdbe/pdbe-kb/	unknown	PDBe-KB
+interpro	rtd	https://interpro-documentation.readthedocs.io/en/latest/	CC0-1.0	InterPro docs
+pfam	rtd	https://pfam-docs.readthedocs.io/en/latest/	CC0-1.0	Pfam docs
+cath	rtd	https://cath-tools.readthedocs.io/en/latest/	unknown	CATH tools
+cath	site	https://www.cathdb.info/wiki/doku/	CC BY 4.0	CATH wiki
+scop	site	https://scop.berkeley.edu/help/	unknown	SCOP help
+oas	site	https://opig.stats.ox.ac.uk/webapps/oas/documentation	CC BY 4.0	Observed Antibody Space
+prosite	site	https://prosite.expasy.org/prosuser.html	CC BY 4.0	PROSITE user manual
+emdb	site	https://www.ebi.ac.uk/emdb/documentation/	CC0-1.0	EMDB docs
+empiar	site	https://www.ebi.ac.uk/empiar/about/	CC0-1.0	EMPIAR about
+proteomexchange	site	https://www.proteomexchange.org/	CC0-1.0	ProteomeXchange
+proteomexchange	github	https://github.com/HUPO-PSI/mzML	unknown	mzML spec
+proteomexchange	github	https://github.com/HUPO-PSI/mzTab	unknown	mzTab spec
+proteomexchange	github	https://github.com/HUPO-PSI/mzIdentML	unknown	mzIdentML spec
+proteomexchange	github	https://github.com/HUPO-PSI/usi	unknown	USI spec
+quantms	github	https://github.com/bigbio/quantms	MIT	quantms
+drugcentral	page	https://drugcentral.org/about	CC BY-SA 4.0	DrugCentral about
+dgidb	github	https://github.com/dgidb/dgidb-v5	MIT	DGIdb v5
+bindingdb	page	https://www.bindingdb.org/rwd/bind/BindingDBRESTfulAPI.jsp	CC BY 3.0	BindingDB API
+bindingdb	page	https://www.bindingdb.org/rwd/bind/info.jsp	CC BY 3.0	BindingDB info
+iuphar	page	https://www.guidetopharmacology.org/webServices.jsp	CC BY-SA 4.0	GtoPdb web services
+iuphar	page	https://www.guidetopharmacology.org/helpPage.jsp	CC BY-SA 4.0	GtoPdb help
+iuphar	page	https://www.guidetopharmacology.org/download.jsp	CC BY-SA 4.0	GtoPdb downloads
+sider	page	http://sideeffects.embl.de/	CC BY-NC-SA 4.0	SIDER
+rxnorm	site	https://lhncbc.nlm.nih.gov/RxNav/APIs/	public domain	RxNav APIs
+dailymed	page	https://dailymed.nlm.nih.gov/dailymed/app-support-web-services.cfm	public domain	DailyMed web services
+unichem	site	https://chembl.gitbook.io/unichem	CC BY-SA 3.0	UniChem
+surechembl	site	https://chembl.gitbook.io/surechembl	CC BY-SA 3.0	SureChEMBL
+metabolomics-workbench	pdf	https://www.metabolomicsworkbench.org/tools/MWRestAPIv1.0.pdf	public	Workbench REST API
+gnps	site	https://ccms-ucsd.github.io/GNPSDocumentation/	CC BY 4.0	GNPS documentation
+gnps	github	https://github.com/CCMS-UCSD/GNPSDocumentation	CC BY 4.0	GNPS docs source
+massbank	github	https://github.com/MassBank/MassBank-web	GPL-3.0	MassBank
+massbank	github	https://github.com/MassBank/MassBank-data	CC BY 4.0	MassBank data
+mgnify	github	https://github.com/EBI-Metagenomics/emg-docs	CC0-1.0	MGnify docs source
+mgnify	github	https://github.com/EBI-Metagenomics/pipeline-v5	Apache-2.0	MGnify pipeline
+gtdb	site	https://gtdb.ecogenomic.org/faq	CC BY-SA 4.0	GTDB FAQ
+gtdb	site	https://ecogenomics.github.io/GTDBTk/	GPL-3.0	GTDB-Tk
+silva	site	https://www.arb-silva.de/documentation/	CC BY 4.0	SILVA docs
+greengenes2	github	https://github.com/biocore/greengenes2	BSD-3-Clause	Greengenes2
+qiime2	site	https://docs.qiime2.org/	BSD-3-Clause	QIIME 2 docs
+mgi	site	https://www.informatics.jax.org/userhelp/	unknown	MGI user help
+mgi	page	https://www.informatics.jax.org/mgihome/nomen/gene.shtml	unknown	mouse nomenclature
+impc	site	https://www.mousephenotype.org/help/	CC BY 4.0	IMPC help
+impc	bioc	https://bioconductor.org/packages/PhenStat	unknown	PhenStat
+flybase	site	https://wiki.flybase.org/wiki/FlyBase:Help	unknown	FlyBase help
+flybase	site	https://flybase.github.io/	unknown	FlyBase docs
+zfin	site	https://zfin.atlassian.net/wiki/spaces/general/overview	unknown	ZFIN wiki
+zfin	page	https://zfin.org/downloads	unknown	ZFIN downloads
+sgd	site	https://sites.google.com/view/yeastgenome-help/	unknown	SGD help
+rgd	site	https://rgd.mcw.edu/wg/help3/	unknown	RGD help
+alliance-genome	github	https://github.com/alliance-genome/agr_literature_service	MIT	Alliance literature service
+bgee	github	https://github.com/BgeeDB/bgee_apps	GPL-3.0	Bgee apps
+bgee	bioc	https://bioconductor.org/packages/BgeeDB	GPL-3.0	BgeeDB R
+eggnog	github	https://github.com/eggnogdb/eggnog-mapper	AGPL-3.0	eggNOG-mapper
+eggnog	github	https://github.com/eggnogdb/eggnog-mapper/wiki	AGPL-3.0	eggNOG-mapper wiki
+ena	rtd	https://ena-docs.readthedocs.io/en/latest/	CC0-1.0	ENA docs
+sra-tools	github	https://github.com/ncbi/sra-tools	public domain	SRA Toolkit
+sra-tools	github	https://github.com/ncbi/sra-tools/wiki	public domain	SRA Toolkit wiki
+sra	site	https://www.ncbi.nlm.nih.gov/sra/docs/	public domain	SRA docs
+ega	github	https://github.com/EGA-archive/ega-download-client	unknown	EGA download client
+geoquery	bioc	https://bioconductor.org/packages/GEOquery	MIT	GEOquery
+geoparse	rtd	https://geoparse.readthedocs.io/en/latest/	BSD-3-Clause	GEOparse
+mixs	site	https://genomicsstandardsconsortium.github.io/mixs/	CC0-1.0	MIxS standards
+refseq	site	https://www.ncbi.nlm.nih.gov/refseq/about/	public domain	RefSeq about
+refseq	page	https://www.ncbi.nlm.nih.gov/refseq/rsg/	public domain	RefSeq select
+ncbi-grc	site	https://www.ncbi.nlm.nih.gov/grc/help/	public domain	GRC help
+ncbi-pubtator	page	https://www.ncbi.nlm.nih.gov/research/pubtator3/api	public domain	PubTator 3 API
+all-of-us	site	https://support.researchallofus.org/hc/en-us	unknown	All of Us support
+all-of-us	github	https://github.com/all-of-us/workbench	BSD-3-Clause	All of Us workbench
+all-of-us	github	https://github.com/all-of-us/workbench-snippets	BSD-3-Clause	workbench snippets
+pheweb	github	https://github.com/statgen/pheweb	AGPL-3.0	PheWeb
+bbj	site	https://pheweb.jp/about	unknown	BBJ PheWeb about
+estonian-biobank	site	https://genomics.ut.ee/en/content/estonian-biobank	unknown	Estonian Biobank
+topmed	site	https://topmed.nhlbi.nih.gov/	unknown	TOPMed
+biodata-catalyst	site	https://bdcatalyst.gitbook.io/biodata-catalyst-documentation	unknown	BioData Catalyst docs
+anvil	site	https://anvilproject.org/guides	unknown	AnVIL guides
+genomics-england	site	https://re-docs.genomicsengland.co.uk/	unknown	Genomics England docs
+1000genomes	site	https://www.internationalgenome.org/faq	unknown	1000 Genomes FAQ
+1000genomes	site	https://www.internationalgenome.org/category/documentation/	unknown	1000 Genomes docs
+ldlink	page	https://ldlink.nih.gov/help	public	LDlink help
+cadd	site	https://cadd.gs.washington.edu/info	free academic	CADD info
+cadd	github	https://github.com/kircherlab/CADD-scripts	unknown	CADD scripts
+dbnsfp	site	https://www.dbnsfp.org/	unknown	dbNSFP
+alphamissense	github	https://github.com/google-deepmind/alphamissense	CC BY 4.0	AlphaMissense
+mavedb	github	https://github.com/VariantEffect/mavedb-api	AGPL-3.0	MaveDB API
+myvariant	site	https://docs.myvariant.info/	Apache-2.0	MyVariant.info
+mygene	site	https://docs.mygene.info/	Apache-2.0	MyGene.info
+biothings	site	https://docs.biothings.io/	Apache-2.0	BioThings
+bioservices	rtd	https://bioservices.readthedocs.io/en/main/	GPL-3.0	bioservices
+experimenthub	bioc	https://bioconductor.org/packages/ExperimentHub	Artistic-2.0	ExperimentHub
+annotationdbi	bioc	https://bioconductor.org/packages/AnnotationDbi	Artistic-2.0	AnnotationDbi
+org-hs-eg-db	bioc	https://bioconductor.org/packages/org.Hs.eg.db	Artistic-2.0	org.Hs.eg.db
+txdb-hsapiens	bioc	https://bioconductor.org/packages/TxDb.Hsapiens.UCSC.hg38.knownGene	Artistic-2.0	TxDb hg38
+genomicfeatures	bioc	https://bioconductor.org/packages/GenomicFeatures	Artistic-2.0	GenomicFeatures
+ensembldb	bioc	https://bioconductor.org/packages/ensembldb	LGPL	ensembldb
+annotationfilter	bioc	https://bioconductor.org/packages/AnnotationFilter	Artistic-2.0	AnnotationFilter
+rtracklayer	bioc	https://bioconductor.org/packages/rtracklayer	Artistic-2.0	rtracklayer
+bsgenome	bioc	https://bioconductor.org/packages/BSgenome	Artistic-2.0	BSgenome
+variantannotation	bioc	https://bioconductor.org/packages/VariantAnnotation	Artistic-2.0	VariantAnnotation
+ensemblvep-bioc	bioc	https://bioconductor.org/packages/ensemblVEP	Artistic-2.0	ensemblVEP
+go-db	bioc	https://bioconductor.org/packages/GO.db	Artistic-2.0	GO.db
+dose	bioc	https://bioconductor.org/packages/DOSE	Artistic-2.0	DOSE
+reactomepa	bioc	https://bioconductor.org/packages/ReactomePA	GPL-2.0	ReactomePA
+keggrest	bioc	https://bioconductor.org/packages/KEGGREST	Artistic-2.0	KEGGREST
+annotatr	bioc	https://bioconductor.org/packages/annotatr	GPL-3.0	annotatr
+recount3	bioc	https://bioconductor.org/packages/recount3	Artistic-2.0	recount3
+anvil-bioc	bioc	https://bioconductor.org/packages/AnVIL	Artistic-2.0	AnVIL R
+snplocs	bioc	https://bioconductor.org/packages/SNPlocs.Hsapiens.dbSNP155.GRCh38	Artistic-2.0	SNPlocs
+liftover-bioc	bioc	https://bioconductor.org/packages/liftOver	Artistic-2.0	liftOver
+biocfilecache	bioc	https://bioconductor.org/packages/BiocFileCache	Artistic-2.0	BiocFileCache
+biomartr	cran	https://cran.r-project.org/package=biomartr	GPL-2.0	biomartr
+rentrez	cran	https://cran.r-project.org/package=rentrez	MIT	rentrez
+myvariant-bioc	bioc	https://bioconductor.org/packages/myvariant	Artistic-2.0	myvariant R
+rnacentral	site	https://rnacentral.org/help	CC0-1.0	RNAcentral help
+rnacentral	rtd	https://docs.rnacentral.org/	CC0-1.0	RNAcentral docs
+rfam	rtd	https://docs.rfam.org/en/latest/	CC0-1.0	Rfam docs
+mirbase	site	https://mirbase.org/help/	CC0-1.0	miRBase help
+immport	site	https://docs.immport.org/	unknown	ImmPort docs
+vdjdb	github	https://github.com/antigenomics/vdjdb-db	CC BY 4.0	VDJdb
+ohdsi	site	https://ohdsi.github.io/TheBookOfOhdsi/	CC0-1.0	Book of OHDSI
+omop-cdm	site	https://ohdsi.github.io/CommonDataModel/	Apache-2.0	OMOP CDM
+mimic	site	https://mimic.mit.edu/docs/	PhysioNet licence (docs open)	MIMIC docs
+disease-ontology	github	https://github.com/DiseaseOntology/HumanDiseaseOntology	CC0-1.0	Disease Ontology
+gdc	github	https://github.com/NCI-GDC/gdc-docs	public domain (NCI)	GDC documentation source
+cbioportal	github	https://github.com/cBioPortal/cbioportal/tree/master/docs	AGPL-3.0	cBioPortal docs folder
+gene-ontology	github	https://github.com/geneontology/geneontology.github.io	CC BY 4.0	GO website and docs source
+gene-ontology	github	https://github.com/geneontology/go-ontology	CC BY 4.0	GO ontology repo with docs
+wikipathways	github	https://github.com/wikipathways/wikipathways-help	CC0-1.0	WikiPathways help source
+wikipathways	github	https://github.com/wikipathways/wikipathways-database	CC0-1.0	WikiPathways database repo
+orphanet	github	https://github.com/Orphanet/ORDO	CC BY 4.0	Orphanet Rare Disease Ontology
+alliance-genome	github	https://github.com/alliance-genome/agr_curation	MIT	Alliance curation system
+ga4gh-phenopackets	github	https://github.com/phenopackets/phenopacket-schema	CC BY 4.0	phenopacket schema repo
+ohdsi	github	https://github.com/OHDSI/TheBookOfOhdsi	CC0-1.0	Book of OHDSI source
+omop-cdm	github	https://github.com/OHDSI/CommonDataModel	Apache-2.0	OMOP CDM source
+genome-nexus	site	https://docs.genomenexus.org/	MIT	Genome Nexus docs
+opencravat	rtd	https://open-cravat.readthedocs.io/en/latest/	AGPL-3.0	OpenCRAVAT
+annovar	rtd	https://annovar.openbioinformatics.org/en/latest/	academic	ANNOVAR docs
+organismdbi	bioc	https://bioconductor.org/packages/OrganismDbi	Artistic-2.0	OrganismDbi
+annotationforge	bioc	https://bioconductor.org/packages/AnnotationForge	Artistic-2.0	AnnotationForge
+rols	bioc	https://bioconductor.org/packages/rols	GPL-2.0	OLS R client
+gosemsim	bioc	https://bioconductor.org/packages/GOSemSim	Artistic-2.0	GO semantic similarity
+ontologyindex	cran	https://cran.r-project.org/package=ontologyIndex	GPL-2.0	ontologyIndex
+graphite	bioc	https://bioconductor.org/packages/graphite	AGPL-3.0	pathway databases in R
+paxtoolsr	bioc	https://bioconductor.org/packages/paxtoolsr	LGPL	Pathway Commons R
+chemminer	bioc	https://bioconductor.org/packages/ChemmineR	Artistic-2.0	ChemmineR
+rcdk	cran	https://cran.r-project.org/package=rcdk	LGPL-2.1	rcdk
+metabolomicsworkbenchr	bioc	https://bioconductor.org/packages/metabolomicsWorkbenchR	GPL-3.0	Workbench R client
+rpx	bioc	https://bioconductor.org/packages/rpx	GPL-2.0	ProteomeXchange R client
+rbioapi	cran	https://cran.r-project.org/package=rbioapi	GPL-3.0	rbioapi multi-database client
+omnipathr	bioc	https://bioconductor.org/packages/OmnipathR	MIT	OmnipathR
+enrichr-cran	cran	https://cran.r-project.org/package=enrichR	GPL-3.0	enrichR
+mutationalpatterns	bioc	https://bioconductor.org/packages/MutationalPatterns	MIT	MutationalPatterns
+tcgautils	bioc	https://bioconductor.org/packages/TCGAutils	Artistic-2.0	TCGAutils
+genomeinfodb	bioc	https://bioconductor.org/packages/GenomeInfoDb	Artistic-2.0	GenomeInfoDb
+rsnps	cran	https://cran.r-project.org/package=rsnps	MIT	rsnps
+gget	github	https://github.com/pachterlab/gget	BSD-2-Clause	gget multi-database queries
+goatools	github	https://github.com/tanghaibao/goatools	BSD-2-Clause	goatools
+pronto	rtd	https://pronto.readthedocs.io/en/stable/	MIT	pronto ontologies
+obonet	github	https://github.com/dhimmel/obonet	BSD-2-Clause	obonet
+pyobo	rtd	https://pyobo.readthedocs.io/en/latest/	MIT	PyOBO
+owlready2	rtd	https://owlready2.readthedocs.io/en/latest/	LGPL-3.0	Owlready2
+mygene-py	github	https://github.com/biothings/mygene.py	Apache-2.0	mygene python client
+pybiomart	github	https://github.com/jrderuiter/pybiomart	MIT	pybiomart
+pyensembl	github	https://github.com/openvax/pyensembl	Apache-2.0	pyensembl
+cptac	github	https://github.com/PayneLab/cptac	unknown	CPTAC python
+gdc-client	github	https://github.com/NCI-GDC/gdc-client	Apache-2.0	GDC client
+# --- Python, R, data science, ML, Git, SQL, Linux, free statistics and ML books ---
+python-docs	github	https://github.com/python/cpython/tree/main/Doc	PSF-2.0	CPython Doc: tutorial, library and language reference, HOWTOs (rst)
+python-docs	site	https://docs.python.org/3/howto/	PSF-2.0	Python HOWTOs incl. regex HOWTO
+r-manuals	page	https://cran.r-project.org/doc/manuals/r-release/R-intro.html	GPL-2.0	An Introduction to R
+r-manuals	page	https://cran.r-project.org/doc/manuals/r-release/R-lang.html	GPL-2.0	R Language Definition
+r-manuals	page	https://cran.r-project.org/doc/manuals/r-release/R-exts.html	GPL-2.0	Writing R Extensions
+r-manuals	page	https://cran.r-project.org/doc/manuals/r-release/R-data.html	GPL-2.0	R Data Import/Export
+r-manuals	page	https://cran.r-project.org/doc/manuals/r-release/R-ints.html	GPL-2.0	R Internals
+r-manuals	page	https://cran.r-project.org/doc/manuals/r-release/R-admin.html	GPL-2.0	R Installation and Administration
+adv-r	github	https://github.com/hadley/adv-r	CC BY-NC-SA 4.0	Advanced R 2e bookdown sources (Rmd)
+r-packages	github	https://github.com/hadley/r-pkgs	CC BY-NC-ND 4.0	R Packages 2e sources (qmd/Rmd)
+r4ds-src	github	https://github.com/hadley/r4ds	CC BY-NC-ND 3.0	R for Data Science 2e sources (qmd); website version already listed under r4ds
+mastering-shiny	github	https://github.com/hadley/mastering-shiny	CC BY-NC-ND 4.0	Mastering Shiny sources (website version already listed under shiny)
+efficient-r	github	https://github.com/csgillespie/efficientR	CC BY-NC-SA 3.0	Efficient R Programming sources
+tidyverse-style	github	https://github.com/tidyverse/style	CC BY-SA 4.0	Tidyverse style guide
+tidymodels	github	https://github.com/tidymodels/tidymodels.org	CC BY-SA 4.0	tidymodels website sources
+purrr	site	https://purrr.tidyverse.org/	MIT	purrr reference and articles
+stringr	site	https://stringr.tidyverse.org/	MIT	stringr reference and articles
+lubridate	site	https://lubridate.tidyverse.org/	GPL-3.0	lubridate reference and articles
+reticulate	site	https://rstudio.github.io/reticulate/	Apache-2.0	reticulate R to Python interface
+rcpp	cran	https://cran.r-project.org/package=Rcpp	GPL-2.0	Rcpp manual and vignettes
+numpy-reference	github	https://github.com/numpy/numpy/tree/main/doc/source	BSD-3-Clause	NumPy docs sources (user guide site already listed under numpy)
+scipy	github	https://github.com/scipy/scipy/tree/main/doc/source	BSD-3-Clause	SciPy tutorial and reference sources
+scikit-learn	github	https://github.com/scikit-learn/scikit-learn/tree/main/doc	BSD-3-Clause	scikit-learn user guide and docs sources (rst)
+pytorch	github	https://github.com/pytorch/pytorch/tree/main/docs/source	BSD-3-Clause	PyTorch API and notes docs sources
+pytorch	github	https://github.com/pytorch/tutorials	BSD-3-Clause	PyTorch tutorials
+jax	github	https://github.com/jax-ml/jax/tree/main/docs	Apache-2.0	JAX docs sources (md, ipynb)
+transformers	github	https://github.com/huggingface/transformers/tree/main/docs/source/en	Apache-2.0	Hugging Face transformers docs (English)
+datasets	github	https://github.com/huggingface/datasets/tree/main/docs/source	Apache-2.0	Hugging Face datasets docs
+accelerate	github	https://github.com/huggingface/accelerate/tree/main/docs/source	Apache-2.0	Hugging Face accelerate docs
+peft	github	https://github.com/huggingface/peft/tree/main/docs/source	Apache-2.0	Hugging Face PEFT docs
+jupyter	rtd	https://jupyter-notebook.readthedocs.io/en/latest/	BSD-3-Clause	Jupyter Notebook docs
+jupyter	rtd	https://jupyterlab.readthedocs.io/en/latest/	BSD-3-Clause	JupyterLab docs
+ipython	rtd	https://ipython.readthedocs.io/en/stable/	BSD-3-Clause	IPython docs
+git	site	https://git-scm.com/docs	GPL-2.0	Git reference manual pages
+git	site	https://git-scm.com/book/en/v2	CC BY-NC-SA 3.0	Pro Git book
+postgresql	site	https://www.postgresql.org/docs/current/	PostgreSQL	PostgreSQL manual (robots disallow only /docs/devel/)
+sqlite	site	https://www.sqlite.org/docs.html	public domain	SQLite documentation index
+sqlite	page	https://www.sqlite.org/lang.html	public domain	SQLite SQL language overview
+sqlite	page	https://www.sqlite.org/lang_select.html	public domain	SQLite SELECT
+sqlite	page	https://www.sqlite.org/datatype3.html	public domain	SQLite datatypes
+sqlite	page	https://www.sqlite.org/lang_window.html	public domain	SQLite window functions
+sqlite	page	https://www.sqlite.org/lang_with.html	public domain	SQLite CTEs and recursive queries
+sql-novice-survey	github	https://github.com/swcarpentry/sql-novice-survey	CC BY 4.0	Software Carpentry: databases and SQL
+python-novice	github	https://github.com/swcarpentry/python-novice-inflammation	CC BY 4.0	Software Carpentry: Programming with Python
+r-novice	github	https://github.com/swcarpentry/r-novice-gapminder	CC BY 4.0	Software Carpentry: R for reproducible scientific analysis
+git-novice	github	https://github.com/swcarpentry/git-novice	CC BY 4.0	Software Carpentry: Version control with Git
+man-pages	site	https://man7.org/linux/man-pages/	various (see pages)	Linux man pages from man7.org; robots allow
+vim	site	https://vimhelp.org/	Vim licence	Vim help files online
+neovim	github	https://github.com/neovim/neovim/tree/master/runtime/doc	Apache-2.0	Neovim help (.txt)
+latex-wikibook	site	https://en.wikibooks.org/wiki/LaTeX/	CC BY-SA 4.0	LaTeX Wikibook; robots block only bad bots; large so may need --max-pages
+commonmark	page	https://spec.commonmark.org/0.31.2/	CC BY-SA 4.0	CommonMark spec
+stan	site	https://mc-stan.org/docs/stan-users-guide/	CC BY 4.0	Stan Users Guide
+stan	site	https://mc-stan.org/docs/reference-manual/	CC BY 4.0	Stan Reference Manual
+stan	site	https://mc-stan.org/docs/functions-reference/	CC BY 4.0	Stan Functions Reference
+pymc	github	https://github.com/pymc-devs/pymc/tree/main/docs/source	Apache-2.0	PyMC docs sources
+brms	cran	https://cran.r-project.org/package=brms	GPL-2.0	brms manual and vignettes
+lme4	cran	https://cran.r-project.org/package=lme4	GPL-2.0	lme4 manual and vignettes
+glmnet	cran	https://cran.r-project.org/package=glmnet	GPL-2.0	glmnet manual and vignettes
+xgboost	github	https://github.com/dmlc/xgboost/tree/master/doc	Apache-2.0	XGBoost docs sources
+lightgbm	github	https://github.com/lightgbm-org/LightGBM/tree/master/docs	MIT	LightGBM docs (repo moved from microsoft/LightGBM)
+survival	cran	https://cran.r-project.org/package=survival	LGPL-2.0	survival manual and vignettes
+mgcv	cran	https://cran.r-project.org/package=mgcv	GPL-2.0	mgcv manual and vignettes
+inlabru	cran	https://cran.r-project.org/package=inlabru	GPL-2.0	inlabru (INLA spatial) manual; INLA itself is not on CRAN and r-inla.org is a stub
+islr	pdf	https://www.statlearning.com/s/ISLR-Seventh-Printing.pdf	free to read, authors copyright	ISL with R 1st ed; the 2e and ISLP PDFs return 404 now
+islp-labs	github	https://github.com/intro-stat-learning/ISLP_labs	BSD-2-Clause	ISL with Python lab notebooks
+bda3	pdf	http://www.stat.columbia.edu/~gelman/book/BDA3.pdf	free to read, authors copyright	Bayesian Data Analysis 3rd ed
+mml	pdf	https://mml-book.github.io/book/mml-book.pdf	free to read, CUP copyright	Mathematics for Machine Learning
+pml1	pdf	https://github.com/probml/pml-book/releases/latest/download/book1.pdf	free to read	Probabilistic Machine Learning: An Introduction (Murphy); redirect URL
+d2l	github	https://github.com/d2l-ai/d2l-en	CC BY-SA 4.0	Dive into Deep Learning (md chapters)
+think-stats	site	https://allendowney.github.io/ThinkStats/	CC BY-NC-SA 4.0	Think Stats 3e; robots allow
+think-bayes	site	https://allendowney.github.io/ThinkBayes2/	CC BY-NC-SA 4.0	Think Bayes 2e; robots allow
+think-python	site	https://allendowney.github.io/ThinkPython/	CC BY-NC-SA 4.0	Think Python 3e; robots allow
+openintro-ims	github	https://github.com/openintrostat/ims	CC BY-SA 3.0	Introduction to Modern Statistics (OpenIntro)
+python-data-science-handbook	github	https://github.com/jakevdp/PythonDataScienceHandbook	CC BY-NC-ND 3.0	Python Data Science Handbook notebooks
+fastbook	github	https://github.com/fastai/fastbook	GPL-3.0	fastai deep learning book notebooks
+fpp3	site	https://otexts.com/fpp3/	CC BY-NC-SA 3.0	Forecasting Principles and Practice 3e; robots Crawl-delay 10
+automate-boring-stuff	site	https://automatetheboringstuff.com/	CC BY-NC-SA 3.0	Automate the Boring Stuff with Python; robots allow
+# --- C and C++: language, toolchains, HPC, scientific libraries ---
+cpp-core-guidelines	github	https://github.com/isocpp/CppCoreGuidelines	CC-BY-4.0	C++ Core Guidelines (Stroustrup/Sutter), Markdown source
+cpp-draft-standard	site	https://eel.is/c++draft/	unknown	Working draft of the ISO C++ standard (WG21); free to read, large
+gcc	site	https://gcc.gnu.org/onlinedocs/gcc/	GFDL-1.3	GCC manual (options, extensions, attributes, builtins)
+gcc	site	https://gcc.gnu.org/onlinedocs/cpp/	GFDL-1.3	C preprocessor manual
+gcc	site	https://gcc.gnu.org/onlinedocs/libstdc++/manual/	GFDL-1.3	GNU libstdc++ manual
+gcc	site	https://gcc.gnu.org/onlinedocs/libgomp/	GFDL-1.3	GNU OpenMP runtime (libgomp) manual
+glibc	site	https://sourceware.org/glibc/manual/latest/html_node/	GFDL-1.3	GNU C Library manual (sourceware copy reachable; www.gnu.org copy 302/403 to plain curl)
+gdb	site	https://sourceware.org/gdb/current/onlinedocs/gdb/	GFDL-1.3	GDB user manual
+valgrind	site	https://valgrind.org/docs/manual/	GPL-2.0	Valgrind manual (memcheck, callgrind, massif, helgrind)
+llvm	github	https://github.com/llvm/llvm-project/tree/main/llvm/docs	Apache-2.0 WITH LLVM-exception	LLVM docs (LangRef, passes, programmer manual); large folder
+clang	github	https://github.com/llvm/llvm-project/tree/main/clang/docs	Apache-2.0 WITH LLVM-exception	Clang docs (user manual, language extensions, sanitizers, attributes)
+clang	github	https://github.com/llvm/llvm-project/tree/main/clang-tools-extra/docs	Apache-2.0 WITH LLVM-exception	clang-tidy, clangd and clang-format docs
+libcxx	github	https://github.com/llvm/llvm-project/tree/main/libcxx/docs	Apache-2.0 WITH LLVM-exception	LLVM libc++ docs
+lldb	github	https://github.com/llvm/llvm-project/tree/main/lldb/docs	Apache-2.0 WITH LLVM-exception	LLDB debugger docs
+lld	github	https://github.com/llvm/llvm-project/tree/main/lld/docs	Apache-2.0 WITH LLVM-exception	LLD linker docs
+llvm-openmp	github	https://github.com/llvm/llvm-project/tree/main/openmp/docs	Apache-2.0 WITH LLVM-exception	LLVM OpenMP runtime docs
+cmake	github	https://github.com/Kitware/CMake/tree/master/Help	BSD-3-Clause	CMake reference docs (commands, modules, variables, manuals, guides)
+ninja	page	https://ninja-build.org/manual.html	Apache-2.0	Ninja build system manual (single page)
+meson	github	https://github.com/mesonbuild/meson/tree/master/docs/markdown	Apache-2.0	Meson build system docs (Markdown source)
+openmp	pdf	https://www.openmp.org/wp-content/uploads/OpenMP-API-Specification-5-2.pdf	unknown	OpenMP 5.2 API specification (free from openmp.org)
+openmp	pdf	https://www.openmp.org/wp-content/uploads/OpenMP-API-Specification-6-0.pdf	unknown	OpenMP 6.0 API specification; large
+openmp	pdf	https://www.openmp.org/wp-content/uploads/openmp-examples-5-2-2.pdf	unknown	OpenMP 5.2.2 examples document
+openmp	pdf	https://www.openmp.org/wp-content/uploads/openmp-examples-6-0-1.pdf	unknown	OpenMP 6.0.1 examples document
+mpi	pdf	https://www.mpi-forum.org/docs/mpi-5.0/mpi50-report.pdf	unknown	MPI 5.0 standard (6 MB, about 1000 pages)
+mpi	pdf	https://www.mpi-forum.org/docs/mpi-4.1/mpi41-report.pdf	unknown	MPI 4.1 standard (overlaps 5.0; drop if size matters)
+openmpi	rtd	https://docs.open-mpi.org/en/main/	BSD-3-Clause	Open MPI user and developer docs
+cuda	site	https://docs.nvidia.com/cuda/cuda-c-programming-guide/	unknown	CUDA C++ Programming Guide (legacy tree); NVIDIA robots allow *
+cuda	site	https://docs.nvidia.com/cuda/cuda-programming-guide/	unknown	CUDA Programming Guide (new edition)
+cuda	site	https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/	unknown	CUDA C++ Best Practices Guide
+cuda	site	https://docs.nvidia.com/cuda/cuda-runtime-api/	unknown	CUDA Runtime API reference
+cuda	site	https://docs.nvidia.com/cuda/cublas/	unknown	cuBLAS documentation
+thrust	site	https://nvidia.github.io/cccl/unstable/thrust/	Apache-2.0	Thrust docs (CUDA C++ Core Libraries); pages live under /unstable/
+cub	site	https://nvidia.github.io/cccl/unstable/cub/	Apache-2.0	CUB docs (CCCL)
+cuda-samples	github	https://github.com/NVIDIA/cuda-samples	BSD-3-Clause	CUDA sample programs with READMEs; repo large, doc files only
+eigen	site	https://libeigen.gitlab.io/eigen/docs-nightly/	MPL-2.0	Eigen Doxygen docs incl. tutorials; many pages
+lapack	site	https://netlib.org/lapack/lug/	BSD-3-Clause	LAPACK Users' Guide (netlib robots crawl-delay 10)
+lapack	github	https://github.com/Reference-LAPACK/lapack/tree/master/DOCS	BSD-3-Clause	Reference LAPACK docs folder
+blas	pdf	https://netlib.org/blas/blast-forum/blas-report.pdf	unknown	BLAS Technical Forum standard
+openblas	github	https://github.com/OpenMathLib/OpenBLAS/tree/develop/docs	BSD-3-Clause	OpenBLAS docs
+blis	github	https://github.com/flame/blis/tree/master/docs	BSD-3-Clause	BLIS framework docs (BLAS and typed API)
+onemkl	github	https://github.com/uxlfoundation/oneMath	Apache-2.0	oneMKL/oneMath interface repo (Intel developer docs return 403, not crawlable)
+boost	site	https://www.boost.org/doc/libs/release/libs/program_options/	BSL-1.0	Boost.Program_options
+boost	site	https://www.boost.org/doc/libs/release/libs/filesystem/	BSL-1.0	Boost.Filesystem
+boost	site	https://www.boost.org/doc/libs/release/libs/graph/	BSL-1.0	Boost Graph Library; large
+boost	site	https://www.boost.org/doc/libs/release/libs/math/	BSL-1.0	Boost.Math (special functions, distributions, statistics); very large
+boost	site	https://www.boost.org/doc/libs/release/libs/random/	BSL-1.0	Boost.Random
+boost	site	https://www.boost.org/doc/libs/release/libs/iostreams/	BSL-1.0	Boost.Iostreams (gzip/bzip2 filters)
+boost	site	https://www.boost.org/doc/libs/release/libs/mpi/	BSL-1.0	Boost.MPI
+boost	site	https://www.boost.org/doc/libs/release/libs/multiprecision/	BSL-1.0	Boost.Multiprecision
+boost	site	https://www.boost.org/doc/libs/release/libs/dynamic_bitset/	BSL-1.0	Boost.Dynamic_bitset
+boost	site	https://www.boost.org/doc/libs/release/libs/unordered/	BSL-1.0	Boost.Unordered
+boost	site	https://www.boost.org/doc/libs/release/libs/algorithm/	BSL-1.0	Boost.Algorithm
+boost	site	https://www.boost.org/doc/libs/release/libs/accumulators/	BSL-1.0	Boost.Accumulators (online statistics)
+fmt	github	https://github.com/fmtlib/fmt/tree/master/doc	MIT	{fmt} docs
+spdlog	github	https://github.com/gabime/spdlog	MIT	spdlog README (wiki is not a repo folder)
+catch2	github	https://github.com/catchorg/Catch2/tree/devel/docs	BSL-1.0	Catch2 docs
+googletest	github	https://github.com/google/googletest/tree/main/docs	BSD-3-Clause	GoogleTest and GoogleMock docs
+google-benchmark	github	https://github.com/google/benchmark/tree/main/docs	Apache-2.0	Google Benchmark user guide
+doctest	github	https://github.com/doctest/doctest/tree/master/doc/markdown	MIT	doctest docs
+pybind11	rtd	https://pybind11.readthedocs.io/en/latest/	BSD-3-Clause	pybind11 C++/Python bindings
+nanobind	rtd	https://nanobind.readthedocs.io/en/latest/	BSD-3-Clause	nanobind bindings (robots hides /en/stable/, use latest)
+xtensor	rtd	https://xtensor.readthedocs.io/en/latest/	BSD-3-Clause	xtensor C++ n-d arrays (NumPy-like)
+nlohmann-json	site	https://json.nlohmann.me/	MIT	JSON for Modern C++
+onetbb	site	https://uxlfoundation.github.io/oneTBB/	Apache-2.0	oneTBB (threading building blocks) docs
+kokkos	github	https://github.com/kokkos/kokkos-core-wiki	unknown	Kokkos core wiki (performance portability); check repo licence
+zlib	page	https://zlib.net/manual.html	Zlib	zlib manual (single page; zlib.net crawl-delay 20 so page not site)
+zstd	page	https://raw.githubusercontent.com/facebook/zstd/dev/doc/zstd_manual.html	BSD-3-Clause	zstd API manual (generated HTML in repo)
+zstd	github	https://github.com/facebook/zstd/tree/dev/doc	BSD-3-Clause	zstd docs folder
+hdf5	site	https://support.hdfgroup.org/documentation/hdf5/latest/	BSD-3-Clause	HDF5 docs incl. User Guide and reference (Doxygen); large
+arrow-cpp	site	https://arrow.apache.org/docs/cpp/	Apache-2.0	Apache Arrow C++ docs
+sqlite	site	https://www.sqlite.org/c3ref/	Public-Domain	SQLite C API reference (robots allow)
+sqlite	page	https://www.sqlite.org/cintro.html	Public-Domain	Introduction to the SQLite C/C++ interface
+opencv	github	https://github.com/opencv/opencv/tree/4.x/doc	Apache-2.0	OpenCV doc sources (tutorials in Markdown); docs.opencv.org sets ai-train=no so not crawled
+gsl	site	https://www.gnu.org/software/gsl/doc/html/	GPL-3.0	GNU Scientific Library manual (gnu.org robots crawl-delay 4)
+fftw	site	https://www.fftw.org/fftw3_doc/	GPL-2.0	FFTW 3 manual
+modern-c	pdf	https://inria.hal.science/hal-02383654/document	CC-BY-NC-SA-4.0	Modern C by Jens Gustedt (free PDF, HAL copy); non-commercial licence, check fit
+beej-c	site	https://beej.us/guide/bgc/html/split/	CC-BY-NC-ND-4.0	Beej's Guide to C; crawl-delay 10; NC-ND licence, check fit
+beej-net	site	https://beej.us/guide/bgnet/html/split/	CC-BY-NC-ND-4.0	Beej's Guide to Network Programming; NC-ND licence, check fit
+algorithmica	github	https://github.com/algorithmica-org/algorithmica/tree/master/content/english	CC-BY-SA-4.0	Algorithms for Modern Hardware (source); licence from memory, verify (no LICENSE file found)
+agner-optimizing-cpp	pdf	https://www.agner.org/optimize/optimizing_cpp.pdf	unknown	Agner Fog, Optimizing software in C++
+agner-microarchitecture	pdf	https://www.agner.org/optimize/microarchitecture.pdf	unknown	Agner Fog, microarchitecture of Intel and AMD CPUs
+# --- 3D graphics, rendering, shaders, engines, neural rendering, geometry, molecular viewers ---
+blender-dev-docs	github	https://github.com/julianeisel/devdocs	CC BY-SA 4.0	Blender developer docs Markdown (archived 2023 copy; official developer.blender.org robots says ai-train=no so site not used)
+blenderproc	github	https://github.com/DLR-RM/BlenderProc	GPL-3.0	BlenderProc docs and bpy example scripts
+aframe	github	https://github.com/aframevr/aframe	MIT	A-Frame docs
+playcanvas	github	https://github.com/playcanvas/developer.playcanvas.com	MIT	PlayCanvas developer docs (Markdown)
+webglfundamentals	github	https://github.com/gfxfundamentals/webgl-fundamentals	BSD-3-Clause	WebGL fundamentals lessons
+webgl2fundamentals	site	https://webgl2fundamentals.org/webgl/lessons/	BSD-3-Clause	WebGL2 fundamentals lessons
+webgpufundamentals	github	https://github.com/webgpu/webgpufundamentals	BSD-3-Clause	WebGPU fundamentals lessons
+webgpu-spec	page	https://www.w3.org/TR/webgpu/	W3C document licence	WebGPU specification
+webgpu-spec	page	https://www.w3.org/TR/WGSL/	W3C document licence	WGSL shading language specification
+webgpu-spec	github	https://github.com/gpuweb/gpuweb	W3C Software and Document licence	WebGPU explainers and proposals
+glsl-spec	page	https://registry.khronos.org/OpenGL/specs/gl/GLSLangSpec.4.60.html	Khronos	GLSL 4.60 specification
+glsl-spec	github	https://github.com/KhronosGroup/GLSL	Khronos	GLSL extension specifications
+opengl-refpages	site	https://registry.khronos.org/OpenGL-Refpages/gl4/	Open Publication Licence 1.0	OpenGL 4 reference pages
+learnopengl	site	https://learnopengl.com/	CC BY-NC 4.0	LearnOpenGL tutorial text (non-commercial licence; GitHub repo holds code only)
+vulkan-tutorial	github	https://github.com/Overv/VulkanTutorial	CC BY-SA 4.0	Vulkan tutorial (Markdown)
+bookofshaders	github	https://github.com/patriciogonzalezvivo/thebookofshaders	CC BY-NC-ND 4.0	The Book of Shaders
+godot-docs	github	https://github.com/godotengine/godot-docs	CC BY 3.0	Godot engine documentation (rst)
+pbr-book	site	https://pbr-book.org/4ed/	CC BY-NC-ND 4.0	Physically Based Rendering 4th ed (robots.txt has no rules)
+pbr-book	site	https://pbr-book.org/3ed-2018/	CC BY-NC-ND 4.0	Physically Based Rendering 3rd ed
+raytracing-weekend	site	https://raytracing.github.io/books/	CC0-1.0	Ray Tracing in One Weekend series
+povray	github	https://github.com/POV-Ray/povray	AGPL-3.0	POV-Ray source tree docs (wiki.povray.org answers 403 to curl)
+openscad	site	https://en.wikibooks.org/wiki/OpenSCAD_User_Manual/	CC BY-SA 4.0	OpenSCAD user manual per page (robots allows /wiki/ article pages)
+nerfstudio	site	https://docs.nerf.studio/	Apache-2.0	Nerfstudio docs
+nerfstudio	github	https://github.com/nerfstudio-project/nerfstudio	Apache-2.0	Nerfstudio repo docs and examples
+gsplat	site	https://docs.gsplat.studio/main/	Apache-2.0	gsplat docs
+gsplat	github	https://github.com/nerfstudio-project/gsplat	Apache-2.0	gsplat repo docs and examples
+gaussian-splatting	github	https://github.com/graphdeco-inria/gaussian-splatting	Inria non-commercial research licence	3D Gaussian Splatting README
+nvdiffrast	site	https://nvlabs.github.io/nvdiffrast/	NVIDIA Source Code Licence (non-commercial)	nvdiffrast differentiable rasteriser docs
+instant-ngp	github	https://github.com/NVlabs/instant-ngp	NVIDIA Source Code Licence (non-commercial)	Instant-NGP README and docs
+open3d-ml	github	https://github.com/isl-org/Open3D-ML	MIT	Open3D-ML docs
+assimp	github	https://github.com/assimp/assimp	BSD-3-Clause	Assimp docs
+alembic	github	https://github.com/alembic/alembic	BSD-3-Clause	Alembic docs
+pcl	site	https://pcl.readthedocs.io/projects/tutorials/en/master/	BSD-3-Clause	PCL tutorials
+pcl	github	https://github.com/PointCloudLibrary/pcl	BSD-3-Clause	PCL docs folder
+pdal	site	https://pdal.io/en/stable/	BSD-3-Clause	PDAL point cloud docs
+paraview	site	https://docs.paraview.org/en/latest/	BSD-3-Clause	ParaView guides (User, Python, Catalyst)
+vtk-js	site	https://kitware.github.io/vtk-js/docs/	BSD-3-Clause	vtk.js docs
+vtk-js	github	https://github.com/Kitware/vtk-js	BSD-3-Clause	vtk.js repo docs and examples
+cgal	site	https://doc.cgal.org/latest/Manual/	GPL-3.0 / LGPL-3.0	CGAL manual (large; robots disallows only /4.2/)
+taichi	site	https://docs.taichi-lang.org/docs/	Apache-2.0	Taichi docs
+filament	github	https://github.com/google/filament	Apache-2.0	Filament PBR docs (Materials, Filament md)
+materialx	github	https://github.com/AcademySoftwareFoundation/MaterialX	Apache-2.0	MaterialX docs
+openvdb	github	https://github.com/AcademySoftwareFoundation/openvdb	MPL-2.0	OpenVDB docs
+embree	github	https://github.com/embree/embree	Apache-2.0	Embree docs
+openimageio	github	https://github.com/AcademySoftwareFoundation/OpenImageIO	Apache-2.0	OpenImageIO docs
+moderngl	rtd	https://moderngl.readthedocs.io/en/latest/	MIT	ModernGL
+pyrender	rtd	https://pyrender.readthedocs.io/en/latest/	MIT	pyrender
+pygfx	site	https://docs.pygfx.org/stable/	BSD-2-Clause	pygfx (pythreejs-like on wgpu)
+wgpu-py	rtd	https://wgpu-py.readthedocs.io/en/stable/	BSD-2-Clause	wgpu-py
+vispy	github	https://github.com/vispy/vispy	BSD-3-Clause	VisPy docs and examples
+k3d-jupyter	github	https://github.com/K3D-tools/K3D-jupyter	MIT	K3D Jupyter
+pythreejs	rtd	https://pythreejs.readthedocs.io/en/stable/	BSD-3-Clause	pythreejs
+mayavi	site	https://docs.enthought.com/mayavi/mayavi/	BSD-3-Clause	Mayavi
+gmsh	page	https://gmsh.info/doc/texinfo/gmsh.txt	GPL-2.0-or-later	Gmsh reference manual (plain text)
+chimerax-devel	site	https://www.cgl.ucsf.edu/chimerax/docs/devel/	UCSF ChimeraX licence (free non-commercial)	ChimeraX programming guide
+jmol	site	https://jmol.sourceforge.net/docs/	LGPL-2.1	Jmol docs
+iquilez	site	https://iquilezles.org/articles/	unknown (site robots allow /articles/)	Inigo Quilez shader and SDF articles
+glfw	github	https://github.com/glfw/glfw	zlib	GLFW docs
+glm	github	https://github.com/g-truc/glm	MIT	GLM manual
+bgfx	github	https://github.com/bkaradzic/bgfx	BSD-2-Clause	bgfx docs
+openusd-tutorials	site	https://openusd.org/release/tut_usd_tutorials.html	Apache-2.0	OpenUSD tutorials
+learn-wgpu	github	https://github.com/sotrh/learn-wgpu	MIT	Learn wgpu tutorial
+# --- bioinformatics training material and open textbooks ---
+galaxy-training	github	https://github.com/galaxyproject/training-material/tree/main/topics/introduction	CC BY 4.0	GTN introduction
+galaxy-training	github	https://github.com/galaxyproject/training-material/tree/main/topics/variant-analysis	CC BY 4.0	GTN variant analysis
+galaxy-training	github	https://github.com/galaxyproject/training-material/tree/main/topics/transcriptomics	CC BY 4.0	GTN transcriptomics
+galaxy-training	github	https://github.com/galaxyproject/training-material/tree/main/topics/statistics	CC BY 4.0	GTN statistics
+galaxy-training	github	https://github.com/galaxyproject/training-material/tree/main/topics/single-cell	CC BY 4.0	GTN single-cell
+galaxy-training	github	https://github.com/galaxyproject/training-material/tree/main/topics/epigenetics	CC BY 4.0	GTN epigenetics
+galaxy-training	github	https://github.com/galaxyproject/training-material/tree/main/topics/assembly	CC BY 4.0	GTN assembly
+galaxy-training	github	https://github.com/galaxyproject/training-material/tree/main/topics/genome-annotation	CC BY 4.0	GTN genome annotation
+galaxy-training	github	https://github.com/galaxyproject/training-material/tree/main/topics/proteomics	CC BY 4.0	GTN proteomics
+galaxy-training	github	https://github.com/galaxyproject/training-material/tree/main/topics/metabolomics	CC BY 4.0	GTN metabolomics
+galaxy-training	github	https://github.com/galaxyproject/training-material/tree/main/topics/data-science	CC BY 4.0	GTN data science
+galaxy-training	github	https://github.com/galaxyproject/training-material/tree/main/topics/sequence-analysis	CC BY 4.0	GTN sequence analysis
+galaxy-training	github	https://github.com/galaxyproject/training-material/tree/main/topics/evolution	CC BY 4.0	GTN evolution
+galaxy-training	github	https://github.com/galaxyproject/training-material/tree/main/topics/microbiome	CC BY 4.0	GTN microbiome
+carpentry	github	https://github.com/datacarpentry/wrangling-genomics	CC BY 4.0	Data Carpentry genomics wrangling
+carpentry	github	https://github.com/datacarpentry/genomics-workshop	CC BY 4.0	Data Carpentry genomics workshop
+carpentry	github	https://github.com/datacarpentry/R-genomics	CC BY 4.0	Data Carpentry R for genomics
+carpentry	github	https://github.com/datacarpentry/organization-genomics	CC BY 4.0	Data Carpentry data organisation genomics
+carpentry	github	https://github.com/datacarpentry/R-ecology-lesson	CC BY 4.0	Data Carpentry R ecology
+carpentry	github	https://github.com/swcarpentry/python-novice-gapminder	CC BY 4.0	Software Carpentry Python
+carpentry	github	https://github.com/swcarpentry/make-novice	CC BY 4.0	Software Carpentry Make
+carpentry	github	https://github.com/carpentries-incubator/bioc-intro	CC BY 4.0	Bioconductor intro lesson
+carpentry	github	https://github.com/carpentries-incubator/bioc-project	CC BY 4.0	Bioconductor project lesson
+carpentry	github	https://github.com/carpentries-incubator/bioc-rnaseq	CC BY 4.0	Bioconductor RNA-seq lesson
+carpentry	github	https://github.com/carpentries-incubator/snakemake-novice-bioinformatics	CC BY 4.0	Snakemake bioinformatics lesson
+carpentry	github	https://github.com/carpentries-incubator/workflows-snakemake	CC BY 4.0	workflows Snakemake
+carpentry	github	https://github.com/carpentries-incubator/introduction-to-conda-for-data-scientists	CC BY 4.0	conda lesson
+carpentry	github	https://github.com/carpentries-incubator/docker-introduction	CC BY 4.0	docker lesson
+carpentry	github	https://github.com/carpentries-incubator/singularity-introduction	CC BY 4.0	singularity lesson
+carpentry	github	https://github.com/carpentries-incubator/machine-learning-novice-sklearn	CC BY 4.0	ML sklearn lesson
+carpentry	github	https://github.com/carpentries-incubator/deep-learning-intro	CC BY 4.0	deep learning intro
+carpentry	github	https://github.com/carpentries-incubator/metagenomics	CC BY 4.0	metagenomics lesson
+carpentry	github	https://github.com/carpentries-incubator/high-dimensional-stats-r	CC BY 4.0	high-dimensional statistics R
+bioc-books	site	https://bioconductor.org/books/release/SingleRBook/	CC BY 4.0	SingleR book
+bioc-books	site	https://bioconductor.org/books/release/csawBook/	CC BY 4.0	csaw book
+bioc-books	site	https://bioconductor.org/books/release/OHCA/	CC BY 4.0	Hi-C book
+bioc-books	site	https://bioconductor.org/books/release/OSTA/	CC BY 4.0	Orchestrating Spatial Transcriptomics Analysis
+bioc-books	site	https://bioconductor.org/books/release/OSCA.intro/	CC BY 4.0	OSCA intro
+bioc-books	site	https://bioconductor.org/books/release/OSCA.advanced/	CC BY 4.0	OSCA advanced
+bioc-books	site	https://bioconductor.org/books/release/OSCA.multisample/	CC BY 4.0	OSCA multisample
+bioc-books	site	https://bioconductor.org/books/release/OSCA.workflows/	CC BY 4.0	OSCA workflows
+bioc-books	site	https://bioconductor.org/books/release/OSCA.basic/	CC BY 4.0	OSCA basic
+bioc-github	github	https://github.com/kasperdanielhansen/genbioconductor	CC BY 4.0	Genomic Bioconductor course
+bioc-github	github	https://github.com/Bioconductor/BiocWorkshops	CC BY 4.0	BiocWorkshops
+bioc-github	github	https://github.com/OSCA-source/OSCA	CC BY 4.0	OSCA source
+hbctraining	github	https://github.com/hbctraining/DGE_workshop	CC BY 4.0	HBC DGE workshop
+hbctraining	github	https://github.com/hbctraining/DGE_workshop_salmon	CC BY 4.0	HBC DGE salmon
+hbctraining	github	https://github.com/hbctraining/DGE_workshop_salmon_online	CC BY 4.0	HBC DGE salmon online
+hbctraining	github	https://github.com/hbctraining/Intro-to-R	CC BY 4.0	HBC intro R
+hbctraining	github	https://github.com/hbctraining/Intro-to-R-with-DGE	CC BY 4.0	HBC R with DGE
+hbctraining	github	https://github.com/hbctraining/Intro-to-shell	CC BY 4.0	HBC shell
+hbctraining	github	https://github.com/hbctraining/Intro-to-shell-flipped	CC BY 4.0	HBC shell flipped
+hbctraining	github	https://github.com/hbctraining/scRNA-seq	CC BY 4.0	HBC scRNA-seq
+hbctraining	github	https://github.com/hbctraining/scRNA-seq_online	CC BY 4.0	HBC scRNA-seq online
+hbctraining	github	https://github.com/hbctraining/In-depth-NGS-Data-Analysis-Course	CC BY 4.0	HBC NGS course
+hbctraining	github	https://github.com/hbctraining/Training-modules	CC BY 4.0	HBC training modules
+hbctraining	github	https://github.com/hbctraining/Intro-to-ChIPseq	CC BY 4.0	HBC ChIP-seq
+hbctraining	github	https://github.com/hbctraining/Intro-to-ChIPseq-flipped	CC BY 4.0	HBC ChIP-seq flipped
+hbctraining	github	https://github.com/hbctraining/Intro-to-rnaseq-hpc-O2	CC BY 4.0	HBC RNA-seq HPC
+hbctraining	github	https://github.com/hbctraining/variant_analysis	CC BY 4.0	HBC variant analysis
+hbctraining	github	https://github.com/hbctraining/Intro-to-Python	CC BY 4.0	HBC Python
+embl-training	github	https://github.com/ebi-gene-expression-group/scxa-tertiary-workflow	unknown	SCXA tertiary workflow
+cambio-training	github	https://github.com/cambiotraining/stats-glm	CC BY 4.0	GLM
+cambio-training	github	https://github.com/cambiotraining/sars-cov-2-genomics	CC BY 4.0	SARS-CoV-2 genomics
+nf-core	github	https://github.com/nf-core/tools	MIT	nf-core tools
+nf-core	github	https://github.com/nf-core/website	MIT	nf-core website source
+snakemake-wrappers	github	https://github.com/snakemake/snakemake-wrappers	MIT	Snakemake wrappers
+snakemake-wrappers	rtd	https://snakemake-wrappers.readthedocs.io/en/stable/	MIT	Snakemake wrappers docs
+snakemake-workflows	github	https://github.com/snakemake-workflows/dna-seq-gatk-variant-calling	MIT	GATK variant calling workflow
+snakemake-workflows	github	https://github.com/snakemake-workflows/rna-seq-star-deseq2	MIT	RNA-seq STAR DESeq2 workflow
+snakemake-workflows	github	https://github.com/snakemake/snakemake-tutorial-data	unknown	tutorial data
+nextflow	site	https://training.nextflow.io/	CC BY-NC-ND 4.0	Nextflow training site
+nextflow	site	https://www.nextflow.io/docs/latest/	Apache-2.0	Nextflow docs
+nextflow	github	https://github.com/nextflow-io/patterns	unknown	Nextflow patterns
+statgen-notes	site	https://www.mv.helsinki.fi/home/mjxpirin/GWAS_course/	unknown	Pirinen GWAS course
+statgen-notes	site	https://www.mv.helsinki.fi/home/mjxpirin/HDS_course/	unknown	Pirinen HDS course
+popgen-notes	github	https://github.com/cooplab/popgen-notes	CC BY 4.0	Coop popgen notes
+mr-training	site	https://mr-dictionary.mrcieu.ac.uk/	unknown	MR dictionary site
+mr-training	github	https://github.com/MRCIEU/ieugwasr	MIT	mr-training ieugwasr
+textbooks	site	https://compgenomr.github.io/book/	CC BY-NC-SA 4.0	Computational Genomics with R
+textbooks	github	https://github.com/compgenomr/book	CC BY-NC-SA 4.0	compgenomr source
+textbooks	site	https://www.huber.embl.de/msmb/	CC BY-NC-SA 3.0	Modern Statistics for Modern Biology
+textbooks	github	https://github.com/wolfganghuber/MSMB	CC BY-NC-SA 3.0	MSMB source
+textbooks	github	https://github.com/intro-stat-learning/ISLP	BSD-3-Clause	ISLP labs
+textbooks	site	https://openintro-ims.netlify.app/	CC BY-SA 3.0	IMS book
+textbooks	github	https://github.com/vsbuffalo/bds-files	unknown	Bioinformatics Data Skills
+textbooks	site	https://astrobiomike.github.io/	unknown	Happy Belly Bioinformatics
+textbooks	github	https://github.com/AstrobioMike/AstrobioMike.github.io	unknown	Happy Belly source
+textbooks	github	https://github.com/appliedepi/epiRhandbook_eng	GPL-3.0	Epidemiologist R Handbook
+textbooks	site	https://www.epirhandbook.com/en/	CC BY-NC-SA 4.0	Epidemiologist R Handbook site
+textbooks	github	https://github.com/theislab/single-cell-best-practices	CC BY 4.0	single-cell best practices
+textbooks	site	https://www.sc-best-practices.org/	CC BY 4.0	single-cell best practices site
+textbooks	github	https://github.com/scverse/scanpy-tutorials	BSD-3-Clause	scanpy tutorials
+textbooks	github	https://github.com/scverse/scverse-tutorials	BSD-3-Clause	scverse tutorials
+textbooks	github	https://github.com/scverse/spatialdata-notebooks	BSD-3-Clause	spatialdata notebooks
+omics	github	https://github.com/OpenMS/OpenMS	BSD-3-Clause	OpenMS (docs inside)
+omics	github	https://github.com/OpenMS/pyopenms-extra	BSD-3-Clause	pyOpenMS extras
+omics	site	https://www.metaboanalyst.ca/docs/Tutorials.xhtml	unknown	MetaboAnalyst tutorials
+omics	github	https://github.com/proteomicsML/proteomicsML	CC BY 4.0	proteomicsML
+omics	site	https://rformassspectrometry.github.io/book/	CC BY-SA 4.0	R for mass spectrometry
+omics	github	https://github.com/rformassspectrometry/book	CC BY-SA 4.0	R for MS source
+causal	site	https://www.hsph.harvard.edu/miguel-hernan/causal-inference-book/	unknown	Causal Inference What If
+causal	pdf	https://cdn1.sph.harvard.edu/wp-content/uploads/sites/1268/2024/01/hernanrobins_WhatIf_2jan24.pdf	unknown	What If PDF
+causal	github	https://github.com/scunning1975/mixtape	unknown	Mixtape source
+causal	github	https://github.com/NickCH-K/causalbook	unknown	causal causalbook
+causal	site	https://bookdown.org/paul/applied-causal-analysis/	unknown	Applied causal analysis
+cambio-training	github	https://github.com/cambiotraining/stats-intro	CC BY 4.0	Cambridge Bioinformatics Training stats-intro
+cambio-training	github	https://github.com/cambiotraining/chipseq	CC BY 4.0	Cambridge Bioinformatics Training chipseq
+cambio-training	github	https://github.com/cambiotraining/bulk-rnaseq	CC BY 4.0	Cambridge Bioinformatics Training bulk-rnaseq
+cambio-training	github	https://github.com/cambiotraining/single-cell-rnaseq	CC BY 4.0	Cambridge Bioinformatics Training single-cell-rnaseq
+cambio-training	github	https://github.com/cambiotraining/gwas	CC BY 4.0	Cambridge Bioinformatics Training gwas
+cambio-training	github	https://github.com/cambiotraining/variant-calling	CC BY 4.0	Cambridge Bioinformatics Training variant-calling
+cambio-training	github	https://github.com/cambiotraining/metagenomics	CC BY 4.0	Cambridge Bioinformatics Training metagenomics
+cambio-training	github	https://github.com/cambiotraining/bacterial-genomics	CC BY 4.0	Cambridge Bioinformatics Training bacterial-genomics
+cambio-training	github	https://github.com/cambiotraining/phylogenetics	CC BY 4.0	Cambridge Bioinformatics Training phylogenetics
+cambio-training	github	https://github.com/cambiotraining/expression-proteomics	CC BY 4.0	Cambridge Bioinformatics Training expression-proteomics
+cambio-training	github	https://github.com/cambiotraining/spatial-transcriptomics	CC BY 4.0	Cambridge Bioinformatics Training spatial-transcriptomics
+cambio-training	github	https://github.com/cambiotraining/Metabolomics	CC BY 4.0	Cambridge Bioinformatics Training Metabolomics
+cambio-training	github	https://github.com/cambiotraining/stats-resampling	CC BY 4.0	Cambridge Bioinformatics Training stats-resampling
+cambio-training	github	https://github.com/cambiotraining/stats-mva	CC BY 4.0	Cambridge Bioinformatics Training stats-mva
+cambio-training	github	https://github.com/cambiotraining/stats-survival-analysis	CC BY 4.0	Cambridge Bioinformatics Training stats-survival-analysis
+cambio-training	github	https://github.com/cambiotraining/stats-simulation	CC BY 4.0	Cambridge Bioinformatics Training stats-simulation
+cambio-training	github	https://github.com/cambiotraining/stats-mixed-effects-models	CC BY 4.0	Cambridge Bioinformatics Training stats-mixed-effects-models
+cambio-training	github	https://github.com/cambiotraining/stats-bbs-linear-models	CC BY 4.0	Cambridge Bioinformatics Training stats-bbs-linear-models
+cambio-training	github	https://github.com/cambiotraining/unix-shell	CC BY 4.0	Cambridge Bioinformatics Training unix-shell
+cambio-training	github	https://github.com/cambiotraining/bioinformatics-software-pipelines	CC BY 4.0	Cambridge Bioinformatics Training bioinformatics-software-pipelines
+cambio-training	github	https://github.com/cambiotraining/experimental-design	CC BY 4.0	Cambridge Bioinformatics Training experimental-design
+cambio-training	github	https://github.com/cambiotraining/corestats	CC BY 4.0	Cambridge Bioinformatics Training corestats
+cambio-training	github	https://github.com/cambiotraining/intro-machine-learning	CC BY 4.0	Cambridge Bioinformatics Training intro-machine-learning
+cambio-training	github	https://github.com/cambiotraining/ml-unsupervised	CC BY 4.0	Cambridge Bioinformatics Training ml-unsupervised
+cambio-training	github	https://github.com/cambiotraining/viral-genomics	CC BY 4.0	Cambridge Bioinformatics Training viral-genomics
+cambio-training	github	https://github.com/cambiotraining/protein-structure-prediction	CC BY 4.0	Cambridge Bioinformatics Training protein-structure-prediction
+cambio-training	github	https://github.com/cambiotraining/working-with-git	CC BY 4.0	Cambridge Bioinformatics Training working-with-git
+cambio-training	github	https://github.com/cambiotraining/r-intro	CC BY 4.0	Cambridge Bioinformatics Training r-intro
+cambio-training	github	https://github.com/cambiotraining/python-data-analysis	CC BY 4.0	Cambridge Bioinformatics Training python-data-analysis
+hbctraining	github	https://github.com/hbctraining/Intro-to-DGE	CC BY 4.0	HBC training Intro-to-DGE
+hbctraining	github	https://github.com/hbctraining/Intro-to-scRNAseq	CC BY 4.0	HBC training Intro-to-scRNAseq
+hbctraining	github	https://github.com/hbctraining/Intro-to-bulk-RNAseq	CC BY 4.0	HBC training Intro-to-bulk-RNAseq
+hbctraining	github	https://github.com/hbctraining/Intro-to-variant-analysis	CC BY 4.0	HBC training Intro-to-variant-analysis
+hbctraining	github	https://github.com/hbctraining/Intro-to-peak-analysis	CC BY 4.0	HBC training Intro-to-peak-analysis
+hbctraining	github	https://github.com/hbctraining/Pseudobulk-for-scRNAseq	CC BY 4.0	HBC training Pseudobulk-for-scRNAseq
+hbctraining	github	https://github.com/hbctraining/Intro-to-spatial-transcriptomics	CC BY 4.0	HBC training Intro-to-spatial-transcriptomics
+hbctraining	github	https://github.com/hbctraining/Intro-to-RShiny	CC BY 4.0	HBC training Intro-to-RShiny
+hbctraining	github	https://github.com/hbctraining/Shell-for-bioinformatics	CC BY 4.0	HBC training Shell-for-bioinformatics
+hbctraining	github	https://github.com/hbctraining/Tools-for-reproducible-research	CC BY 4.0	HBC training Tools-for-reproducible-research
+hbctraining	github	https://github.com/hbctraining/Accessing_public_genomic_data	CC BY 4.0	HBC training Accessing_public_genomic_data
+hbctraining	github	https://github.com/hbctraining/variant_analysis_germline	CC BY 4.0	HBC training variant_analysis_germline
+hbctraining	github	https://github.com/hbctraining/EpiR	CC BY 4.0	HBC training EpiR
+hbctraining	github	https://github.com/hbctraining/Intro-to-R-Quarto	CC BY 4.0	HBC training Intro-to-R-Quarto
+hbctraining	github	https://github.com/hbctraining/rnaseq_overview	CC BY 4.0	HBC training rnaseq_overview
+hbctraining	github	https://github.com/hbctraining/Investigating-chromatin-biology-ChIPseq	CC BY 4.0	HBC training Investigating-chromatin-biology-ChIPseq
+hbctraining	github	https://github.com/hbctraining/Galaxy_RNA-Seq	CC BY 4.0	HBC training Galaxy_RNA-Seq
+popgen-notes	github	https://github.com/popsim-consortium/stdpopsim	GPL-3.0	stdpopsim (docs inside)
+textbooks	github	https://github.com/OpenIntroStat/oilabs-tidy	CC BY-SA 3.0	OpenIntro labs (tidyverse)
+bioc-github	github	https://github.com/Bioconductor/CSAMA	unknown	CSAMA course materials
+# --- Mendelian randomization methods ---
+mrmix	github	https://github.com/gqi/MRMix	unknown	MRMix mixture-model MR
+mrcml	github	https://github.com/xue-hr/MRcML	unknown	MR-cML constrained maximum likelihood
+mvmr-cml	github	https://github.com/ZhaotongL/MVMR-cML	unknown	MVMR-cML multivariable
+mvmr-cml-susie	github	https://github.com/lapsumchan/MVMR-cML-SuSiE	unknown	MVMR-cML with SuSiE
+cismr-cml	github	https://github.com/ZhaotongL/cisMR-paper	unknown	cis-MR cML paper code/examples
+mr-apss	github	https://github.com/YangLabHKUST/MR-APSS	unknown	MR-APSS
+mrbee	github	https://github.com/noahlorinczcomi/MRBEE	unknown	MRBEE bias-corrected estimating equation
+mrlink2	github	https://github.com/adriaan-vd-graaf/mrlink2	unknown	MR-link-2 cis MR with pleiotropy
+mrclust	github	https://github.com/cnfoley/mrclust	unknown	MR-Clust
+mraid	github	https://github.com/yuanzhongshang/MRAID	unknown	MRAID
+mr-divw	github	https://github.com/tye27/mr.divw	unknown	debiased IVW
+mr-pivw	github	https://github.com/siqixu/mr.pivw	unknown	penalized IVW
+mr-genius	github	https://github.com/bluosun/MR-GENIUS	unknown	MR-GENIUS
+mr-genius-r	github	https://github.com/tye27/mr.genius	unknown	mr.genius R package
+mrcip	github	https://github.com/siqixu/MRCIP	unknown	MRCIP
+grapple	github	https://github.com/jingshuw/grapple	unknown	GRAPPLE
+tryx	github	https://github.com/explodecomputer/tryx	unknown	MR-TRYX
+bwmr	github	https://github.com/jiazhao97/BWMR	unknown	BWMR Bayesian weighted MR
+lhcmr	github	https://github.com/LizaDarrous/lhcMR	unknown	LHC-MR
+lhcmr	github	https://github.com/LizaDarrous/LHC-MR_v2	unknown	LHC-MR v2
+mr-cue	github	https://github.com/QingCheng0218/MR.CUE	unknown	MR-CUE
+mr-ldp	github	https://github.com/QingCheng0218/MR.LDP	unknown	MR.LDP
+mr-corr2	github	https://github.com/QingCheng0218/MR.Corr2	unknown	MR-Corr2
+mrrobust	github	https://github.com/remlapmot/mrrobust	unknown	Stata mrrobust
+mrinstruments	github	https://github.com/MRCIEU/MRInstruments	unknown	MRInstruments data package
+gwasvcf	github	https://github.com/MRCIEU/gwasvcf	unknown	gwasvcf
+gwasglue	github	https://github.com/MRCIEU/gwasglue	unknown	gwasglue: coloc/MR data glue
+phesant	github	https://github.com/MRCIEU/PHESANT	unknown	PHESANT phenome scan
+phesant-mr-phewas	github	https://github.com/MRCIEU/PHESANT-MR-pheWAS-BMI	unknown	MR-pheWAS example (BMI)
+mr-phewas	github	https://github.com/houlstonlab/MR-PheWAS	unknown	MR-PheWAS
+sumnlmr	github	https://github.com/amymariemason/SUMnlmr	unknown	non-linear MR from summary data
+drmr	github	https://github.com/HDTian/DRMR	unknown	doubly-ranked non-linear MR
+bgwas	github	https://github.com/n-mounier/bGWAS	unknown	Bayesian GWAS using MR priors
+snipar	github	https://github.com/AlexTISYoung/snipar	unknown	within-family GWAS/PGS
+twostepcismr	github	https://github.com/bar-woolf/TwoStepCisMR	unknown	two-step cis MR
+mvmrmode	github	https://github.com/bar-woolf/MVMRmode	unknown	multivariable mode-based MR
+mrsamepoptest	github	https://github.com/bar-woolf/MRSamePopTest	unknown	MR same-population test
+mr-bma	github	https://github.com/JamesZ-Yang/MR-BMA	unknown	MR-BMA high-dimensional
+mr-bma	github	https://github.com/verena-zuber/demo_AMD	unknown	MR-BMA demo
+mvmr-press	github	https://github.com/shuangsong0110/MVMR-PRESS	unknown	MVMR-PRESS
+mvmr-weakiv	github	https://github.com/ash-res/mvmr-weakiv	unknown	MVMR weak instruments
+mr-tutorial	github	https://github.com/AndrewsLabUCSF/MR-tutorial	unknown	MR tutorial
+gwasglue	site	https://mrcieu.github.io/gwasglue/	unknown	gwasglue pkgdown
+gwasvcf	site	https://mrcieu.github.io/gwasvcf/	unknown	gwasvcf pkgdown
+mrrobust	site	https://remlapmot.github.io/mrrobust/	unknown	mrrobust site
+tryx	site	https://explodecomputer.github.io/tryx/	unknown	tryx pkgdown
+snipar	rtd	https://snipar.rtfd.io/en/latest/	unknown	snipar docs
+strobe-mr	site	https://www.strobe-mr.org/	unknown	STROBE-MR reporting guideline
+burgess-guidelines	page	https://wellcomeopenresearch.org/articles/4-186	CC BY 4.0	Burgess et al. guidelines for performing MR investigations
+mendelianrandomization	pdf	https://cran.r-project.org/web/packages/MendelianRandomization/vignettes/Vignette_MR.pdf	GPL-2	MendelianRandomization vignette
+mrpc	cran	https://cran.r-project.org/package=MRPC	unknown	MRPC causal graphs with MR
+mr-pivw	cran	https://cran.r-project.org/package=mr.pivw	unknown	pIVW
+robustmvmr	cran	https://cran.r-project.org/package=robustMVMR	unknown	robust MVMR
+mrzero	cran	https://cran.r-project.org/package=MRZero	unknown	MR-Zero
+ivmodel	cran	https://cran.r-project.org/package=ivmodel	unknown	IV inference
+ivtools	cran	https://cran.r-project.org/package=ivtools	unknown	IV tools
+robustiv	cran	https://cran.r-project.org/package=RobustIV	unknown	RobustIV
+# --- vendor manuals, technical notes and white papers (proteomics, metabolomics, sequencing, arrays, CRISPR, cytometry, imaging) ---
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/000-documents/01-User%20Manuals/1141-olink-target-48-user-manual.pdf	vendor copyright, free to download	Olink 1141-olink-target-48-user-manual
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/000-documents/01-User%20Manuals/1231-olink-focus-user-manual.pdf	vendor copyright, free to download	Olink 1231-olink-focus-user-manual
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/000-documents/01-User%20Manuals/1344-NPX-Map-pre-processing.pdf	vendor copyright, free to download	Olink 1344-NPX-Map-pre-processing
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/000-documents/01-User%20Manuals/1414-olink-target-48-user-manual-fast-formulatrix.pdf	vendor copyright, free to download	Olink 1414-olink-target-48-user-manual-fast-formulatrix
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/000-documents/01-User%20Manuals/1415-olink-target-96-user-manual-fast.pdf	vendor copyright, free to download	Olink 1415-olink-target-96-user-manual-fast
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/000-documents/01-User%20Manuals/1513_Olink_Reveal_laboratory_instructions.pdf	vendor copyright, free to download	Olink 1513_Olink_Reveal_laboratory_instructions
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/000-documents/01-User%20Manuals/1527_Olink_Reveal_Overview.pdf	vendor copyright, free to download	Olink 1527_Olink_Reveal_Overview
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/000-documents/01-User%20Manuals/1535%20Olink%20Focus%20User%20Manual%20New%20PCR%20Polymerase.pdf	vendor copyright, free to download	Olink 1535 Olink Focus User Manual New PCR Polymerase
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/000-documents/01-User%20Manuals/1546%20Olink%20Target%2096%20User%20Manual%20New%20PCR%20Polymerase.pdf	vendor copyright, free to download	Olink 1546 Olink Target 96 User Manual New PCR Polymerase
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/000-documents/01-User%20Manuals/1548-olink-explore-ht-fast-lab-instructions.pdf	vendor copyright, free to download	Olink 1548-olink-explore-ht-fast-lab-instructions
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/000-documents/01-User%20Manuals/1549-olink-explore-ht-mosquito-lab-instructions.pdf	vendor copyright, free to download	Olink 1549-olink-explore-ht-mosquito-lab-instructions
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/000-documents/01-User%20Manuals/1552%20Olink%20Target%2096%20User%20Manual%20Formulatrix%20FAST%20New%20PCR%20Polymerase.pdf	vendor copyright, free to download	Olink 1552 Olink Target 96 User Manual Formulatrix FAST New PCR Polymerase
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/000-documents/01-User%20Manuals/1553%20Olink%20Target%2048%20User%20Manual%20New%20PCR%20Polymerase.pdf	vendor copyright, free to download	Olink 1553 Olink Target 48 User Manual New PCR Polymerase
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/000-documents/01-User%20Manuals/1554%20Olink%20Target%2048%20User%20Manual%20Formulatrix%20FAST%20New%20PCR%20Polymerase.pdf	vendor copyright, free to download	Olink 1554 Olink Target 48 User Manual Formulatrix FAST New PCR Polymerase
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/000-documents/01-User%20Manuals/1555%20Olink%20Flex%20User%20Manual%20New%20PCR%20Polymerase.pdf	vendor copyright, free to download	Olink 1555 Olink Flex User Manual New PCR Polymerase
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/000-documents/01-User%20Manuals/1556%20Olink%20Flex%20User%20Manual%20Formulatrix%20FAST%201.0%20New%20PCR%20Polymerase.pdf	vendor copyright, free to download	Olink 1556 Olink Flex User Manual Formulatrix FAST 1.0 New PCR Polymerase
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/000-documents/01-User%20Manuals/1582_Olink_Reveal_Automation_Guide.pdf	vendor copyright, free to download	Olink 1582_Olink_Reveal_Automation_Guide
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/000-documents/01-User%20Manuals/1583_Olink_Focus_User_Manual_new_polymerase_FAST.pdf	vendor copyright, free to download	Olink 1583_Olink_Focus_User_Manual_new_polymerase_FAST
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/000-documents/01-User%20Manuals/1590-olink-concordance-test-for-Reveal.pdf	vendor copyright, free to download	Olink 1590-olink-concordance-test-for-Reveal
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/000-documents/01-User%20Manuals/1591_NPX_Map_CLI.pdf	vendor copyright, free to download	Olink 1591_NPX_Map_CLI
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/000-documents/01-User%20Manuals/1606_NPX_Signature_User_Manual.pdf	vendor copyright, free to download	Olink 1606_NPX_Signature_User_Manual
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/000-documents/01-User%20Manuals/1607_Olink_Focus_User_Manual_FAST.pdf	vendor copyright, free to download	Olink 1607_Olink_Focus_User_Manual_FAST
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/000-documents/01-User%20Manuals/1690_Olink_Explore_HT_Sequencing_using_MGI_T7_or_T7%2B.pdf	vendor copyright, free to download	Olink 1690_Olink_Explore_HT_Sequencing_using_MGI_T7_or_T7+
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/000-documents/01-User%20Manuals/1711_Olink_Shield_Software_User_Manual.pdf	vendor copyright, free to download	Olink 1711_Olink_Shield_Software_User_Manual
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/000-documents/01-User%20Manuals/935-olink-target-96-user-manual.pdf	vendor copyright, free to download	Olink 935-olink-target-96-user-manual
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/000-documents/01-User%20Manuals/NPX_Map_User_Manual.pdf	vendor copyright, free to download	Olink NPX_Map_User_Manual
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/000-documents/03-Technical%20notes/1595-Introducing%20the%20Panel%20Data%20Archive%20for%20NPX%20Signature%201.pdf	vendor copyright, free to download	Olink 1595-Introducing the Panel Data Archive for NPX Signature 1
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/000-documents/03-Technical%20notes/1596-NPX%20Signature%20Convert%20Olink%20data%20from%20long%20to%20wide%20format%20using%20R%20or%20Excel.pdf	vendor copyright, free to download	Olink 1596-NPX Signature Convert Olink data from long to wide format using R or Excel
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/000-documents/03-Technical%20notes/1615-Technical%20information%20NPX%20Signature%20software%20v1x%20vs.%202.0.pdf	vendor copyright, free to download	Olink 1615-Technical information NPX Signature software v1x vs. 2.0
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/000-documents/03-Technical%20notes/1699%20Performance%20evaluation%20of%20OlinkTM%20Reveal%20on%20Element%20AVITITM%20sequencing%20systems%20v1.0.pdf	vendor copyright, free to download	Olink 1699 Performance evaluation of OlinkTM Reveal on Element AVITITM sequencing systems v1.0
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/000-documents/03-Technical%20notes/1700%20OlinkTM%20Shield-%20Enabling%20data%20integrity%20and%2021%20CFR%20part%2011%20compliance.pdf	vendor copyright, free to download	Olink 1700 OlinkTM Shield- Enabling data integrity and 21 CFR part 11 compliance
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/000-documents/03-Technical%20notes/1740%20-%20Olink%20Shield%20-%20Make%20your%20proteomics%20data%20trusted%20secure%20and%20audit%20ready.pdf	vendor copyright, free to download	Olink 1740 - Olink Shield - Make your proteomics data trusted secure and audit ready
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/000-documents/04-Validation%20data/1588%20Olink-Reveal-Validation-Data.pdf	vendor copyright, free to download	Olink 1588 Olink-Reveal-Validation-Data
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/000-documents/04-Validation%20data/1660%20Olink-Target%2048%20Neurodegeneration-Validation-Data.pdf	vendor copyright, free to download	Olink 1660 Olink-Target 48 Neurodegeneration-Validation-Data
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/000-documents/05-white%20paper/1303-Olink-Target-48-Project-Optimus-Whitepaper.pdf	vendor copyright, free to download	Olink 1303-Olink-Target-48-Project-Optimus-Whitepaper
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/000-documents/05-white%20paper/1337-olink-pea-exceptional-specificity-white-paper.pdf	vendor copyright, free to download	Olink 1337-olink-pea-exceptional-specificity-white-paper
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/000-documents/05-white%20paper/1517-White-Paper-PRS-vs-Protein-scores.pdf	vendor copyright, free to download	Olink 1517-White-Paper-PRS-vs-Protein-scores
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/000-documents/05-white%20paper/1597-olink-whitepaper-pea-a-high-multiplex-immunoassay-technology-with-qpcr-or-ngs-readout-CN.pdf	vendor copyright, free to download	Olink 1597-olink-whitepaper-pea-a-high-multiplex-immunoassay-technology-with-qpcr-or-ngs-readout
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/000-documents/05-white%20paper/1621-Reliable-and-reproducible-data-at-any-scale-with-PEA.pdf	vendor copyright, free to download	Olink 1621-Reliable-and-reproducible-data-at-any-scale-with-PEA
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/000-documents/05-white%20paper/1650_Emerging%20Dementia%20Biofluid%20Biomarker%20Candidates%20Identified%20in%20Human%20Proteomic%20Studies%20(2021-2025).pdf	vendor copyright, free to download	Olink 1650_Emerging Dementia Biofluid Biomarker Candidates Identified in Human Proteomic Studies
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/000-documents/05-white%20paper/1662-Olink-Reveal-white-paper.pdf	vendor copyright, free to download	Olink 1662-Olink-Reveal-white-paper
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/000-documents/05-white%20paper/1681%20OlinkTM%20Sample%20Index-%20A%20tool%20to%20optimize%20data%20quality%20by%20addressing%20pre-analytical%20variation.pdf	vendor copyright, free to download	Olink 1681 OlinkTM Sample Index- A tool to optimize data quality by addressing pre-analytical va
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/000-documents/1571%20Olink%20Target%2096%20Short%20Instructions%20New%20Polymerase.pdf	vendor copyright, free to download	Olink 1571 Olink Target 96 Short Instructions New Polymerase
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/000-documents/1572%20Olink%20Target%2048%20Short%20Instructions%20New%20Polymerase.pdf	vendor copyright, free to download	Olink 1572 Olink Target 48 Short Instructions New Polymerase
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/000-documents/1573%20Olink%20Flex%20Short%20Instructions%20New%20PCR%20Polymerase.pdf	vendor copyright, free to download	Olink 1573 Olink Flex Short Instructions New PCR Polymerase
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/000-documents/1574%20Olink%20Flex%20Short%20Instructions%202in1%20New%20PCR%20Polymerase.pdf	vendor copyright, free to download	Olink 1574 Olink Flex Short Instructions 2in1 New PCR Polymerase
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/01-User%20Manuals%20for%20website/1126-olink-target-48-short-instructions.pdf	vendor copyright, free to download	Olink 1126-olink-target-48-short-instructions
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/01-User%20Manuals%20for%20website/1133-olink-statistical-analysis-user-app-manual.pdf	vendor copyright, free to download	Olink 1133-olink-statistical-analysis-user-app-manual
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/01-User%20Manuals%20for%20website/1164-olink-signature-q100-technical-specification.pdf	vendor copyright, free to download	Olink 1164-olink-signature-q100-technical-specification
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/01-User%20Manuals%20for%20website/1170-signature-q100-site-requirements.pdf	vendor copyright, free to download	Olink 1170-signature-q100-site-requirements
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/01-User%20Manuals%20for%20website/1171a-signature-q100-installation-procedure(ext.).pdf	vendor copyright, free to download	Olink 1171a-signature-q100-installation-procedure(ext.)
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/01-User%20Manuals%20for%20website/1171b-signature-q100-installation-procedure(int.).pdf	vendor copyright, free to download	Olink 1171b-signature-q100-installation-procedure(int.)
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/01-User%20Manuals%20for%20website/1172-olink-signature-q100-user-manual.pdf	vendor copyright, free to download	Olink 1172-olink-signature-q100-user-manual
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/01-User%20Manuals%20for%20website/1187-olink-explore-overview-user-manual.pdf	vendor copyright, free to download	Olink 1187-olink-explore-overview-user-manual
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/01-User%20Manuals%20for%20website/1188-olink-explore-384-user-manual.pdf	vendor copyright, free to download	Olink 1188-olink-explore-384-user-manual
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/01-User%20Manuals%20for%20website/1189-olink-explore-4x384-user-manual.pdf	vendor copyright, free to download	Olink 1189-olink-explore-4x384-user-manual
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/01-User%20Manuals%20for%20website/1191-olink-explore-3072-user-manual.pdf	vendor copyright, free to download	Olink 1191-olink-explore-3072-user-manual
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/01-User%20Manuals%20for%20website/1192-olink-explore-sequencing-using-nextseq-550-user-manual.pdf	vendor copyright, free to download	Olink 1192-olink-explore-sequencing-using-nextseq-550-user-manual
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/01-User%20Manuals%20for%20website/1193-olink-explore-sequencing-using-nextseq-2000-user-manual.pdf	vendor copyright, free to download	Olink 1193-olink-explore-sequencing-using-nextseq-2000-user-manual
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/01-User%20Manuals%20for%20website/1194-olink-explore-384-3076-sequencing-using-novaseq-6000-user-manual.pdf	vendor copyright, free to download	Olink 1194-olink-explore-384-3076-sequencing-using-novaseq-6000-user-manual
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/01-User%20Manuals%20for%20website/1266-olink-flex-short-instructions.pdf	vendor copyright, free to download	Olink 1266-olink-flex-short-instructions
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/01-User%20Manuals%20for%20website/1293-olink-explore-ht-user-manual.pdf	vendor copyright, free to download	Olink 1293-olink-explore-ht-user-manual
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/01-User%20Manuals%20for%20website/1299-olink-target-48-and-olink-flex-96-96-IFC-short-instructions.pdf	vendor copyright, free to download	Olink 1299-olink-target-48-and-olink-flex-96-96-IFC-short-instructions
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/01-User%20Manuals%20for%20website/1300-npx-signature-focus-user-manual.pdf	vendor copyright, free to download	Olink 1300-npx-signature-focus-user-manual
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/01-User%20Manuals%20for%20website/1314-olink-flex-user-manual.pdf	vendor copyright, free to download	Olink 1314-olink-flex-user-manual
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/01-User%20Manuals%20for%20website/1316-npx-signature-flex-user-manual.pdf	vendor copyright, free to download	Olink 1316-npx-signature-flex-user-manual
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/01-User%20Manuals%20for%20website/1323-npx-signature-target-48-user-manual.pdf	vendor copyright, free to download	Olink 1323-npx-signature-target-48-user-manual
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/01-User%20Manuals%20for%20website/1324-npx-signature-target-96-user-manual.pdf	vendor copyright, free to download	Olink 1324-npx-signature-target-96-user-manual
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/01-User%20Manuals%20for%20website/1325-npx-explore-ht-3072-user-manual.pdf	vendor copyright, free to download	Olink 1325-npx-explore-ht-3072-user-manual
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/01-User%20Manuals%20for%20website/1351-olink-explore-ht-sequencing-using-novaseq-6000-s4-user-manual.pdf	vendor copyright, free to download	Olink 1351-olink-explore-ht-sequencing-using-novaseq-6000-s4-user-manual
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/01-User%20Manuals%20for%20website/1421-olink-flex-user-manual-formulatrix-fast.pdf	vendor copyright, free to download	Olink 1421-olink-flex-user-manual-formulatrix-fast
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/01-User%20Manuals%20for%20website/1422-olink-concordance-test-for-explore-384.pdf	vendor copyright, free to download	Olink 1422-olink-concordance-test-for-explore-384
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/01-User%20Manuals%20for%20website/1423-olink-concordance-test-for-explore-ht.pdf	vendor copyright, free to download	Olink 1423-olink-concordance-test-for-explore-ht
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/01-User%20Manuals%20for%20website/1424-olink-concordance-test-for-target-96.pdf	vendor copyright, free to download	Olink 1424-olink-concordance-test-for-target-96
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/01-User%20Manuals%20for%20website/1467-Olink-Explore-384-3072-Sequencing-using-NovaSeq-X-user-manual.pdf	vendor copyright, free to download	Olink 1467-Olink-Explore-384-3072-Sequencing-using-NovaSeq-X-user-manual
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/01-User%20Manuals%20for%20website/1470-olink-explore-ht-sequencing-using-novaseq-x-user-manual.pdf	vendor copyright, free to download	Olink 1470-olink-explore-ht-sequencing-using-novaseq-x-user-manual
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/01-User%20Manuals%20for%20website/1494-Olink-Analyze-Cheatsheet.pdf	vendor copyright, free to download	Olink 1494-Olink-Analyze-Cheatsheet
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/01-User%20Manuals%20for%20website/939-olink-target-96-short-instructions.pdf	vendor copyright, free to download	Olink 939-olink-target-96-short-instructions
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/03-Technical%20guide%20for%20website/1113-pea-specificity-technical-note.pdf	vendor copyright, free to download	Olink 1113-pea-specificity-technical-note
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/03-Technical%20guide%20for%20website/1114-extending-olinks-mouse-exploratory-panel-to-studies-in-rats-technical-note.pdf	vendor copyright, free to download	Olink 1114-extending-olinks-mouse-exploratory-panel-to-studies-in-rats-technical-note
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/03-Technical%20guide%20for%20website/1154-novaseq-6000-sp-vs-s1-flow-cell-comparison-technical-note.pdf	vendor copyright, free to download	Olink 1154-novaseq-6000-sp-vs-s1-flow-cell-comparison-technical-note
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/03-Technical%20guide%20for%20website/1155-olink-explore-readout-on-novaseq-6000-sp-vs-nextseq-2000-550-technical-note.pdf	vendor copyright, free to download	Olink 1155-olink-explore-readout-on-novaseq-6000-sp-vs-nextseq-2000-550-technical-note
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/03-Technical%20guide%20for%20website/1163-olink-6000ST-VS-S4-technical-note.pdf	vendor copyright, free to download	Olink 1163-olink-6000ST-VS-S4-technical-note
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/03-Technical%20guide%20for%20website/1229-technical-note-concordance-and-repeatability-tests-to-evaluate-lab-performance.pdf	vendor copyright, free to download	Olink 1229-technical-note-concordance-and-repeatability-tests-to-evaluate-lab-performance
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/03-Technical%20guide%20for%20website/1253-technical-note-high-consistency-between-qpcr-readout-instruments-for-olink-data.pdf	vendor copyright, free to download	Olink 1253-technical-note-high-consistency-between-qpcr-readout-instruments-for-olink-data
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/03-Technical%20guide%20for%20website/1356-compatibility-of-olink-explore-with-autoantibodies-in-autoimmune-disease.pdf	vendor copyright, free to download	Olink 1356-compatibility-of-olink-explore-with-autoantibodies-in-autoimmune-disease
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/03-Technical%20guide%20for%20website/1852-performance-of-olink-explore-3072-in-brain-tissue-lysates-Technical-Note.pdf	vendor copyright, free to download	Olink 1852-performance-of-olink-explore-3072-in-brain-tissue-lysates-Technical-Note
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/04-Validation%20data/1016-olink-cvd-ii-validation-data.pdf	vendor copyright, free to download	Olink 1016-olink-cvd-ii-validation-data
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/04-Validation%20data/1017-olink-cvd-iii-validation-data.pdf	vendor copyright, free to download	Olink 1017-olink-cvd-iii-validation-data
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/04-Validation%20data/1018-olink-oncology-ii-validation-data.pdf	vendor copyright, free to download	Olink 1018-olink-oncology-ii-validation-data
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/04-Validation%20data/1037-olink-neurology-validation-data.pdf	vendor copyright, free to download	Olink 1037-olink-neurology-validation-data
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/04-Validation%20data/1048-olink-immuno-oncology-validation-data.pdf	vendor copyright, free to download	Olink 1048-olink-immuno-oncology-validation-data
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/04-Validation%20data/1054-olink-immune-response-validation-data.pdf	vendor copyright, free to download	Olink 1054-olink-immune-response-validation-data
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/04-Validation%20data/1056-olink-metabolism-validation-data.pdf	vendor copyright, free to download	Olink 1056-olink-metabolism-validation-data
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/04-Validation%20data/1069-olink-cardiometabolic-validation-data.pdf	vendor copyright, free to download	Olink 1069-olink-cardiometabolic-validation-data
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/04-Validation%20data/1099-olink-mouse-exploratory-validation-data.pdf	vendor copyright, free to download	Olink 1099-olink-mouse-exploratory-validation-data
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/04-Validation%20data/1105-olink-neuro-exploratory-validation-data.pdf	vendor copyright, free to download	Olink 1105-olink-neuro-exploratory-validation-data
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/04-Validation%20data/1134-olink-target-48-cytokine-validation-data.pdf	vendor copyright, free to download	Olink 1134-olink-target-48-cytokine-validation-data
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/04-Validation%20data/1265-olink-explore-validation-data.pdf	vendor copyright, free to download	Olink 1265-olink-explore-validation-data
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/04-Validation%20data/1322-olink-flex-validation-data.pdf	vendor copyright, free to download	Olink 1322-olink-flex-validation-data
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/04-Validation%20data/1345-Olink%20Explore-HT-Validation-Data.pdf	vendor copyright, free to download	Olink 1345-Olink Explore-HT-Validation-Data
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/04-Validation%20data/1413-olink-target-48-mouse-cytokine-validation-data.pdf	vendor copyright, free to download	Olink 1413-olink-target-48-mouse-cytokine-validation-data
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/04-Validation%20data/993-olink-inflammation-validation-data.pdf	vendor copyright, free to download	Olink 993-olink-inflammation-validation-data
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/05-white%20paper%20for%20website/1095-olink-pre-analytical-variation-in-protein-biomarker-research-white-paper.pdf	vendor copyright, free to download	Olink 1095-olink-pre-analytical-variation-in-protein-biomarker-research-white-paper
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/05-white%20paper%20for%20website/1098-olink-strategies-for-design-of-protein-biomarker-studies-white-paper.pdf	vendor copyright, free to download	Olink 1098-olink-strategies-for-design-of-protein-biomarker-studies-white-paper
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/05-white%20paper%20for%20website/1118-olink-technical-comparisons-and-orthogonal-validation-white-paper.pdf	vendor copyright, free to download	Olink 1118-olink-technical-comparisons-and-orthogonal-validation-white-paper
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/05-white%20paper%20for%20website/1129-olink-pea-a-high-multiplex-immunoassay-technology-with-qpcr-or-ngs-readout-white-paper.pdf	vendor copyright, free to download	Olink 1129-olink-pea-a-high-multiplex-immunoassay-technology-with-qpcr-or-ngs-readout-white-pape
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/05-white%20paper%20for%20website/1146-Olink-A-comparative-study-across-multiple-platforms-white-paper.pdf	vendor copyright, free to download	Olink 1146-Olink-A-comparative-study-across-multiple-platforms-white-paper
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/05-white%20paper%20for%20website/1151-olink-a-comparative-study-across-multiple-platforms-appendix-white-paper.pdf	vendor copyright, free to download	Olink 1151-olink-a-comparative-study-across-multiple-platforms-appendix-white-paper
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/05-white%20paper%20for%20website/1317-olink-its-all-relative-white-paper.pdf	vendor copyright, free to download	Olink 1317-olink-its-all-relative-white-paper
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/1533%20Olink%20Concordance%20Test%20for%20Target%2048%20and%20Flex.pdf	vendor copyright, free to download	Olink 1533 Olink Concordance Test for Target 48 and Flex
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/6.Whitepapers/1580%20Olink%20Target%2048%20Mouse%20Cytokine_Cytokine%20changes%20in%20the%20aged%20tumor%20microenvironment%20in%20a%20mouse%20model.pdf	vendor copyright, free to download	Olink 1580 Olink Target 48 Mouse Cytokine_Cytokine changes in the aged tumor microenvironment in
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/6.Whitepapers/1594-Olink-White%20Paper%20What%20is%20a%20good%20biomarker%202025.pdf	vendor copyright, free to download	Olink 1594-Olink-White Paper What is a good biomarker 2025
+olink	pdf	https://7074596.fs1.hubspotusercontent-na1.net/hubfs/7074596/6.Whitepapers/1656%20Olink%20White%20Paper%20Navigating%20Neurological%20Biomarker%20Research.pdf	vendor copyright, free to download	Olink 1656 Olink White Paper Navigating Neurological Biomarker Research
+nightingale	pdf	https://nightingalehealth.com/uploads/documents/Dried-blood-analysis-Nightingale-Kit-CoreMetabolomics-biomarker-list-Nightingale-Health.pdf	vendor copyright, free to download	Nightingale Health dried blood biomarker list
+nightingale	pdf	https://nightingalehealth.com/uploads/documents/Urine-analysis-CoreMetabolomics-Urine-biomarker-description-Nightingale-Health.pdf	vendor copyright, free to download	Nightingale Health urine biomarker description
+nightingale	pdf	https://nightingalehealth.com/uploads/documents/Urine-analysis-CoreMetabolomics-biomarker-list-Nightingale-Health.pdf	vendor copyright, free to download	Nightingale Health urine biomarker list
+nightingale	pdf	https://nightingalehealth.com/uploads/documents/Urine-analysis-Urine-biomarker-data-analysis-guide-Nightingale-Health-1.pdf	vendor copyright, free to download	Nightingale Health urine data analysis guide
+nightingale	pdf	https://nightingalehealth.com/uploads/documents/Venous-blood-analysis-Blood-biomarker-data-analysis-guide-Nightingale-Health.pdf	vendor copyright, free to download	Nightingale Health blood biomarker data analysis guide
+nightingale	pdf	https://nightingalehealth.com/uploads/documents/Venous-blood-analysis-CoreMetabolomics-biomarker-list-Nightingale-Health.pdf	vendor copyright, free to download	Nightingale Health blood biomarker list
+nightingale	pdf	https://biobank.ndph.ox.ac.uk/ukb/ukb/docs/nmrm_companion_doc.pdf	UK Biobank, free to download	UK Biobank Nightingale NMR companion document phase 1
+nightingale	pdf	https://biobank.ctsu.ox.ac.uk/ukb/ukb/docs/NMR_companion_phase2.pdf	UK Biobank, free to download	UK Biobank Nightingale NMR companion phase 2
+nightingale	pdf	https://bb30.ndph.ox.ac.uk/crystal/ukb/docs/nmrm_phase3_companion.pdf	UK Biobank, free to download	UK Biobank Nightingale NMR companion phase 3
+ukb-axiom	pdf	https://biobank.ctsu.ox.ac.uk/crystal/ukb/docs/ukbiobankarray_analysis_note.pdf	UK Biobank, free to download	UK Biobank Axiom array analysis note
+ukb-axiom	pdf	https://biobank.ndph.ox.ac.uk/ukb/ukb/docs/genotyping_affy_generation.pdf	UK Biobank, free to download	UK Biobank Affymetrix genotype data generation
+ukb-axiom	pdf	https://biobank.ndph.ox.ac.uk/ukb/ukb/docs/affy_data_generation2017.pdf	UK Biobank, free to download	UK Biobank Affymetrix data generation 2017
+ukb-axiom	pdf	https://biobank.ndph.ox.ac.uk/ukb/ukb/docs/axiom_summary.pdf	UK Biobank, free to download	UK Biobank Axiom array summary
+ukb-axiom	pdf	https://biobank.ndph.ox.ac.uk/ukb/ukb/docs/genotyping_qc.pdf	UK Biobank, free to download	UK Biobank genotyping QC
+ukb-axiom	pdf	https://biobank.ctsu.ox.ac.uk/ukb/ukb/docs/ukb_dna_processing.pdf	UK Biobank, free to download	UK Biobank DNA processing
+thermo-axiom	pdf	https://assets.thermofisher.com/TFS-Assets/LSG/manuals/MAN0018363-AxiomDataAnalysis-UG-RUO.pdf	vendor copyright, free to download	Axiom Analysis Suite data analysis user guide
+thermo-axiom	pdf	https://assets.thermofisher.com/TFS-Assets/LSG/brochures/axiom_biobank_solution_brochure.pdf	vendor copyright, free to download	Axiom biobank solution brochure
+illumina	pdf	https://support.illumina.com/content/dam/illumina-support/documents/documentation/system_documentation/novaseq/1000000019358_18_novaseq-6000-system-guide.pdf	vendor copyright, free to download	NovaSeq 6000 system guide v18
+illumina	pdf	https://emea.support.illumina.com/content/dam/illumina-support/documents/documentation/chemistry_documentation/illumina_prep/dna_pcr_free/illumina-dna-pcr-free-reference-guide-1000000086922-04.pdf	vendor copyright, free to download	Illumina DNA PCR-Free prep reference guide
+illumina	pdf	https://support.illumina.com/content/dam/illumina-support/documents/documentation/chemistry_documentation/samplepreps_truseq/truseq-dna-pcr-free-workflow/truseq-dna-pcr-free-workflow-reference-1000000039279-00.pdf	vendor copyright, free to download	TruSeq DNA PCR-Free reference guide
+illumina	pdf	https://support.illumina.com/content/dam/illumina-support/documents/documentation/chemistry_documentation/infinium_assays/infinium-hts/infinium-hts-assay-reference-guide-15045738-04.pdf	vendor copyright, free to download	Infinium HTS assay reference guide
+illumina	pdf	https://support.illumina.com/content/dam/illumina-support/documents/documentation/chemistry_documentation/infinium_assays/infinium-hts-extra/infinium-hts-extra-reference-guide-1000000041072-02.pdf	vendor copyright, free to download	Infinium HTS Extra reference guide
+illumina	pdf	https://emea.support.illumina.com/content/dam/illumina-support/documents/documentation/chemistry_documentation/infinium_assays/infinium-hts-methylation/infinium-hts-methylation-assay-reference-guide-1000000134596-00.pdf	vendor copyright, free to download	Infinium HTS methylation reference guide
+illumina	pdf	https://support.illumina.com/content/dam/illumina-marketing/documents/services/technote_infinium_genotyping_data_analysis.pdf	vendor copyright, free to download	Infinium genotyping data analysis technical note
+illumina	pdf	https://www.illumina.com/content/dam/illumina-marketing/documents/products/whitepapers/index-hopping-white-paper-770-2017-004.pdf	vendor copyright, free to download	Index hopping white paper
+illumina	pdf	https://support.illumina.com/content/dam/illumina-marketing/documents/products/other/miseq-overclustering-primer-770-2014-038.pdf	vendor copyright, free to download	Cluster density optimisation primer
+illumina	pdf	https://www.illumina.com/content/dam/illumina-marketing/documents/products/datasheets/infinium-global-screening-array-data-sheet-370-2016-016.pdf	vendor copyright, free to download	Infinium GSA-24 v3.0 data sheet
+illumina	pdf	https://www.illumina.com/content/dam/illumina/gcs/assembled-assets/marketing-literature/infinium-global-screening-array-data-sheet-m-gl-00712/infinium-global-screening-array-data-sheet-m-gl-00712.pdf	vendor copyright, free to download	Infinium GSA-48 v4.0 data sheet
+illumina	pdf	https://www.illumina.com/content/dam/illumina/gcs/assembled-assets/marketing-literature/illumina-dna-pcr-free-loading-concentration-tech-note-770-2020-007/illumina-dna-pcr-free-loading-concentration-tech-note-770-2020-007.pdf	vendor copyright, free to download	DNA PCR-Free loading concentration tech note
+illumina	pdf	https://support.illumina.com/content/dam/illumina-support/documents/documentation/software_documentation/sav/sequencing-analysis-viewer-v-2-4-software-guide-15066069-04.pdf	vendor copyright, free to download	Sequencing Analysis Viewer 2.4 guide
+illumina	pdf	https://emea.illumina.com/content/dam/illumina/gcs/assembled-assets/marketing-literature/illumina-protein-prep-normalization-tech-note-m-gl-03205/illumina-protein-prep-normalization-tech-note-m-gl-03205.pdf	vendor copyright, free to download	Illumina Protein Prep normalization tech note
+10x-genomics	pdf	https://cdn.10xgenomics.com/image/upload/v1722285481/support-documents/CG000315_ChromiumNextGEMSingleCell3__GeneExpression_v3.1_DualIndex__RevF.pdf	vendor copyright, free to download	10x Genomics CG000315 Chromium 3prime v3.1 dual index user guide
+10x-genomics	pdf	https://cdn.10xgenomics.com/image/upload/v1722286015/support-documents/CG000390_ChromiumNextGEMSingleCell3-v3.1_CellSurfaceProtein_CellMultiplexing_Rev_D.pdf	vendor copyright, free to download	10x Genomics CG000390 3prime cell surface protein + cell multiplexing
+10x-genomics	pdf	https://cdn.10xgenomics.com/image/upload/v1722285782/support-documents/CG000317_ChromiumNextGEMSingleCell3_v3.1_CellSurfaceProtein_RevE.pdf	vendor copyright, free to download	10x Genomics CG000317 cell surface protein user guide
+10x-genomics	pdf	https://cdn.10xgenomics.com/image/upload/v1660261285/support-documents/CG000227_TechNote_ChromiumNextGEMSingle_Cell_3___v3.1_Reagent_Workflow_Updates_RevC.pdf	vendor copyright, free to download	10x Genomics CG000227 reagent workflow tech note
+10x-genomics	pdf	https://cdn.10xgenomics.com/image/upload/v1722285635/support-documents/CG000316_ChromiumNextGEMSingleCell3__v3.1_CRISPR_Screening_RevE.pdf	vendor copyright, free to download	10x Genomics CG000316 CRISPR screening user guide
+10x-genomics	pdf	https://cdn.10xgenomics.com/image/upload/v1660261285/support-documents/CG000479_TechNote_MinimizingClogs_WettingFailures_RevB.pdf	vendor copyright, free to download	10x Genomics CG000479 minimising clogs tech note
+10x-genomics	pdf	https://cdn.10xgenomics.com/image/upload/v1756505806/support-documents/CG000709_Post-Xenium_TechnicalNote_RevD.pdf	vendor copyright, free to download	10x Genomics CG000709 post-Xenium applications tech note
+10x-genomics	pdf	https://cdn.10xgenomics.com/image/upload/v1758134784/support-documents/CG000686_VisiumHDSpatialApplicationsPerformance_TechnicalNote_RevB.pdf	vendor copyright, free to download	10x Genomics CG000686 Visium HD performance tech note
+10x-genomics	pdf	https://cdn.10xgenomics.com/image/upload/v1723742999/support-documents/CG000239_Visium_Spatial_Gene_Expression_User_Guide_RevH.pdf	vendor copyright, free to download	10x Genomics CG000239 Visium user guide
+10x-genomics	pdf	https://cdn.10xgenomics.com/image/upload/v1716400584/support-documents/CG000683_TechNote_Xenium_Custom_Panel_Design_RevD.pdf	vendor copyright, free to download	10x Genomics CG000683 Xenium custom panel design
+10x-genomics	pdf	https://cdn.10xgenomics.com/image/upload/v1678913597/support-documents/CG000643_XeniumAddonPanelDesign_TechnicalNote_RevA.pdf	vendor copyright, free to download	10x Genomics CG000643 Xenium add-on panel design
+10x-genomics	pdf	https://cdn.10xgenomics.com/image/upload/v1726606313/support-documents/CG000749_XeniumInSitu_GeneExp_CellSegmentation_User_Guide_RevB.pdf	vendor copyright, free to download	10x Genomics CG000749 Xenium cell segmentation user guide
+10x-genomics	pdf	https://cdn.10xgenomics.com/image/upload/v1742492162/support-documents/10x_CG000582_XeniumInSitu_GeneExpression_UserGuide_RevH.pdf	vendor copyright, free to download	10x Genomics CG000582 Xenium In Situ gene expression user guide
+10x-genomics	pdf	https://cdn.10xgenomics.com/image/upload/v1754601292/support-documents/CG000584_Xenium_Analyzer_UserGuide_RevK.pdf	vendor copyright, free to download	10x Genomics CG000584 Xenium Analyzer user guide
+10x-genomics	pdf	https://cdn.10xgenomics.com/image/upload/v1710785014/CG000754_Workflow_Planning_Guide_Xenium_RevA.pdf	vendor copyright, free to download	10x Genomics CG000754 Xenium workflow planning guide
+10x-genomics	pdf	https://cdn.10xgenomics.com/image/upload/v1754601291/support-documents/CG000750_XeniumInSitu_CellSegmentation_TechNote_RevB.pdf	vendor copyright, free to download	10x Genomics CG000750 Xenium cell segmentation tech note
+10x-genomics	pdf	https://cdn.10xgenomics.com/image/upload/v1742492156/support-documents/CG000816_Xenium_Bone_Compatibility_TechNote_RevA.pdf	vendor copyright, free to download	10x Genomics CG000816 Xenium bone tech note
+pacbio	pdf	https://www.pacb.com/wp-content/uploads/Overview-analysis-options-for-HiFi-data.pdf	vendor copyright, free to download	PacBio Overview analysis options for HiFi data
+pacbio	pdf	https://www.pacb.com/wp-content/uploads/Operations-guide-Vega-system.pdf	vendor copyright, free to download	PacBio Operations guide Vega system
+pacbio	pdf	https://www.pacb.com/wp-content/uploads/Operations-guide-for-v13.5-Revio-system.pdf	vendor copyright, free to download	PacBio Operations guide for v13.5 Revio system
+pacbio	pdf	https://www.pacb.com/wp-content/uploads/Procedure-checklist-Amplifying-genomic-DNA-for-SMRTbell-library-preparation-and-HiFi-sequencing.pdf	vendor copyright, free to download	PacBio Procedure checklist Amplifying genomic DNA for SMRTbell library preparation and HiFi seque
+pacbio	pdf	https://www.pacb.com/wp-content/uploads/Procedure-checklist-Generating-PureTarget-libraries-with-PureTarget-kit-96-automation-protocol.pdf	vendor copyright, free to download	PacBio Procedure checklist Generating PureTarget libraries with PureTarget kit 96 automation prot
+pacbio	pdf	https://www.pacb.com/wp-content/uploads/Procedure-checklist-Preparing-multiplexed-amplicon-libraries-using-SMRTbell-prep-kit-3.0.pdf	vendor copyright, free to download	PacBio Procedure checklist Preparing multiplexed amplicon libraries using SMRTbell prep kit 3.0
+pacbio	pdf	https://www.pacb.com/wp-content/uploads/Procedure-checklist-Preparing-multiplexed-whole-genome-and-amplicon-libraries-using-the-HiFi-plex-prep-kit-96.pdf	vendor copyright, free to download	PacBio Procedure checklist Preparing multiplexed whole genome and amplicon libraries using the Hi
+pacbio	pdf	https://www.pacb.com/wp-content/uploads/Procedure-checklist-Preparing-whole-genome-and-metagenome-libraries-using-SMRTbell-prep-kit-3.0.pdf	vendor copyright, free to download	PacBio Procedure checklist Preparing whole genome and metagenome libraries using SMRTbell prep ki
+pacbio	pdf	https://www.pacb.com/wp-content/uploads/Procedure-checklist-%E2%80%93-Preparing-Kinnex-compatible-16S-rRNA-amplicons.pdf	vendor copyright, free to download	PacBio Procedure checklist – Preparing Kinnex compatible 16S rRNA amplicons
+pacbio	pdf	https://www.pacb.com/wp-content/uploads/Procedure-checklist-%E2%80%93-Preparing-Kinnex-compatible-cDNA-using-Iso-Seq-express-2.0-kit-1.pdf	vendor copyright, free to download	PacBio Procedure checklist – Preparing Kinnex compatible cDNA using Iso Seq express 2.0 kit 1
+pacbio	pdf	https://www.pacb.com/wp-content/uploads/Procedure-checklist-%E2%80%93-Preparing-Kinnex-libraries-using-the-Kinnex-12-fold-prep-kit.pdf	vendor copyright, free to download	PacBio Procedure checklist – Preparing Kinnex libraries using the Kinnex 12 fold prep kit
+pacbio	pdf	https://www.pacb.com/wp-content/uploads/Procedure-checklist-%E2%80%93-Preparing-Kinnex-libraries-using-the-Kinnex-16-fold-prep-kit.pdf	vendor copyright, free to download	PacBio Procedure checklist – Preparing Kinnex libraries using the Kinnex 16 fold prep kit
+pacbio	pdf	https://www.pacb.com/wp-content/uploads/Procedure-checklist-%E2%80%93-Preparing-Kinnex-libraries-using-the-Kinnex-8-fold-prep-kit.pdf	vendor copyright, free to download	PacBio Procedure checklist – Preparing Kinnex libraries using the Kinnex 8 fold prep kit
+pacbio	pdf	https://www.pacb.com/wp-content/uploads/Procedure-checklist-Preparing-multiplexed-AAV-SMRTbell-libraries-using-SMRTbell-prep-kit-3.0.pdf	vendor copyright, free to download	PacBio Procedure checklist Preparing multiplexed AAV SMRTbell libraries using SMRTbell prep kit 3
+pacbio	pdf	https://www.pacb.com/wp-content/uploads/Whole-genome-and-metagenome-library-preparation-using-SMRTbell-prep-kit-3.0-training.pdf	vendor copyright, free to download	PacBio Whole genome and metagenome library preparation using SMRTbell prep kit 3.0 training
+pacbio	pdf	https://www.pacb.com/wp-content/uploads/Multiplexed-amplicon-library-preparation-using-SMRTbell-prep-kit-3.0-training.pdf	vendor copyright, free to download	PacBio Multiplexed amplicon library preparation using SMRTbell prep kit 3.0 training
+pacbio	pdf	https://www.pacb.com/wp-content/uploads/Iso-Seq-library-preparation-using-SMRTbell-prep-kit-3.0-training.pdf	vendor copyright, free to download	PacBio Iso Seq library preparation using SMRTbell prep kit 3.0 training
+pacbio	pdf	https://www.pacb.com/wp-content/uploads/Multiplexed-SARS-CoV-2-library-preparation-for-full-viral-genome-sequencing-using-SMRTbell-prep-kit-3.0-training.pdf	vendor copyright, free to download	PacBio Multiplexed SARS CoV 2 library preparation for full viral genome sequencing using SMRTbell
+pacbio	pdf	https://www.pacb.com/wp-content/uploads/Technical-overview-Amplifying-genomic-DNA-for-SMRTbell-library-preparation-and-HiFi-sequencing.pdf	vendor copyright, free to download	PacBio Technical overview Amplifying genomic DNA for SMRTbell library preparation and HiFi sequen
+pacbio	pdf	https://www.pacb.com/wp-content/uploads/Guide-overview-Automated-HiFi-prep-96-and-HiFi-ABC-for-the-Hamilton-NGS-STAR-MOA-system.pdf	vendor copyright, free to download	PacBio Guide overview Automated HiFi prep 96 and HiFi ABC for the Hamilton NGS STAR MOA system
+nanopore-docs	pdf	https://nanoporetech.com/api/assets/f/196663/x/880bbc3f22/oxford-nanopore-hy23-results-report-6-sep-2023-1.pdf	vendor copyright, free to download	H1 2023 results report (technology description)
+nanopore-docs	page	https://nanoporetech.com/document/kit-14-device-and-informatics	vendor copyright, free to download	Kit 14 sequencing and duplex basecalling
+remora	github	https://github.com/nanoporetech/remora	see repository	Remora modified-base calling
+modkit	github	https://github.com/nanoporetech/modkit	see repository	modkit modified base toolkit
+megalodon	github	https://github.com/nanoporetech/megalodon	see repository	Megalodon
+element-biosciences	pdf	https://www.elementbiosciences.com/hubfs/element_biosciences_2025/resources_assets/bofu/Enhanced_Output_with_AVITI24_LT_00061_B.pdf	vendor copyright, free to download	Element Biosciences Enhanced output with AVITI24 tech note
+element-biosciences	pdf	https://www.elementbiosciences.com/hubfs/element_biosciences_2025/pdfs/resources_pdf/LT_00035_D_Element_AVITI24_System_Specification_Sheet.pdf	vendor copyright, free to download	Element Biosciences AVITI24 specification sheet
+element-biosciences	pdf	https://www.elementbiosciences.com/hubfs/element_biosciences_2025/resources_assets/pdfs/AVITI24_System_User_Guide_MA_00051.pdf	vendor copyright, free to download	Element Biosciences AVITI24 system user guide
+element-biosciences	pdf	https://www.elementbiosciences.com/hubfs/element_biosciences_2025/resources_assets/pdfs/AVITI_System_User_Guide_MA_00008.pdf	vendor copyright, free to download	Element Biosciences AVITI system user guide
+element-biosciences	pdf	https://www.elementbiosciences.com/hubfs/element_biosciences_2025/resources_assets/bofu/Teton-Protein-Performance-Tech-Note-LT-00068.pdf	vendor copyright, free to download	Element Biosciences Teton protein performance tech note
+element-biosciences	pdf	https://www.elementbiosciences.com/hubfs/element_biosciences_2025/resources_assets/bofu/Teton_CytoProfiling_User_Guide_MA_00053.pdf	vendor copyright, free to download	Element Biosciences Teton CytoProfiling user guide
+element-biosciences	pdf	https://www.elementbiosciences.com/hubfs/element_biosciences_2025/resources_assets/bofu/Trinity_Sequencing_User_Guide_MA_00059.pdf	vendor copyright, free to download	Element Biosciences Trinity sequencing user guide
+element-biosciences	pdf	https://www.elementbiosciences.com/hubfs/element_biosciences_2025/resources_assets/pdfs/Cloudbreak_Sequencing_User_Guide_MA_00058.pdf	vendor copyright, free to download	Element Biosciences Cloudbreak sequencing user guide
+element-biosciences	pdf	https://www.elementbiosciences.com/hubfs/element_biosciences_2025/resources_assets/pdfs/adept_workflow_standard_user_guide_ma_00001_g.pdf	vendor copyright, free to download	Element Biosciences Adept workflow user guide
+element-biosciences	pdf	https://www.elementbiosciences.com/hubfs/element_biosciences_2025/resources_assets/pdfs/elevate_enzymatic_library_prep_user_guide_ma_00010_e.pdf	vendor copyright, free to download	Element Biosciences Elevate enzymatic library prep guide
+element-biosciences	pdf	https://www.elementbiosciences.com/hubfs/element_biosciences_2025/resources_assets/pdfs/elevate_mechanical_library_prep_user_guide_ma_00004_g.pdf	vendor copyright, free to download	Element Biosciences Elevate mechanical library prep guide
+element-biosciences	pdf	https://www.elementbiosciences.com/hubfs/element_biosciences_2025/resources_assets/bofu/expert_mode_hd_tech_note_lt_00039_a.pdf	vendor copyright, free to download	Element Biosciences Expert mode HD tech note
+element-biosciences	pdf	https://www.elementbiosciences.com/hubfs/element_biosciences_2025/resources_assets/bofu/adept_workflow_quantification_methods_technical_note_lt_00009_c.pdf	vendor copyright, free to download	Element Biosciences Adept quantification methods tech note
+element-biosciences	pdf	https://www.elementbiosciences.com/hubfs/element_biosciences_2025/resources_assets/mofu/simplifying_aviti_workflows_white_paper_lt_00028_a.pdf	vendor copyright, free to download	Element Biosciences Simplifying AVITI workflows white paper
+element-biosciences	pdf	https://www.elementbiosciences.com/hubfs/element_biosciences_2025/resources_assets/mofu/sequencing_with_cloudbreak_freestyle_technical_note_lt_00026_b.pdf	vendor copyright, free to download	Element Biosciences Cloudbreak Freestyle tech note
+element-biosciences	pdf	https://www.elementbiosciences.com/hubfs/element_biosciences_2025/resources_assets/pdfs/impact_of_truncated_library_molecules_cloudbreak_freestyle_lt_00052_a.pdf	vendor copyright, free to download	Element Biosciences Truncated library molecules tech note
+element-biosciences	pdf	https://www.elementbiosciences.com/hubfs/element_biosciences_2025/resources_assets/bofu/Trinity_Freestyle_AT_Rich_Tech_Note_LT_00066.pdf	vendor copyright, free to download	Element Biosciences Trinity Freestyle AT-rich tech note
+element-biosciences	pdf	https://www.elementbiosciences.com/hubfs/element_biosciences_2025/resources_assets/mofu/Correlating-Teton-with-RNA-seq-Tech-Note-LT-00069.pdf	vendor copyright, free to download	Element Biosciences Teton vs RNA-seq tech note
+element-biosciences	pdf	https://www.elementbiosciences.com/hubfs/element_biosciences_2025/resources_assets/mofu/Technical_note_Olink_Element_V1.2__2022_06_03.pdf	vendor copyright, free to download	Element Biosciences Olink on Element technical note
+element-biosciences	pdf	https://www.elementbiosciences.com/hubfs/element_biosciences_2025/resources_assets/bofu/Cytos-3-Transcriptome-User-Guide-MA-00098.pdf	vendor copyright, free to download	Element Biosciences Cytos transcriptome user guide
+element-biosciences	pdf	https://www.elementbiosciences.com/hubfs/element_biosciences_2025/resources_assets/bofu/elembio_cloud_data_protection_white_paper_lt_00012_d.pdf	vendor copyright, free to download	Element Biosciences Elembio Cloud data protection white paper
+element-biosciences	pdf	https://www.elementbiosciences.com/hubfs/element_biosciences_2025/resources_assets/pdfs/LT-00003_RevL_Specification-Sheet_Aviti-System_Letter_Digital.pdf	vendor copyright, free to download	Element Biosciences AVITI specification sheet
+vizgen-merscope	pdf	https://vizgen.com/wp-content/uploads/2025/09/91600001_MERSCOPE_Instrument_User_Guide_RevK.pdf	vendor copyright, free to download	Vizgen MERSCOPE instrument user guide
+vizgen-merscope	pdf	https://vizgen.com/wp-content/uploads/2025/04/91600132_MERSCOPE-MERFISH-2.0-Sample-Prep-User-Guide_RevA.pdf	vendor copyright, free to download	Vizgen MERFISH 2.0 sample prep guide
+vizgen-merscope	pdf	https://vizgen.com/wp-content/uploads/2024/04/91600112_MERSCOPE-FFPE-Tissue-Sample-Preparation-User-Guide_Rev-D.pdf	vendor copyright, free to download	Vizgen FFPE sample prep guide
+vizgen-merscope	pdf	https://vizgen.com/wp-content/uploads/2024/04/91600002_MERSCOPE-Fresh-and-Fixed-Frozen-Tissue-Sample-Preparation-User-Guide_Rev-F.pdf	vendor copyright, free to download	Vizgen fresh frozen prep guide
+vizgen-merscope	pdf	https://vizgen.com/wp-content/uploads/2024/04/91600003_MERSCOPE-Cultured-Cells-Sample-Preparation-User-Guide_Rev-F.pdf	vendor copyright, free to download	Vizgen cultured cells prep guide
+vizgen-merscope	pdf	https://vizgen.com/wp-content/uploads/2025/09/91600131_MERSCOPE-Ultra-Instrument-User-Guide_RevC.pdf	vendor copyright, free to download	Vizgen MERSCOPE Ultra user guide
+vizgen-merscope	pdf	https://vizgen.com/wp-content/uploads/2025/04/91600126_Histology-Guide-for-Preparing-FFPE-Samples_Rev-B.pdf	vendor copyright, free to download	Vizgen FFPE histology guide
+geomx-cosmx	pdf	https://www.brukerspatialbiology.com/wp-content/uploads/2022/06/MAN-10152-01-GeoMx-DSP-Instrument-User-Manual.pdf	vendor copyright, free to download	NanoString/Bruker GeoMx DSP instrument manual
+geomx-cosmx	pdf	https://www.brukerspatialbiology.com/wp-content/uploads/2022/06/MAN-10154-01-GeoMx-DSP-Data-Analysis-User-Manual.pdf	vendor copyright, free to download	NanoString/Bruker GeoMx DSP data analysis manual
+geomx-cosmx	pdf	https://www.brukerspatialbiology.com/wp-content/uploads/2022/06/MAN-10151-01-GeoMx-DSP-Automated-Slide-Preparation-User-Manual.pdf	vendor copyright, free to download	NanoString/Bruker GeoMx automated slide prep manual
+geomx-cosmx	pdf	https://www.brukerspatialbiology.com/wp-content/uploads/2021/10/FL_MK3934_SMI-Grant-Package_r16.pdf	vendor copyright, free to download	CosMx SMI white paper / grant package
+bd-biosciences	pdf	https://www.bdbiosciences.com/content/dam/bdb/marketing-documents/BD-Rhapsody-Single-Cell-Analysis-System-Instrument-User-Guide.pdf	vendor copyright, free to download	BD Rhapsody instrument user guide
+bd-biosciences	pdf	https://www.bdbiosciences.com/content/dam/bdb/marketing-documents/BD-Rhapsody-Express-Installation-Maintenance-User-Guide.pdf	vendor copyright, free to download	BD Rhapsody Express install guide
+bd-biosciences	pdf	https://www.bdbiosciences.com/content/dam/bdb/marketing-documents/resources-pdf-folder/Guide-User-SCM-Bioinformatics-ruo.pdf	vendor copyright, free to download	BD Single-cell multiomics bioinformatics guide
+bd-biosciences	pdf	https://www.bdbiosciences.com/content/dam/bdb/marketing-documents/BD_Single_Cell_Multiomics_Analysis_Setup_User_Guide.pdf	vendor copyright, free to download	BD Multiomics analysis setup guide
+bd-biosciences	pdf	https://www.bdbiosciences.com/content/dam/bdb/marketing-documents/products-pdf-folder/instruments/research-cell-analyzers/bd-facsymphony-a5-se-user-guide-ruo-global.pdf	vendor copyright, free to download	BD FACSymphony A5 SE user guide
+bd-biosciences	pdf	https://www.bdbiosciences.com/content/dam/bdb/marketing-documents/Symphony-A1-User-Guide.pdf	vendor copyright, free to download	BD FACSymphony A1 user guide
+bd-biosciences	pdf	https://www.bdbiosciences.com/content/dam/bdb/marketing-documents/resources-pdf-folder/Spectral-Viewer-User-Guide.pdf	vendor copyright, free to download	BD Spectrum Viewer guide
+bd-biosciences	pdf	https://www.bdbiosciences.com/content/dam/bdb/marketing-documents/discover-learn/campaigns/mastering-spectral-flow-cytometry-foundational-concepts-emea.pdf	vendor copyright, free to download	BD Mastering spectral flow cytometry
+bd-biosciences	pdf	https://www.bdbiosciences.com/content/dam/bdb/marketing-documents/BD%20Flow%20Cytometry%20Technical%20Bulletin.pdf	vendor copyright, free to download	BD BD flow cytometry technical bulletin
+seer-proteograph	pdf	https://media.seer.bio/dev/uploads/2022/10/Seer-ProteographProductSuite-TechNote-PlasmaPrepWorkflow.pdf	vendor copyright, free to download	Seer Proteograph plasma prep workflow
+seer-proteograph	pdf	https://media.seer.bio/uploads/2025/05/Tech-Note-Advancing-Analytical-Throughput-and-Depth-in-Plasma-Protemoins-Studies-with-Proteograph-ONE-Workflow.pdf	vendor copyright, free to download	Seer Proteograph ONE workflow tech note
+seer-proteograph	pdf	https://media.seer.bio/uploads/2023/04/Seer-Eval-deep-plasma-proteomic-analysis-web.pdf	vendor copyright, free to download	Seer TMT vs LFQ deep plasma
+seer-proteograph	pdf	https://media.seer.bio/uploads/TechDocs/Proteograph_UserGuide.pdf	vendor copyright, free to download	Seer Proteograph user guide SP100
+seer-proteograph	pdf	https://media.seer.bio/uploads/2023/05/Proteograph-XT-appnote.pdf	vendor copyright, free to download	Seer Proteograph XT app note
+seer-proteograph	pdf	https://media.seer.bio/uploads/2025/05/Proteograph-ONE-Assay-Specification-Sheet.pdf	vendor copyright, free to download	Seer Proteograph ONE specification
+standard-biotools	pdf	https://dam.standardbio.com/asset/ab8f97bb-075c-4190-9dff-3506d215ed77/CyTOF-XT-Advancements-in-Data-Acquisition-and-Processing-Tech-Note-FLDM-00678-Rev-03-202303.pdf	vendor copyright, free to download	CyTOF XT data acquisition and processing tech note
+standard-biotools	pdf	https://dam.standardbio.com/asset/65e7354e-82ec-4b87-ada7-6a2623470554/Accelerating-Immuno-Oncology-Research-by-Profiling-Cell-Function-with-Flex-Fit-CyTOF-Panels-Application-Note-082025-FLDM-01375-Rev-03.pdf	vendor copyright, free to download	Flex-Fit CyTOF panels app note
+sciex	pdf	https://sciex.com/content/dam/SCIEX/tech-notes/life-science-research/metabolomics/ruo-mkt-02-7128-a/SWATH-Coverage-Metabolomics_6600_RUO-MKT-02-7128-A.pdf	vendor copyright, free to download	SCIEX SWATH metabolite coverage
+sciex	pdf	https://sciex.com/content/dam/SCIEX/tech-notes/life-science-research/metabolomics/ruo-mkt-02-2201-b/AccurateMassLibrary-for-Metabolomics_RUO-MKT-02-2201-B.pdf	vendor copyright, free to download	SCIEX accurate mass library for metabolomics
+sciex	pdf	https://sciex.com/content/dam/SCIEX/tech-notes/life-science-research/lipidomics/ruo-mkt-02-8536-a/Untargeted-Lipidomics-MS-Dial_6600_RUO-MKT-02-8536-A.pdf	vendor copyright, free to download	SCIEX untargeted lipidomics MS-DIAL
+sciex	pdf	https://sciex.com/content/dam/SCIEX/tech-notes/life-science-research/metabolomics/ruo-mkt-02-13259-a/Global-Targeted-Method-for-metabolomics_RUO-MKT-02-12750-A.pdf	vendor copyright, free to download	SCIEX targeted metabolomics profiling method
+sciex	pdf	https://sciex.com/content/dam/SCIEX/pdf/tech-notes/all/amino-acid-analysis_SWATH.pdf	vendor copyright, free to download	SCIEX amino acid analysis SWATH
+agilent	page	https://www.agilent.com/en/product/gas-chromatography-mass-spectrometry-gc-ms/gcms-fundamentals	vendor copyright, free to download	GC/MS fundamentals primer
+thermo-lcms	pdf	https://apps.thermoscientific.com/media/SID/LSMS/PDF/Metabolomics_Solutions/AN30162_Exactive_Gen.pdf	vendor copyright, free to download	Thermo Scientific Exactive Orbitrap app note
+thermo-lcms	pdf	https://apps.thermoscientific.com/media/cmd/kl/resources/Untargeted-Metabolomics-Workflow-Using-UHPLCQuadrupole-Orbitrap-Mass-Spectrometer-and-SIEVE2-1.pdf	vendor copyright, free to download	Thermo Scientific untargeted metabolomics Q Exactive SIEVE
+thermo-lcms	pdf	https://apps.thermoscientific.com/media/cmd/kl/resources/A-platform-to-identify-endogenous-metabolites-Using-a-Novel-High-Performance-Orbitrap-and-the-mzCloud-Library.pdf	vendor copyright, free to download	Thermo Scientific Orbitrap mzCloud metabolite ID
+bruker-nmr	pdf	https://www.bruker.com/en/products-and-solutions/mr/nmr-clinical-research-solutions/avance-ivdr/_jcr_content/root/sections/more_information/sectionpar/linklist_copy/contentpar-1/calltoaction.download-asset.pdf/links/item5/B.I.QUANT-PS+Bruker+IVDr+Quantification+in+Plasma+Serum+-+Application+Note.pdf	vendor copyright, free to download	Bruker B.I.QUANT-PS app note
+bruker-nmr	pdf	https://www.bruker.com/en/products-and-solutions/mr/nmr-clinical-research-solutions/avance-ivdr/_jcr_content/root/sections/more_information/sectionpar/linklist_copy/contentpar-1/calltoaction.download-asset.pdf/links/item6/B.I.QUANT-UR+-+Application+Note.pdf	vendor copyright, free to download	Bruker B.I.QUANT-UR app note
+bruker-nmr	pdf	https://www.bruker.com/en/products-and-solutions/mr/nmr-clinical-research-solutions/avance-ivdr/_jcr_content/root/sections/more_information/sectionpar/linklist_copy/contentpar-1/calltoaction.download-asset.pdf/links/item4/B.I.BioBankTool+Bruker+IVDr+BioBankTool+-+Application+Note.pdf	vendor copyright, free to download	Bruker BioBankTool app note
+bruker-nmr	pdf	https://www.bruker.com/en/products-and-solutions/mr/nmr-clinical-research-solutions/avance-ivdr/_jcr_content/root/sections/more_information/sectionpar/linklist_copy/contentpar-1/calltoaction.download-asset.pdf/links/item7/Enabling+Tools+on+the+IVDr+Platform+-+Application+Note.pdf	vendor copyright, free to download	Bruker IVDr enabling tools app note
+bruker-nmr	pdf	https://www.bruker.com/en/products-and-solutions/mr/nmr-clinical-research-solutions/avance-ivdr/_jcr_content/root/sections/more_information/sectionpar/linklist_copy/contentpar-1/calltoaction.download-asset.pdf/links/item8/Advances+in+Quantitative+NMR-based+Metabolomics_IVDr_Fourier80_AppNote.pdf	vendor copyright, free to download	Bruker quantitative NMR metabolomics Fourier80 app note
+bruker-nmr	pdf	https://www.bruker.com/en/products-and-solutions/mr/nmr-clinical-research-solutions/avance-ivdr/_jcr_content/root/sections/more_information/sectionpar/linklist_copy/contentpar-1/calltoaction.download-asset.pdf/links/item0/IVDr+Research+by+NMR+-+Brochure.pdf	vendor copyright, free to download	Bruker IVDr research by NMR overview
+bruker-nmr	page	https://www.bruker.com/en/resources/library/application-notes-mr/1h-nmr-evaluation-of-biofluids-sample-quality-in-metabolomic-research.html	vendor copyright, free to download	1H NMR biofluid sample quality app note
+idt-crispr	pdf	https://sfvideo.blob.core.windows.net/sitefinity/docs/default-source/user-guide-manual/alt-r-crispr-cas9-user-guide-ribonucleoprotein-transfections-recommended.pdf	vendor copyright, free to download	IDT Alt-R CRISPR-Cas9 RNP user guide
+idt-crispr	pdf	https://sfvideo.blob.core.windows.net/sitefinity/docs/default-source/protocol/quick-reference-guide_hdr-with-alt-r-crispr-cas9-system-and-hdr-donor-oligos.pdf	vendor copyright, free to download	IDT HDR quick reference
+idt-crispr	pdf	https://sfvideo.blob.core.windows.net/sitefinity/docs/default-source/application-guide/perform-gene-knock-in-with-homology-directed-repair-reference-guide.pdf	vendor copyright, free to download	IDT HDR knock-in reference guide
+idt-crispr	pdf	https://sfvideo.blob.core.windows.net/sitefinity/docs/default-source/flyer/alt-r-crispr-system.pdf	vendor copyright, free to download	IDT Alt-R CRISPR system overview
+idt-crispr	pdf	https://go.idtdna.com/rs/400-UEU-432/images/IDT_The%20CRISPR%20basics%20handbook.pdf	vendor copyright, free to download	IDT CRISPR basics handbook
+horizon-dharmacon	pdf	https://horizondiscovery.com/-/media/Files/Horizon/resources/Technical-manuals/edit-r-aio-lentiviral-sgrna-manual.pdf	vendor copyright, free to download	Dharmacon/Horizon edit-r-aio-lentiviral-sgrna-manual.pdf
+horizon-dharmacon	pdf	https://horizondiscovery.com/-/media/Files/Horizon/resources/Technical-manuals/edit-r-lentiviral-sgrna-manual.pdf	vendor copyright, free to download	Dharmacon/Horizon edit-r-lentiviral-sgrna-manual.pdf
+horizon-dharmacon	pdf	https://horizondiscovery.com/-/media/Files/Horizon/resources/Technical-manuals/edit-r-lentiviral-sgrna-pooled-library-manual.pdf	vendor copyright, free to download	Dharmacon/Horizon edit-r-lentiviral-sgrna-pooled-library-manual.pdf
+horizon-dharmacon	pdf	https://horizondiscovery.com/-/media/Files/Horizon/resources/Technical-manuals/edit-r-all-in-one-lentiviral-pooled-libraries-tech-manual.pdf	vendor copyright, free to download	Dharmacon/Horizon edit-r-all-in-one-lentiviral-pooled-libraries-tech-manual.pdf
+horizon-dharmacon	pdf	https://horizondiscovery.com/-/media/Files/Horizon/resources/Technical-manuals/cas9-inducible-lenti-manual.pdf	vendor copyright, free to download	Dharmacon/Horizon cas9-inducible-lenti-manual.pdf
+horizon-dharmacon	pdf	https://horizondiscovery.com/-/media/Files/Horizon/resources/Technical-manuals/cas9-mrna-manual.pdf	vendor copyright, free to download	Dharmacon/Horizon cas9-mrna-manual.pdf
+horizon-dharmacon	pdf	https://horizondiscovery.com/-/media/Files/Horizon/resources/Protocols/edit-r-sgRNA-libraries-guide-protocol.pdf	vendor copyright, free to download	Dharmacon/Horizon edit-r-sgRNA-libraries-guide-protocol.pdf
+horizon-dharmacon	pdf	https://horizondiscovery.com/-/media/Files/Horizon/resources/Quick-protocols/sgrna-quick-protocol.pdf	vendor copyright, free to download	Dharmacon/Horizon sgrna-quick-protocol.pdf
+cell-painting	pdf	https://carpenter-singh-lab.broadinstitute.org/files/anne/files/176_cimini_natureprotocols_2023.pdf	Nature Protocols, author-hosted copy	Cell Painting v3 protocol (Cimini 2023, Nature Protocols; author-hosted copy)
+zeiss-confocal	pdf	https://www.zeiss.com/content/dam/rms/countries/singapore/apac/lsm900essential.pdf/_jcr_content/renditions/original.media_file.download_attachment.file/lsm900essential.pdf	vendor copyright, free to download	ZEISS LSM 900 Essential confocal intro
+metabolon	site	https://www.metabolon.com/guide-to-metabolomics/	vendor copyright, free to download	Metabolon guide to metabolomics
+metabolon	site	https://www.metabolon.com/study-design/	vendor copyright, free to download	Metabolon study design
+metabolon	site	https://www.metabolon.com/guide-to-exposome/	vendor copyright, free to download	Metabolon guide to exposome
+metabolon	page	https://www.metabolon.com/resources/product-literature/complex-lipids-targeted-panel-whitepaper/	vendor copyright, free to download	Complex lipids targeted panel whitepaper
+metabolon	page	https://www.metabolon.com/why-metabolon/metabolomics-raw-spectral-data/	vendor copyright, free to download	Raw spectral data
+metabolon	pdf	https://insights.metabolon.com/rs/301-DAD-742/images/Why-Metabolomics-eBook-Final.pdf	vendor copyright, free to download	Why metabolomics guide
+quanterix	page	https://www.quanterix.com/whitepapers-appnotes/simoa-bead-technology-overview/	vendor copyright, free to download	Simoa bead technology overview
+ultima-genomics	pdf	https://cdn.sanity.io/files/l7780ks7/production-2024/11e52ed71718aec98aad6ca5b4ae4ac4bf6c831b.pdf	vendor copyright, free to download	Ultima Genomics: Application Note Genome-wide DNA methylation profiling using the Ultima Genomics
+ultima-genomics	pdf	https://cdn.sanity.io/files/l7780ks7/production-2024/13507ea7a91af0a9f88aa14403c73ccaf87beabd.pdf	vendor copyright, free to download	Ultima Genomics: User Quick Reference Guide ­ UG 100 SolarisTM Flex Workflow Rev. 01 Proprietary
+ultima-genomics	pdf	https://cdn.sanity.io/files/l7780ks7/production-2024/16fd306ffe52d89ba3f9d2f71f588ad7a73009be.pdf	vendor copyright, free to download	Ultima Genomics: UG PCR-Amplified WGS FFPE DNA Library Preparation Protocol for Solaris Flex IDT
+ultima-genomics	pdf	https://cdn.sanity.io/files/l7780ks7/production-2024/1be1d76746b097f8e569d2711daf19b08bddd166.pdf	vendor copyright, free to download	Ultima Genomics: Application Note Germline Whole-Genome Sequencing with Ultima Genomics Highlight
+ultima-genomics	pdf	https://cdn.sanity.io/files/l7780ks7/production-2024/3232bd042cc9a3cf7fa9c3db0b2afbf46d40cb2b.pdf	vendor copyright, free to download	Ultima Genomics: UG 100 SolarisTM Supported Applications Rev. 03 Proprietary Information of Ultim
+ultima-genomics	pdf	https://cdn.sanity.io/files/l7780ks7/production-2024/4962506798cb921a0b854829511662950825f0dc.pdf	vendor copyright, free to download	Ultima Genomics: UG 100 Solaris Run Output Structure Reference Guide Rev. 02 Proprietary Informat
+ultima-genomics	pdf	https://cdn.sanity.io/files/l7780ks7/production-2024/4f6504af8f131007a438d648e2699ef370f38445.pdf	vendor copyright, free to download	Ultima Genomics: Library QC and Pooling Reference Guide QC, Normalization, and Pooling Recommenda
+ultima-genomics	pdf	https://cdn.sanity.io/files/l7780ks7/production-2024/5e4127e9d096daba15bfa3a2e9e2296c1e021609.pdf	vendor copyright, free to download	Ultima Genomics: Technical Note Fully integrated 10x Genomics single cell and spatial transcripto
+ultima-genomics	pdf	https://cdn.sanity.io/files/l7780ks7/production-2024/63d222db7b7e430eaa04c54dea5162cce5a6ce6f.pdf	vendor copyright, free to download	Ultima Genomics: Technical Note Parse GigaLab and the Ultima Genomics UG 100TM Sequencing Platfor
+ultima-genomics	pdf	https://cdn.sanity.io/files/l7780ks7/production-2024/778a36b6a28ddbc2699fd2d3c8497e73cbe0f465.pdf	vendor copyright, free to download	Ultima Genomics: Technical Note Compatibility of BioSkryb ResolveDNA® with Ultima Genomics UG 100
+ultima-genomics	pdf	https://cdn.sanity.io/files/l7780ks7/production-2024/818dff1da9143f8a56d01420648a434fb3595198.pdf	vendor copyright, free to download	Ultima Genomics: User Quick Reference Guide- UG 100 SolarisTM Free Workflow Rev. 01 Proprietary I
+ultima-genomics	pdf	https://cdn.sanity.io/files/l7780ks7/production-2024/84a7951facefa428f0f70712e4e751a18a1ecc9d.pdf	vendor copyright, free to download	Ultima Genomics: iiill Application Note Application Note Genome-wide DNA methylation profiling u
+ultima-genomics	pdf	https://cdn.sanity.io/files/l7780ks7/production-2024/8b4fe7845b2907c717e1b333228b33da0ae56a14.pdf	vendor copyright, free to download	Ultima Genomics: Technical Note Ultima Genomics' Flow Chemistry: Methods, Quality Metrics, and An
+ultima-genomics	pdf	https://cdn.sanity.io/files/l7780ks7/production-2024/9777db79cbb0379b5962bf51c94b05bcc741c841.pdf	vendor copyright, free to download	Ultima Genomics: UG Sample Sheet & SampleDB Reference Guide Application-Based Workflows (ABW) Rev
+ultima-genomics	pdf	https://cdn.sanity.io/files/l7780ks7/production-2024/97f63d12bbefc77ddb4477df140652392ac31f26.pdf	vendor copyright, free to download	Ultima Genomics: Technical Note Trimmer: Automated Read Processing on the UG 100® Sequencing Plat
+ultima-genomics	pdf	https://cdn.sanity.io/files/l7780ks7/production-2024/9b18757f5499d97a537b91219ee83acf8ee8d390.pdf	vendor copyright, free to download	Ultima Genomics: UG ppmSeqTM Genomic DNA Library Preparation Protocol for Solaris Free Optimized
+ultima-genomics	pdf	https://cdn.sanity.io/files/l7780ks7/production-2024/a9158daf8c5bbcf6d7c867fd105434aef73cfffc.pdf	vendor copyright, free to download	Ultima Genomics: UG Sample Sheet Reference Guide Rev. 02 Proprietary Information of Ultima Genomi
+ultima-genomics	pdf	https://cdn.sanity.io/files/l7780ks7/production-2024/b11de330b3fcfeb20662060aba8f19b8406cd27a.pdf	vendor copyright, free to download	Ultima Genomics: Application Note Application Note Detection of Minimal Residual Disease with Who
+ultima-genomics	pdf	https://cdn.sanity.io/files/l7780ks7/production-2024/b94bb743cd49c3beaf794e6452c7e0393ee3576b.pdf	vendor copyright, free to download	Ultima Genomics: Specification Sheet UG 100TM Sequencing Platform: The Power of Genomics at Scale
+ultima-genomics	pdf	https://cdn.sanity.io/files/l7780ks7/production-2024/bb290e9d4528898ad4c430392ccf26227599cdb6.pdf	vendor copyright, free to download	Ultima Genomics: APPLICATION NOTE Efficient lowpass whole genome sequencing on the Ultima Genomic
+ultima-genomics	pdf	https://cdn.sanity.io/files/l7780ks7/production-2024/ca5654c7f8c20413397375c6769bf55c04fa034a.pdf	vendor copyright, free to download	Ultima Genomics: Application Note Transcriptome profiling using the Ultima Genomics UG 100TM Sequ
+ultima-genomics	pdf	https://cdn.sanity.io/files/l7780ks7/production-2024/cb877a747f8a6bfd006d2140227cb0a5853bfbb4.pdf	vendor copyright, free to download	Ultima Genomics: Compatibility of BD RhapsodyTM System Single-Cell Libraries with ® the Ultima Ge
+ultima-genomics	pdf	https://cdn.sanity.io/files/l7780ks7/production-2024/cc7122ee32d1922bd7585b9b8094d2a736d4f74b.pdf	vendor copyright, free to download	Ultima Genomics: UG PCR-Free WGS Library Preparation Protocol for Solaris Free Rev. 01 Proprietar
+ultima-genomics	pdf	https://cdn.sanity.io/files/l7780ks7/production-2024/d080e998ad5cbd2ecadbefb155872705057db727.pdf	vendor copyright, free to download	Ultima Genomics: UG Library Preparation Compatibility Guide Native Adapter Ligation (UG 100 Solar
+ultima-genomics	pdf	https://cdn.sanity.io/files/l7780ks7/production-2024/d5221412340073ddd3fb13ef8a9b17b0a1160ea0.pdf	vendor copyright, free to download	Ultima Genomics: UG Indexing PCR Library Preparation Protocol for Solaris Flex Rev. 03 Proprietar
+ultima-genomics	pdf	https://cdn.sanity.io/files/l7780ks7/production-2024/d587bc2f4bbe23967b8dab2f2147f0e6ea85b7d8.pdf	vendor copyright, free to download	Ultima Genomics: Specification Sheet UG200TM Series from Ultima Genomics Paired-End Sequencing So
+ultima-genomics	pdf	https://cdn.sanity.io/files/l7780ks7/production-2024/d7ece87993425e4f5665261bb0f170925e295eb3.pdf	vendor copyright, free to download	Ultima Genomics: PROTOCOL Twist cfDNA Library Preparation With Ultima Genomics ppmSeq® for Solari
+ultima-genomics	pdf	https://cdn.sanity.io/files/l7780ks7/production-2024/dd1f0e5fbde2f843e74da188f65ad9d3ca04292f.pdf	vendor copyright, free to download	Ultima Genomics: UG ppmSeqTM Cell-Free DNA Library Preparation Protocol for Solaris Free Optimize
+ultima-genomics	pdf	https://cdn.sanity.io/files/l7780ks7/production-2024/f88df22e0f2e555967ff10df1eb5d792ca407721.pdf	vendor copyright, free to download	Ultima Genomics: Technical Note High-throughput proteomics with OlinkTM Explore HT and OlinkTM Re
+ultima-genomics	pdf	https://cdn.sanity.io/files/l7780ks7/production-2024/f8fd8ef0ac9c81a625c52397dbb21f760ae4a6bc.pdf	vendor copyright, free to download	Ultima Genomics: Application Note Application Note Germline Whole-Genome Sequencing on the UG 100
+ultima-genomics	pdf	https://cdn.sanity.io/files/l7780ks7/production-2024/fe7736b35088dd93d7c22152bf9e5605a8d55fbd.pdf	vendor copyright, free to download	Ultima Genomics: APPLICATION NOTE PCR-Free Whole Genome Sequencing of cfDNA with Twist Library Pr
+illumina-dragen	site	https://support-docs.illumina.com/SW/dragen_v42/Content/SW/DRAGEN/Software.htm	vendor copyright, free to download	DRAGEN v4.2 documentation (Flare topics; JS table of contents may limit crawl)
+illumina-dragen	site	https://support-docs.illumina.com/SW/DRAGEN_v41/Content/SW/DRAGEN/Software.htm	vendor copyright, free to download	DRAGEN v4.1 documentation
+somalogic	pdf	https://www.biorxiv.org/content/10.1101/2024.02.09.579724.full.pdf	see bioRxiv page (preprint)	SomaScan bioinformatics: normalization, QC, pre-analytical variation (SomaLogic authors; vendor PDFs now 404)
+nikon-microscopyu	page	https://www.microscopyu.com/techniques/confocal/introductory-confocal-concepts	Nikon copyright, free to read	Nikon MicroscopyU confocal introductory concepts
+nikon-microscopyu	page	https://www.microscopyu.com/techniques/confocal/aberrations-in-confocal-microscopy	Nikon copyright, free to read	Nikon MicroscopyU aberrations in confocal
+nikon-microscopyu	page	https://www.microscopyu.com/techniques/confocal/confocal-imaging-modes	Nikon copyright, free to read	Nikon MicroscopyU confocal imaging modes
+nikon-microscopyu	page	https://www.microscopyu.com/techniques/confocal/confocal-reflection-microscopy	Nikon copyright, free to read	Nikon MicroscopyU confocal reflection
+nikon-microscopyu	page	https://www.microscopyu.com/techniques/confocal	Nikon copyright, free to read	Nikon MicroscopyU confocal index
+# --- bench protocols and lab manuals ---
+openwetware	site	https://openwetware.org/wiki/Protocols	CC-BY-SA-3.0	OpenWetWare protocols index; robots allows /wiki/; crawl is whole /wiki/ so use a small max-pages
+openwetware	site	https://openwetware.org/wiki/Category:Protocol	CC-BY-SA-3.0	OpenWetWare protocol category
+addgene	page	https://www.addgene.org/protocols/pcr/	unknown	Addgene protocol: pcr (copyright Addgene; check terms)
+addgene	page	https://www.addgene.org/protocols/gibson-assembly/	unknown	Addgene protocol: gibson-assembly (copyright Addgene; check terms)
+addgene	page	https://www.addgene.org/protocols/bacterial-transformation/	unknown	Addgene protocol: bacterial-transformation (copyright Addgene; check terms)
+addgene	page	https://www.addgene.org/protocols/western-blot/	unknown	Addgene protocol: western-blot (copyright Addgene; check terms)
+addgene	page	https://www.addgene.org/protocols/restriction-digest/	unknown	Addgene protocol: restriction-digest (copyright Addgene; check terms)
+addgene	page	https://www.addgene.org/protocols/lentivirus-production/	unknown	Addgene protocol: lentivirus-production (copyright Addgene; check terms)
+addgene	page	https://www.addgene.org/protocols/gel-electrophoresis/	unknown	Addgene protocol: gel-electrophoresis (copyright Addgene; check terms)
+addgene	page	https://www.addgene.org/protocols/transfection/	unknown	Addgene protocol: transfection (copyright Addgene; check terms)
+addgene	site	https://www.addgene.org/guides/	unknown	Addgene science guides (CRISPR, antibodies, pooled libraries, optogenetics); robots ok
+atcc	site	https://www.atcc.org/resources/culture-guides	unknown	ATCC culture guides (animal, primary, stem, organoid, virology, ...) HTML pages; robots ok
+atcc	pdf	https://www.atcc.org/-/media/resources/culture-guides/animal-cell-culture-guide.pdf	unknown	ATCC Animal Cell Culture Guide PDF (4 MB)
+cell-signaling	site	https://www.cellsignal.com/learn-and-support/protocols	unknown	CST protocols (CUT&RUN, CUT&Tag, ChIP, IHC, IP, WB); robots allow this path
+illumina-prep	pdf	https://support.illumina.com/content/dam/illumina-support/documents/documentation/chemistry_documentation/illumina_prep/1000000025416_12_idp.pdf	unknown	Illumina DNA Prep reference guide v12
+illumina-prep	pdf	https://support.illumina.com/content/dam/illumina-support/documents/documentation/chemistry_documentation/illumina_prep/dna_pcr_free/illumina-dna-pcr-free-reference-guide-1000000086922-04.pdf	unknown	Illumina DNA PCR-Free reference guide
+opentrons	github	https://github.com/Opentrons/Protocols	Apache-2.0	Opentrons protocol library (Python liquid-handling protocols for PCR prep, NGS library prep, ELISA...)
+libretexts-synbio-lab	site	https://bio.libretexts.org/Bookshelves/Biotechnology/Lab_Manual%3A_Synthetic_Biology_Protocols	CC-BY-SA-4.0	Synthetic biology lab protocols; robots crawl-delay 5
+libretexts-biotech-lab	site	https://bio.libretexts.org/Bookshelves/Biotechnology/Lab_Manual%3A_Introduction_to_Biotechnology	CC-BY-4.0	Introduction to Biotechnology lab manual
+libretexts-biological-methods	site	https://bio.libretexts.org/Bookshelves/Biotechnology/Encyclopedia_of_Biological_Methods_(Mattaini)	CC-BY-SA-4.0	Encyclopedia of Biological Methods (Mattaini)
+libretexts-biotech-barron	site	https://bio.libretexts.org/Bookshelves/Biotechnology/Introduction_to_Biotechnology_Laboratory_Manual_(Barron)	CC-BY-NC-SA-4.0	NonCommercial licence: include only if acceptable
+libretexts-bio-oer	site	https://bio.libretexts.org/Bookshelves/Biotechnology/Bio-OER_(CUNY)	CC-BY-NC-SA-4.0	NonCommercial licence: include only if acceptable
+# --- office and PDF software manuals ---
+ms-office-vba	github	https://github.com/MicrosoftDocs/VBA-Docs	CC BY 4.0 (docs), MIT (code)	Office VBA reference sources (Word, Excel, PowerPoint object models)
+ms-office-openxml	github	https://github.com/OfficeDev/open-xml-docs	CC BY 4.0 (docs), MIT (code)	Open XML SDK docs with C# and VB examples for docx/xlsx/pptx internals
+ms-office-powershell	github	https://github.com/MicrosoftDocs/office-docs-powershell	CC BY 4.0 (docs), MIT (code)	Office/Exchange/Teams PowerShell cmdlets; admin-oriented, low priority
+ms-excel-functions	page	https://support.microsoft.com/en-us/excel/excel-functions-alphabetical	Microsoft (reference use)	Excel functions A-Z index; renders without JS but is only a link list
+ms-office-help	site	https://support.microsoft.com/en-us/office/	Microsoft (reference use)	Word/Excel/PowerPoint help articles (/en-us/office/...); renders server-side; robots allows it; no Content-Signal. Very large: use a small --max-pages
+ms-word-help	site	https://support.microsoft.com/en-us/word/	Microsoft (reference use)	Word help hub (links lead outside prefix, so may give only the hub page)
+ms-office-vba-learn	site	https://learn.microsoft.com/en-us/office/vba/	CC BY 4.0	Rendered form of VBA-Docs; use only if GitHub row is skipped
+ecma-376	page	https://ecma-international.org/publications-and-standards/standards/ecma-376/	ECMA (free standard)	Office Open XML overview; full parts are large PDF/zip, not queued (zip not supported)
+libreoffice-writer	pdf	https://books.libreoffice.org/en/WG76/WG76-WriterGuide.pdf	CC BY 4.0 / GPL	Writer Guide 7.6
+libreoffice-calc	pdf	https://books.libreoffice.org/en/CG76/CG76-CalcGuide.pdf	CC BY 4.0 / GPL	Calc Guide 7.6
+libreoffice-impress	pdf	https://books.libreoffice.org/en/IG76/IG76-ImpressGuide.pdf	CC BY 4.0 / GPL	Impress Guide 7.6
+libreoffice-draw	pdf	https://books.libreoffice.org/en/DG76/DG76-DrawGuide.pdf	CC BY 4.0 / GPL	Draw Guide 7.6
+libreoffice-getting-started	site	https://books.libreoffice.org/en/GS262/	CC BY 4.0 / GPL	Getting Started Guide 26.2 as HTML book (no 7.6 PDF exists at books.libreoffice.org; robots allows all)
+libreoffice-help	site	https://help.libreoffice.org/latest/en-US/	MPL-2.0 / CC BY-SA	Built-in help, static HTML; robots allows /latest/ (MistralAI-Training bot is blocked, not us)
+google-docs-help	site	https://support.google.com/docs/	Google (reference use)	Docs/Sheets/Slides Editors Help; renders without JS (GET works; HEAD gives 404); robots allows; no Content-Signal
+google-sheets-functions	page	https://support.google.com/docs/table/25273?hl=en	Google (reference use)	Google Sheets function list table; server-rendered
+qpdf	site	https://qpdf.readthedocs.io/en/stable/	Apache-2.0	qpdf manual
+ghostscript	site	https://ghostscript.readthedocs.io/en/latest/	AGPL-3.0	Ghostscript docs
+poppler-utils	site	https://poppler.freedesktop.org/	GPL-2.0	Poppler home; utilities man pages are in the repo
+pdftk-java	page	https://gitlab.com/pdftk-java/pdftk	GPL-2.0	pdftk-java README with usage examples (GitLab page)
+pymupdf	site	https://pymupdf.readthedocs.io/en/latest/	AGPL-3.0	PyMuPDF docs
+pypdf	site	https://pypdf.readthedocs.io/en/stable/	BSD-3-Clause	pypdf docs
+pdfplumber	github	https://github.com/jsvine/pdfplumber	MIT	README is the main documentation
+pdfminer-six	github	https://github.com/pdfminer/pdfminer.six	MIT	pdfminer.six docs and README
+camelot	site	https://camelot-py.readthedocs.io/en/latest/	MIT	Table extraction docs (master path gives 404; use latest)
+weasyprint	site	https://doc.courtbouillon.org/weasyprint/stable/	BSD-3-Clause	HTML/CSS to PDF
+pdf-spec-2008	pdf	https://opensource.adobe.com/dc-acrobat-sdk-docs/pdfstandards/PDF32000_2008.pdf	ISO 32000-1 free copy by Adobe	PDF 1.7 specification, ~750 pages; PDF 2.0 is paywalled at iso.org and pdfa.org returns 403
+zotero	site	https://www.zotero.org/support/	CC BY-SA 3.0	Zotero documentation; renders without JS; robots allows
+# --- sequence-to-function and variant-effect models ---
+spliceai	github	https://github.com/Illumina/SpliceAI	PolyForm Strict / GPL-3.0 (check)	SpliceAI: splice-altering variant prediction, usage and annotation
+enformer	github	https://github.com/google-deepmind/deepmind-research/tree/master/enformer	Apache-2.0	Enformer: sequence-to-expression model, usage notebooks
+borzoi	github	https://github.com/calico/borzoi	Apache-2.0	Borzoi: RNA-seq coverage prediction from sequence, variant scoring
+baskerville	github	https://github.com/calico/baskerville	Apache-2.0	Baskerville: training and scoring library behind Borzoi
+chrombpnet	github	https://github.com/kundajelab/chrombpnet	MIT	ChromBPNet: base-resolution chromatin accessibility models and variant effects
+tangermeme	github	https://github.com/jmschrei/tangermeme	MIT	tangermeme: tools for genomic sequence models (attribution, variant effect, design)

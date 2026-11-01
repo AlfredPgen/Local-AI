@@ -180,6 +180,9 @@ _ROBOTS_RULE = re.compile(r"^(\s*(?:dis)?allow\s*:\s*)([^#]*?)\s*(#.*)?$", re.I)
 _ROBOTS_DELAY = re.compile(r"^(\s*crawl-delay\s*:\s*)(\d*\.\d+)\s*(#.*)?$", re.I)
 
 
+_AI_TRAIN_NO = re.compile(r"^\s*content-signal\s*:.*\bai-train\s*=\s*no\b", re.I | re.M)
+
+
 def parse_robots(rp, text):
     """robotparser.parse with three fixes: a rule 'Disallow: //' (paths starting
     with '//') is not read as 'disallow everything'; '*' and '$' in rules work as
@@ -381,6 +384,9 @@ class Http:
                 text = decode_text(got.body) if got is not None and got.body else ""
                 if not text.strip() or text.lstrip().startswith("<") or "<html" in text[:5000].lower():
                     rp.allow_all = True
+                elif _AI_TRAIN_NO.search(text):
+                    rp.disallow_all = True  # the site asks not to be used for AI training (Content-Signal)
+                    rp.ai_train_no = True
                 else:
                     parse_robots(rp, text)
                     delay = rp.crawl_delay(ROBOTS_AGENT)
@@ -393,6 +399,8 @@ class Http:
         """Why robots.txt forbids url, for the manifest."""
         parts = urllib.parse.urlsplit(url)
         rp = self.robots.get(f"{parts.scheme}://{parts.netloc}")
+        if getattr(rp, "ai_train_no", False):
+            return f"robots.txt of {parts.netloc} says Content-Signal: ai-train=no (the site opts out of AI training)"
         code = getattr(rp, "refused", None)
         if code:
             return (f"{parts.netloc} answers HTTP {code} to this User-Agent (robots.txt refused, so the site is off "
