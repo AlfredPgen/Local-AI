@@ -227,10 +227,11 @@ def read_records(path):
                 yield rec
 
 
-def keyword_list(records_path, keyword_path, min_hits, min_distinct, limit, rank, path):
+def keyword_list(records_path, keyword_path, min_hits, min_distinct, limit, rank, path, skip=()):
     """Papers whose title and abstract match the keywords (the title counts 3
     times), best first, as list rows; written to `path`. rank: 'density'
-    (keyword matches per square root of words) or 'cited' (most cited first)."""
+    (keyword matches per square root of words) or 'cited' (most cited first).
+    Papers in `skip` (PMCIDs already downloaded) are left out of the list."""
     import pyarrow as pa
 
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -248,6 +249,7 @@ def keyword_list(records_path, keyword_path, min_hits, min_distinct, limit, rank
             keep, _, hits, _ = kw.evaluate(rec["title"], rec["abstract"])
             if keep:
                 words = len(rec["title"].split()) + len(rec["abstract"].split())
+                rec.pop("abstract")  # millions of matches: keep only what the list needs
                 kept.append((hits / math.sqrt(max(words, 50)), rec))
 
     chunk = []
@@ -265,6 +267,7 @@ def keyword_list(records_path, keyword_path, min_hits, min_distinct, limit, rank
         kept.sort(key=lambda p: (-p[1]["cited"], -p[0], p[1]["pmcid"]))
     else:
         kept.sort(key=lambda p: (-p[0], -p[1]["cited"], p[1]["pmcid"]))
+    kept = [k for k in kept if k[1]["pmcid"] not in skip]
     rows = [(r["pmcid"], r["pmid"], r["year"], str(r["cited"]), r["journal"], r["title"]) for _, r in kept[:limit]]
     with open(path + ".part", "w", encoding="utf-8", newline="\n") as handle:
         handle.write(f"# keywords: {keyword_path} (min hits {min_hits}, min distinct {min_distinct}, rank {rank})\n"
@@ -818,6 +821,12 @@ def parse_args(argv=None):
                    help="order of keyword-selected papers: keyword density (default) or citations")
     p.add_argument("--refresh-metadata", action="store_true",
                    help="harvest the metadata again (to add papers published since the last harvest)")
+    p.add_argument("--metadata-as-is", action="store_true",
+                   help="select from the metadata harvested so far, even if the harvest is not finished "
+                        "(it runs in citation order, so the part done holds the most-cited papers)")
+    p.add_argument("--new", type=int, metavar="N",
+                   help="with --keywords: fetch the best N matching papers that are not downloaded yet "
+                        "(instead of --max-papers in total)")
     args = p.parse_args(argv)
     if not 1 <= args.workers <= 3:
         p.error("--workers must be 1..3")
@@ -843,9 +852,19 @@ def main(argv=None):
     os.makedirs(args.out, exist_ok=True)
     os.makedirs(args.meta, exist_ok=True)
     if args.keywords:
-        records = harvest(args.harvest_query, os.path.join(args.meta, "metadata"), args.refresh_metadata)
-        rows = keyword_list(records, args.keywords, args.min_hits, args.min_distinct, args.max_papers, args.rank,
-                            os.path.join(args.meta, "list.tsv"))
+        folder = os.path.join(args.meta, "metadata")
+        if args.metadata_as_is and os.path.isfile(os.path.join(folder, "records.jsonl.gz")):
+            records = os.path.join(folder, "records.jsonl.gz")
+            print(f"Using the metadata harvested so far: {records}")
+        else:
+            records = harvest(args.harvest_query, folder, args.refresh_metadata)
+        skip = set()
+        if args.new:
+            done = read_report(os.path.join(args.meta, "report.tsv"))
+            skip = {name.split("__", 1)[0] for name in os.listdir(args.out) if name.endswith(".md")}
+            skip |= {k for k, v in done.items() if v in FINAL}
+        rows = keyword_list(records, args.keywords, args.min_hits, args.min_distinct, args.new or args.max_papers,
+                            args.rank, os.path.join(args.meta, "list.tsv"), skip)
     else:
         rows = build_list(args.query, args.sort, args.max_papers, os.path.join(args.meta, "list.tsv"))
     if args.list_only:
