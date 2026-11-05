@@ -86,6 +86,8 @@ def parse_args():
     p.add_argument("--eval-text", help="plain-text file for forward-pass panels when no dataset is available")
     p.add_argument("--probes", default=os.path.join(HERE, "probes_biology.tsv"), help="cloze fact probes TSV")
     p.add_argument("--no-forward", action="store_true", help="skip panels that run the model")
+    p.add_argument("--full", action="store_true",
+                   help="also the slow parts for big models (singular value spectra above d_model 2048)")
     p.add_argument("--history-log", help="log.txt to read loss curves from (for checkpoints without history)")
     p.add_argument("--device", choices=("cpu", "auto", "cuda", "mps"), default="cpu",
                    help="device for forward-pass panels (auto: CUDA, else Apple MPS, else CPU)")
@@ -137,6 +139,9 @@ class Checkpoint:
         # model's pre-training; the fine-tuning curve is in finetune["history"].
         ft = self.obj.get("finetune") if isinstance(self.obj, dict) else None
         self.finetune = ft if isinstance(ft, dict) else None
+        # tools/edit_weights.py files: edited weights, so the base model's stored evaluation does not describe them
+        ed = self.obj.get("edit") if isinstance(self.obj, dict) else None
+        self.edit = ed if isinstance(ed, dict) else None
 
     @staticmethod
     def _find_weights(obj):
@@ -414,66 +419,80 @@ def token_class(tok, i):
 # ---------------------------------------------------------------------------
 # Forward-pass data
 # ---------------------------------------------------------------------------
-def eval_windows(ck, args, max_windows=16):
-    """Validation token windows for the checkpoint's tokenizer, plus where they came from."""
+def window_budget(cfg):
+    """How many validation windows the forward-pass panels run: 16 up to the
+    ~220M models trained so far, fewer for bigger ones (4 from about 800M), since
+    the CPU forward pass costs about 2 x active parameters per token:
+    total = min(16, max(4, round(16 x 2.2e8 / active parameters)))."""
+    try:
+        n_params = tiny_gpt.count_params(cfg)[2]
+    except Exception:  # noqa: BLE001 - an unusual config only loses the scaling
+        return 16
+    return int(min(16, max(4, round(16 * 2.2e8 / max(n_params, 1)))))
+
+
+def eval_windows(ck, args, max_windows=None):
+    """Validation token windows for the checkpoint's tokenizer, plus where they came from.
+
+    max_windows is the TOTAL number of windows (default window_budget: 16, fewer
+    for models above ~220M parameters), handed out round-robin over the
+    validation sources, biggest first: with 12 sources a per-source share would
+    be 1 for any total up to 23 and could not shrink with the model. The windows
+    stay float32 on the CPU (bf16 is slower there)."""
     if ck.tok is None or ck.cfg is None:
         return None, "no tokenizer/architecture in this checkpoint"
     ctx = ck.cfg.ctx
-    stored = ((ck.obj.get("dataset") if isinstance(ck.obj, dict) else None) or {})
-    stored = stored if isinstance(stored, dict) else {}
-    want = stored.get("fingerprint")
-    ds_path, found, refused = args.dataset, "", ""
-    if not ds_path and stored.get("path"):
-        ds_path = stored["path"]
-        if not os.path.isdir(ds_path):
-            # moved to another machine (or folder): the same dataset by name in this repository's datasets/
-            alt = os.path.join(HERE, "datasets", path_name(ds_path))
-            ds_path = alt if want and os.path.isdir(alt) and _fingerprint(alt) == want else None
-            found = " (found by name in datasets/)"
-        elif want and _fingerprint(ds_path) != want:
-            # rebuilt at the same path: its validation split may hold text this model trained on
-            refused = (f"the dataset now at {path_name(ds_path)} is not the one this model was trained on "
-                       "(different fingerprint), so its validation windows may contain training text; pass "
-                       "--dataset to use it anyway, or --eval-text")
-            ds_path = None
+    total = max(1, int(max_windows or window_budget(ck.cfg)))
+    ds_path, refused = args.dataset, ""
+    if not ds_path:
+        try:
+            ds_path = tiny_gpt.resolve_dataset(ck.obj if isinstance(ck.obj, dict) else {})
+        except SystemExit as exc:  # not here, or rebuilt since (its validation text may be training text)
+            ds_path, refused = None, str(exc)
     if ds_path and os.path.isdir(ds_path):
         manifest, arrays = data_prep.open_token_files(ds_path, verify=False)
         meta = manifest["tokenizer"]
         ds_tok = data_prep.Tokenizer.from_file(os.path.join(ds_path, meta["file"]), meta.get("encode_mode", "lines"))
         same = ds_tok.sha256 == ck.tok.sha256 and ds_tok.encode_mode == ck.tok.encode_mode
+        span = ctx + 1 if same else ctx * 3
+        sources = sorted(((name, arr) for name, arr in arrays["val"].items() if len(arr) > span),
+                         key=lambda item: (-len(item[1]), item[0]))
         rows = []
-        per = max(1, max_windows // max(len(arrays["val"]), 1))
-        for name, arr in sorted(arrays["val"].items()):
-            span = ctx + 1 if same else ctx * 3
-            if len(arr) <= span:
+        for k, (name, arr) in enumerate(sources):
+            count = total // len(sources) + (1 if k < total % len(sources) else 0)  # round-robin share
+            if count < 1:
                 continue
-            for s in np.linspace(0, len(arr) - span - 1, per).astype(np.int64):
+            for s in np.linspace(0, len(arr) - span - 1, count).astype(np.int64):
                 ids = np.asarray(arr[s:s + span], dtype=np.int64)
                 if not same:
                     ids = np.asarray(ck.tok.encode(ds_tok.decode(ids.tolist())), dtype=np.int64)
                 if len(ids) >= ctx + 1:
                     rows.append(ids[:ctx + 1])
         if rows:
+            stored = (ck.obj.get("dataset") or {}) if isinstance(ck.obj, dict) else {}
+            stored_path = stored.get("path") if isinstance(stored, dict) else None
+            found = ("" if args.dataset or not stored_path or os.path.normcase(os.path.abspath(ds_path)) in {
+                os.path.normcase(os.path.abspath(stored_path)),
+                os.path.normcase(os.path.abspath(os.path.join(HERE, stored_path)))}
+                else " (found by name in datasets/)")
             note = "validation windows of " + os.path.basename(os.path.normpath(ds_path)) + found
             return torch.from_numpy(np.stack(rows)), note + ("" if same else " (re-tokenized for this checkpoint)")
     if args.eval_text:
         with open(args.eval_text, encoding="utf-8", errors="replace") as handle:
             ids = np.asarray(ck.tok.encode(handle.read()), dtype=np.int64)
-        n = min(max_windows, (len(ids) - 1) // ctx)
+        n = min(total, (len(ids) - 1) // ctx)
         if n >= 1:
             starts = np.linspace(0, len(ids) - ctx - 1, n).astype(np.int64)
             return torch.from_numpy(np.stack([ids[s:s + ctx + 1] for s in starts])), os.path.basename(args.eval_text)
         return None, f"{args.eval_text} is shorter than one context window ({ctx + 1} tokens)"
-    return None, refused or ("no evaluation text: the checkpoint's dataset is not available; pass --dataset or "
-                             "--eval-text")
+    if refused:
+        return None, refused + " Or pass --eval-text."
+    return None, "no evaluation text: the checkpoint's dataset is not available; pass --dataset or --eval-text"
 
 
 def _fingerprint(ds_path):
     """The fingerprint in a dataset folder's manifest (None if it has no readable manifest)."""
-    try:
-        return data_prep.read_manifest(ds_path).get("fingerprint")
-    except (SystemExit, OSError, ValueError):
-        return None
+    return tiny_gpt.dataset_fingerprint(ds_path)
 
 
 @torch.no_grad()
@@ -775,7 +794,7 @@ def create_dashboard(ck, args):
         ("Output preference", lambda ax: panel_preference(ax, ck, pieces, classes, fstats, fnote)),
         ("Weight scale per block", lambda ax: panel_components(ax, fig, ck, seq)),
         ("RMSNorm gains", lambda ax: panel_norm_gains(ax, ck)),
-        ("Singular value spectra", lambda ax: panel_spectra(ax, ck)),
+        ("Singular value spectra", lambda ax: panel_spectra(ax, ck, getattr(args, "full", False))),
         ("Per-head projection scale", lambda ax: panel_heads(ax, fig, ck, seq)),
         ("Calibration", lambda ax: panel_calibration(ax, ck, fstats, fnote)),
         ("Cloze fact probes", lambda ax: panel_probes(ax, ck, model, device, args, fnote)),
@@ -1313,8 +1332,13 @@ def panel_norm_gains(ax, ck):
     titled(ax, title, "attn_norm blue, ffn_norm orange, final grey; 1.0 at initialisation")
 
 
-def panel_spectra(ax, ck):
+SPECTRA_MAX_D = 2048  # wider models: the full SVDs take minutes on the CPU, so only with --full
+
+
+def panel_spectra(ax, ck, full=False):
     title = "Singular value spectra"
+    if ck.cfg is not None and ck.cfg.d_model > SPECTRA_MAX_D and not full:
+        return message(ax, f"skipped for d_model {ck.cfg.d_model:,} > {SPECTRA_MAX_D:,} (slow); pass --full", title)
     layers = _layers(ck)
     mid = layers[len(layers) // 2] if layers else None
     targets = [("token embedding", ck.embedding)] + [
@@ -1369,7 +1393,8 @@ def panel_heads(ax, fig, ck, cmap):
 # ---- row 4: behaviour -----------------------------------------------------------
 def panel_calibration(ax, ck, fstats, fnote):
     title = "Calibration of the top prediction"
-    last = ck.metrics.get("last_eval") or (ck.metrics.get("base_last_eval") if ck.finetune else None) or {}
+    derived = ck.finetune or ck.edit  # weights changed after the stored evaluation (fine-tuned or edited)
+    last = ck.metrics.get("last_eval") or (ck.metrics.get("base_last_eval") if derived else None) or {}
     cal, ece = None, None
     if fstats is not None:
         cal, ece = fstats["calibration"], fstats["ece"]
@@ -1377,6 +1402,8 @@ def panel_calibration(ax, ck, fstats, fnote):
         cal, ece = last["calibration"], last.get("ece")
         if ck.finetune:
             title += " (base model, before fine-tuning)"
+        elif ck.edit:
+            title += " (original model, before the edit)"
     if cal is None:
         return message(ax, "No calibration data: " + fnote, title)
     conf, acc, cnt = (np.array(cal[k]) for k in ("confidence", "accuracy", "count"))
@@ -1402,8 +1429,10 @@ def probe_report(ck, model, device, args):
     last = ck.metrics.get("last_eval") or {}
     stored = last.get("probes")
     step = ck.obj.get("step") if isinstance(ck.obj, dict) else None
-    # a fine-tuned file carries the base model's last_eval (and step): its stored report is not these weights'
-    if stored and stored.get("file_sha256") == sha and last.get("step") == step and not ck.finetune:
+    # a fine-tuned or edited file carries the base model's last_eval (and step): its stored report is not these
+    # weights'
+    derived = ck.finetune or ck.edit
+    if stored and stored.get("file_sha256") == sha and last.get("step") == step and not derived:
         return stored
     if model is None:
         return None

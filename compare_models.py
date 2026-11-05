@@ -13,7 +13,10 @@ token-level standard error would be far too optimistic.
 
 Reading the result: a negative difference means A compresses the text better
 (lower BPB). If the 95% interval excludes 0 the difference is unlikely to be
-noise. Use --device cpu while a training run is using the GPU.
+noise. The GPU is used when there is one (BF16 autocast, TF32 matrix products:
+10-20 minutes for two 216M models instead of 8-17 hours in FP32 on the CPU);
+while a training run is using it the comparison is refused: use --device cpu,
+or --force.
 
 A model trained on another dataset may have trained on some of these
 validation documents. Its training dataset's docs.tsv says which (same source
@@ -66,12 +69,14 @@ def validation_documents(dataset_dir, per_source, max_chars, layout=None):
 
 
 @torch.no_grad()
-def document_nll(model, tok, text, device):
+def document_nll(model, tok, text, device, amp=None):
     """(total NLL in nats, UTF-8 bytes of the tokens the model predicted) for one
     document, scored in non-overlapping windows of the model's context. The bytes
     are those of the predicted tokens themselves, so a tokenizer that drops
     characters (collapsed spaces) or has no start token (the first token is never
-    predicted) is not credited with bytes it never scored."""
+    predicted) is not credited with bytes it never scored. amp: the autocast dtype
+    (tiny_gpt.choose_precision for inference; None = float32, which is also what
+    the CPU gets: BF16 autocast is 2.4x slower there)."""
     ids = ([tok.bos_id] if tok.bos_id >= 0 else []) + tok.encode(text)
     if len(ids) < 2:
         return 0.0, 0
@@ -93,7 +98,9 @@ def document_nll(model, tok, text, device):
         y[i, :len(b)] = torch.tensor(b)
     for i in range(0, len(rows_x), 16):
         # the output layer in pieces: no (windows x context x vocabulary) table; -100 labels count 0
-        total += -tiny_gpt.target_logprobs(model, x[i:i + 16].to(device), y[i:i + 16].to(device)).sum().item()
+        with torch.autocast(device.type, dtype=amp or torch.float32, enabled=amp is not None):
+            lp = tiny_gpt.target_logprobs(model, x[i:i + 16].to(device), y[i:i + 16].to(device))
+        total += -lp.float().sum().item()
     return total, predicted_bytes
 
 
@@ -261,7 +268,9 @@ def main():
     p.add_argument("--max-chars", type=int, default=20_000, help="characters used per document")
     p.add_argument("--reps", type=int, default=2000, help="bootstrap resamples")
     p.add_argument("--seed", type=int, default=0)
-    p.add_argument("--device", choices=("cpu", "cuda", "mps", "auto"), default="cpu")
+    p.add_argument("--device", choices=("cpu", "cuda", "mps", "auto"), default="auto",
+                   help="auto (default): CUDA, else Apple MPS, else CPU")
+    p.add_argument("--force", action="store_true", help="use the GPU even if another job seems to be using it")
     p.add_argument("--trust-checkpoint", action="store_true")
     p.add_argument("--allow-different-datasets", action="store_true",
                    help="give a verdict even when a model was trained on another dataset that cannot be checked "
@@ -273,6 +282,12 @@ def main():
     if not 1 <= args.docs <= 5000 or not 100 <= args.reps <= 100_000:
         p.error("--docs must be 1-5000 and --reps 100-100000")
     device = tiny_gpt.select_device(args.device)
+    if device.type != "cpu" and not args.force and tiny_gpt.gpu_busy(HERE):
+        raise SystemExit(tiny_gpt.GPU_BUSY_MESSAGE + " (Or use --device cpu, or pass --force.)")
+    amp, amp_name, _ = tiny_gpt.choose_precision(device, "auto", training=False)  # scoring only: no scaler
+    if device.type == "cuda":  # as training does: TF32 for the float32 matrix products left outside autocast
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.set_float32_matmul_precision("high")
     trained_on = {}
     model_a, tok_a, cfg_a, obj_a = tiny_gpt.load_for_inference(args.a, device, args.trust_checkpoint)
     trained_on["A"] = obj_a.get("dataset") if isinstance(obj_a.get("dataset"), dict) else None
@@ -282,12 +297,14 @@ def main():
     trained_on["B"] = obj_b.get("dataset") if isinstance(obj_b.get("dataset"), dict) else None
     del obj_b
     gc.collect()
-    dataset = args.dataset or (trained_on["A"] or {}).get("path")
-    if not dataset or not os.path.isdir(dataset):
-        p.error("no dataset: pass --dataset (checkpoint A's dataset folder is missing)")
+    # A's dataset on this machine (by its stored path, else datasets/<same name> with the same fingerprint)
+    dataset = args.dataset or tiny_gpt.resolve_dataset({"dataset": trained_on["A"]})
+    if not os.path.isdir(dataset):
+        p.error(f"--dataset not found: {dataset}")
     layout = {}
     docs = validation_documents(dataset, args.docs, args.max_chars, layout)
-    print(f"A: {args.a}\nB: {args.b}\n{len(docs)} validation documents from {dataset} on {tiny_gpt.device_label(device)}")
+    print(f"A: {args.a}\nB: {args.b}\n{len(docs)} validation documents from {dataset} on {tiny_gpt.device_label(device)} "
+          f"({amp_name})")
     # a model trained on another dataset may have trained on some of these documents: its BPB would look too good
     drop, unchecked, unknown = training_overlap(docs, dataset, layout, trained_on)
     if drop:
@@ -301,8 +318,8 @@ def main():
     rows, skipped, lossy = [], 0, {"A": 0, "B": 0}
     for i, (source, k, text) in enumerate(docs, 1):
         n_bytes = len(text.encode("utf-8"))
-        nll_a, bytes_a = document_nll(model_a, tok_a, text, device)
-        nll_b, bytes_b = document_nll(model_b, tok_b, text, device)
+        nll_a, bytes_a = document_nll(model_a, tok_a, text, device, amp)
+        nll_b, bytes_b = document_nll(model_b, tok_b, text, device, amp)
         if not (math.isfinite(nll_a) and math.isfinite(nll_b)) or not bytes_a or not bytes_b:
             skipped += 1
             continue

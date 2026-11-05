@@ -125,22 +125,33 @@ def loop_stats(seqs, start, eos):
 
 class BandStats:
     """Per layer and position band: sums and sums of squares of a feature vector at
-    loop and at fresh positions, for a band-matched difference of means."""
+    loop and at fresh positions, for a band-matched difference of means.
 
-    def __init__(self, n_layers, n_bands, dim, device):
-        z = lambda: torch.zeros(n_layers, n_bands, dim, dtype=torch.float64, device=device)  # noqa: E731
+    The running sums are float64 on the CPU (Apple's MPS has no float64, and the
+    variance sum(x^2)/n - mean^2 needs it over hundreds of batches); each batch is
+    reduced on the compute device in float32 into (n_bands, dim) sums, and only
+    those n_bands x dim numbers cross to the CPU per layer and batch (a batch adds
+    at most batch x 16 values per band, well within float32)."""
+
+    def __init__(self, n_layers, n_bands, dim, device=None):
+        z = lambda: torch.zeros(n_layers, n_bands, dim, dtype=torch.float64)  # noqa: E731
         self.s = [z(), z()]
         self.q = [z(), z()]
-        self.n = torch.zeros(2, n_layers, n_bands, dtype=torch.float64, device=device)
+        self.n = torch.zeros(2, n_layers, n_bands, dtype=torch.float64)
+        self.n_bands = n_bands
 
     def add(self, li, feats, labels, bands):
         for v in (0, 1):
             sel = labels == v
             if sel.any():
-                f, b = feats[sel].double(), bands[sel]
-                self.s[v][li].index_add_(0, b, f)
-                self.q[v][li].index_add_(0, b, f * f)
-                self.n[v, li].index_add_(0, b, torch.ones_like(b, dtype=torch.float64))
+                f, b = feats[sel].float(), bands[sel]
+                s = torch.zeros(self.n_bands, f.shape[1], dtype=torch.float32, device=f.device)
+                q = torch.zeros_like(s)
+                s.index_add_(0, b, f)
+                q.index_add_(0, b, f * f)
+                self.s[v][li] += s.cpu().double()
+                self.q[v][li] += q.cpu().double()
+                self.n[v, li] += torch.bincount(b, minlength=self.n_bands).cpu().double()
 
     def effect(self, li):
         """(band-matched mean difference loop - fresh, effect size per feature)."""
@@ -163,7 +174,7 @@ def collect(model, seqs, start, eos, device, amp, batch):
     and of each layer's MLP neurons (the input of MLP down)."""
     n_layers, d, hdim = len(model.blocks), model.cfg.d_model, model.cfg.ffn_hidden
     n_bands = math.ceil(seqs.shape[1] / BAND)
-    resid, neur = BandStats(n_layers, n_bands, d, device), BandStats(n_layers, n_bands, hdim, device)
+    resid, neur = BandStats(n_layers, n_bands, d), BandStats(n_layers, n_bands, hdim)
     cap_r, cap_n = {}, {}
     hooks = [blk.register_forward_hook(lambda m, i, o, li=li: cap_r.__setitem__(li, o))
              for li, blk in enumerate(model.blocks)]
@@ -228,12 +239,22 @@ def apply_edit(model, edit):
     return undo
 
 
-def quick_bpb(model, tok, docs, device):
+def quick_bpb(model, tok, docs, device, amp=None):
     nll = nbytes = 0.0
     for _, _, text in docs:
-        n, b = cm.document_nll(model, tok, text, device)
+        n, b = cm.document_nll(model, tok, text, device, amp=amp)
         nll, nbytes = nll + n, nbytes + b
     return nll / (math.log(2) * max(nbytes, 1))
+
+
+def edited_metrics(metrics):
+    """The metrics an edited copy carries: the history and best values stay (they
+    are the original's pre-training), but the stored last evaluation (validation
+    loss, fact benchmark, calibration) was measured on the original weights, so it
+    becomes base_last_eval and last_eval is None, as in a fine-tuned file; the
+    viewer then scores the edited weights themselves."""
+    m = dict(metrics or {})
+    return {**m, "last_eval": None, "base_last_eval": m.get("last_eval") or m.get("base_last_eval")}
 
 
 def describe(e):
@@ -257,6 +278,7 @@ def main(argv=None):
     p.add_argument("--batch", type=int, default=32)
     p.add_argument("--seed", type=int, default=1234)
     p.add_argument("--device", default="auto")
+    p.add_argument("--force", action="store_true", help="use the GPU even if another job seems to be using it")
     p.add_argument("--overwrite", action="store_true", help="replace an existing OUT (never the input)")
     args = p.parse_args(argv)
 
@@ -266,6 +288,8 @@ def main(argv=None):
     if os.path.exists(dst) and not args.overwrite:
         raise SystemExit(f"{dst} exists; pass --overwrite to replace it.")
     device = tg.select_device(args.device)
+    if device.type != "cpu" and not args.force and tg.gpu_busy(HERE):
+        raise SystemExit(tg.GPU_BUSY_MESSAGE + " (Or use --device cpu, or pass --force.)")
     amp, amp_name, _ = tg.choose_precision(device, "auto", training=False)
     model, tok, cfg, obj = tg.load_for_inference(src, device)
     require_dense(model)
@@ -273,7 +297,9 @@ def main(argv=None):
     if args.new_tokens > room:
         print(f"Context is {model.ctx} tokens: generating {room} new tokens instead of {args.new_tokens}.")
         args.new_tokens = max(room, 1)
-    dataset = os.path.join(HERE, args.dataset or obj["dataset"]["path"])
+    # --dataset as given or from the project folder; else the checkpoint's own dataset on this machine
+    override = args.dataset and (args.dataset if os.path.isdir(args.dataset) else os.path.join(HERE, args.dataset))
+    dataset = tg.resolve_dataset(obj, override)
     print(f"{src} | step {obj.get('step')} | {tg.device_label(device)} | {amp_name}", flush=True)
 
     allp = prompts_from_validation(dataset, tok, args.prompts + args.dev_prompts, args.prompt_tokens, "find",
@@ -305,7 +331,7 @@ def main(argv=None):
 
     base_dev = loop_stats(generate_all(model, dev, args.new_tokens, device, amp, args.batch, args.seed + 7), start,
                           tok.eos_id)
-    base_bpb = quick_bpb(model, tok, bpb_docs, device)
+    base_bpb = quick_bpb(model, tok, bpb_docs, device, amp)
     print(f"original, choice prompts: {base_dev}, bits per byte {base_bpb:.4f}", flush=True)
 
     rng = torch.Generator().manual_seed(args.seed)
@@ -327,7 +353,7 @@ def main(argv=None):
         undo = apply_edit(model, cand)
         st = loop_stats(generate_all(model, dev, args.new_tokens, device, amp, args.batch, args.seed + 7), start,
                         tok.eos_id)
-        bpb = quick_bpb(model, tok, bpb_docs, device)
+        bpb = quick_bpb(model, tok, bpb_docs, device, amp)
         undo()
         t = {**{k: v for k, v in cand.items() if k != "direction"}, **st, "bpb": bpb, "bpb_change": bpb - base_bpb}
         trials.append(t)
@@ -337,7 +363,7 @@ def main(argv=None):
 
     ok = [(c, t) for c, t in zip(candidates, trials) if t["bpb_change"] <= args.max_bpb_loss]
     best = min(ok, key=lambda ct: ct[1]["repeat_token_share"], default=None)
-    record = {"source_checkpoint": src, "created": datetime.datetime.now().isoformat(timespec="seconds"),
+    record = {"source_checkpoint": tg._home_short(src), "created": datetime.datetime.now().isoformat(timespec="seconds"),
               "ngram": NGRAM, "position_band": BAND, "positions": counts, "original_find": base_find,
               "original_choice": base_dev, "original_bpb_check": base_bpb, "trials": trials}
     report = os.path.splitext(dst)[0] + "_edit.json"
@@ -355,6 +381,7 @@ def main(argv=None):
     out = dict(obj)
     out["model"] = tg.cpu_state_dict(model)
     out["edit"] = record
+    out["metrics"] = edited_metrics(obj.get("metrics"))
     out["checkpoint_type"] = "inference"
     for key in ("optimizer", "optimizer_param_names", "scaler", "rng", "batcher", "interval"):
         out.pop(key, None)  # an edited copy is for evaluation only, never for --resume

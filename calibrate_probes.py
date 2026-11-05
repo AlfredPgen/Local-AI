@@ -258,7 +258,8 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--probes", default=tiny_gpt.DEFAULT_PROBES)
     ap.add_argument("--models", nargs="+", default=DEFAULT_MODELS, help="Hugging Face repos with the Llama design")
-    ap.add_argument("--device", choices=("cpu", "cuda", "mps"), default="cpu")
+    ap.add_argument("--device", choices=("auto", "cpu", "cuda", "mps"), default="cpu",
+                    help="cpu (default), auto (CUDA, else Apple MPS, else CPU), cuda or mps")
     ap.add_argument("--threads", type=int, default=4, help="CPU threads (leave some for other work)")
     ap.add_argument("--batch", type=int, default=16, help="sequences scored together")
     ap.add_argument("--floor", action="store_true", help="also score shuffled questions (4x slower)")
@@ -268,9 +269,10 @@ def main():
     args = ap.parse_args()
     lower_priority()
     torch.set_num_threads(args.threads)
-    if args.device != "cpu" and gpu_busy() and not args.force:
-        raise SystemExit(tiny_gpt.GPU_BUSY_MESSAGE + " (Or use --device cpu, or pass --force.)")
     device = tiny_gpt.select_device(args.device)
+    # every accelerator: on a Mac a second job competes for the unified memory
+    if device.type != "cpu" and not args.force and gpu_busy():
+        raise SystemExit(tiny_gpt.GPU_BUSY_MESSAGE + " (Or use --device cpu, or pass --force.)")
     probes = tiny_gpt.read_probes(args.probes)
     base = os.path.splitext(args.probes)[0]
     print(f"{len(probes)} items from {args.probes}; {len(args.models)} reference models on {device}")

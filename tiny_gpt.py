@@ -840,9 +840,20 @@ class GroupedQueryAttention(nn.Module):
                 y = F.scaled_dot_product_attention(q, k, v, attn_mask=mask, dropout_p=p)
         return self.o_proj(y.transpose(1, 2).contiguous().view(b, t, -1))
 
-    def _forward_cached(self, x, rope, cache):
+    def _forward_cached(self, x, rope, cache, key_valid=None):
+        """KV-cached attention. key_valid: optional boolean (B, past + t) key-padding
+        mask, True at real tokens, for a batch of left-padded rows decoded together
+        (benchmark.batched_greedy); by default it is read from cache["key_valid"],
+        which the caller sets in every layer's dict, so TinyGPT.forward needs no new
+        argument. It is combined with the causal mask on the prompt and passed as the
+        attention mask on later steps. A padding query has no real key before it, so
+        it attends to itself (a row of -inf would be NaN); its output is never read.
+        RoPE scores depend only on relative positions, so left padding leaves every
+        real token's attention as it is without padding."""
         b, t, _ = x.shape
         past = cache["k"].size(-2) if "k" in cache else 0
+        if key_valid is None:
+            key_valid = cache.get("key_valid")
         q, k, v = self._qkv(x, rope, past)
         if past:
             k = torch.cat([cache["k"], k], dim=-2)
@@ -851,7 +862,17 @@ class GroupedQueryAttention(nn.Module):
         if self.n_rep > 1:
             k = k.repeat_interleave(self.n_rep, dim=1)
             v = v.repeat_interleave(self.n_rep, dim=1)
-        if past == 0:  # the prompt: ordinary causal attention
+        if key_valid is not None:
+            keys = key_valid[:, None, None, :past + t].to(device=x.device, dtype=torch.bool)  # (B, 1, 1, past + t)
+            if t == 1:  # one new (real) token sees every real token before it
+                allowed = keys
+            else:  # causal, real keys only, and every query its own position (no all-masked row)
+                causal = torch.ones(t, past + t, dtype=torch.bool, device=x.device).tril(past)
+                own = torch.zeros(t, past + t, dtype=torch.bool, device=x.device)
+                own[torch.arange(t), past + torch.arange(t)] = True
+                allowed = (causal & keys) | own
+            y = F.scaled_dot_product_attention(q, k, v, attn_mask=allowed)
+        elif past == 0:  # the prompt: ordinary causal attention
             y = F.scaled_dot_product_attention(q, k, v, is_causal=True)
         elif t == 1:  # one new token sees everything before it
             y = F.scaled_dot_product_attention(q, k, v)
@@ -1317,10 +1338,66 @@ def model_from_checkpoint(obj, device="cpu", assign=False):
 
 def load_for_inference(path, device="cpu", trust=False):
     """(model, tokenizer, config, raw checkpoint dict) for a tinyGPT or legacy
-    checkpoint file, or an --export folder."""
+    checkpoint file, or an --export folder.
+
+    The model is given the checkpoint's own tensors (assign=True) and the
+    returned dict no longer holds the weights ("model" is removed): one copy of
+    the weights in memory instead of two (at 216M 825 MiB and 2.6 s per load
+    instead of 1,649 MiB and 4.6 s; at 3B 12 GB instead of 24). Everything else
+    in the dict (metrics, dataset, train_config, tokenizer...) is still there;
+    a caller that needs the weights saves model.state_dict()."""
     obj = load_any(path, trust)
-    model, tok, cfg = model_from_checkpoint(obj, device)
+    model, tok, cfg = model_from_checkpoint(obj, device, assign=True)
+    obj.pop("model", None)
     return model, tok, cfg, obj
+
+
+def dataset_fingerprint(ds_path):
+    """The fingerprint in a dataset folder's manifest (None if it has no readable manifest)."""
+    try:
+        return data_prep.read_manifest(ds_path).get("fingerprint")
+    except (SystemExit, OSError, ValueError, AttributeError):
+        return None
+
+
+def resolve_dataset(obj, override=None):
+    """The dataset folder a checkpoint was trained on, on this machine.
+
+    override (a --dataset option) wins as given. Otherwise the path stored in
+    the checkpoint, when that folder exists and its manifest has the stored
+    fingerprint (a relative path is tried from the current folder and from this
+    script's folder); else datasets/<same name> in this repository with the same
+    fingerprint (the checkpoint came from another machine, where the path was
+    C:\\... or /Users/...). A folder with another fingerprint is never used: a
+    rebuilt dataset's validation split may hold text the model trained on.
+    SystemExit asking for --dataset when nothing matches."""
+    if override:
+        return override
+    stored = obj.get("dataset") if isinstance(obj, dict) else None
+    stored = stored if isinstance(stored, dict) else {}
+    path, want = stored.get("path"), stored.get("fingerprint")
+    if not path:
+        raise SystemExit("This checkpoint records no dataset: pass --dataset <folder>.")
+    name = re.split(r"[\\/]", str(path).rstrip("\\/"))[-1]
+    candidates = [path] + ([] if os.path.isabs(path) else [os.path.join(HERE, path)])
+    candidates.append(os.path.join(HERE, "datasets", name))
+    rebuilt = None
+    for cand in candidates:
+        if not os.path.isdir(cand):
+            continue
+        found = dataset_fingerprint(cand)
+        if found is None:  # not a finished dataset
+            continue
+        if not want or found == want:
+            return cand
+        rebuilt = rebuilt or cand
+    if rebuilt:
+        # names only, no folders: view_pt shows this message on dashboards that may be published
+        raise SystemExit(f"The dataset now at {os.path.basename(os.path.normpath(rebuilt))} is not the one this model "
+                         "was trained on (different fingerprint), so its validation text may contain training text; "
+                         "pass --dataset to use it anyway.")
+    raise SystemExit(f"The checkpoint's dataset {name} is not on this machine (neither at its stored path nor in "
+                     "datasets/): pass --dataset <folder>.")
 
 
 def cpu_state_dict(model):

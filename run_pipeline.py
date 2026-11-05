@@ -22,6 +22,7 @@ using the speed this computer reached in its last training run.
 
 import argparse
 import glob
+import json
 import os
 import subprocess
 import sys
@@ -33,19 +34,47 @@ import tiny_gpt  # noqa: E402
 # ---------------- settings: edit these ----------------
 DATA = os.path.join(os.path.expanduser("~"), "ai_training_data")  # the folder with all training text
 DATASET = os.path.join(HERE, "datasets", "bio_all")     # the dataset folder that 'build' creates
-RUN_NAME = "tinyGPT"                                    # checkpoints are <RUN_NAME>.pt and <RUN_NAME>_best.pt
+RUN_NAME = "tinyGPT_muon"                               # checkpoints are <RUN_NAME>.pt and <RUN_NAME>_best.pt
 KEYWORDS = os.path.join(HERE, "keywords.txt")   # topic filter for Wikipedia, FineWeb and peS2o
 WIKI_MAX_DOCS = 0         # Wikipedia articles kept, best keyword matches first; 0 = all that pass (611,091)
-SUPERBPE = False          # True: SuperBPE tokenizer, with tokens that span words ("of the"); fewer tokens per text
-OPTIMIZER = "adamw"       # "muon": Muon for the block matrices, AdamW for the rest (new runs only)
+SUPERBPE = True           # True: SuperBPE tokenizer, with tokens that span words ("of the"); fewer tokens per text
+OPTIMIZER = "muon"        # "muon": Muon for the block matrices, AdamW for the rest (new runs only)
 # -------------------------------------------------------
+# Once DATASET is built, its manifest's data settings win over the ones above for estimate and continue, so both
+# describe the dataset that exists rather than constants that may have been edited since.
+
+# data_prep's former --near-dup-max-docs default: manifests written before it became 0 (no limit) record it although
+# nobody chose it, and repeating it would stop a larger rebuild after pass 1
+_OLD_NEAR_DUP_DEFAULT = 3_000_000
+
+
+def manifest_prep_args(dataset=None):
+    """The data_prep settings recorded in a built dataset's manifest.json
+    (prep_args), {} when there is none or it cannot be read."""
+    path = os.path.join(dataset or DATASET, "manifest.json")
+    try:
+        with open(path, encoding="utf-8") as f:
+            args = json.load(f).get("prep_args")
+    except (OSError, ValueError, AttributeError):
+        return {}
+    return args if isinstance(args, dict) else {}
 
 
 def build_command():
+    """The data_prep command that builds DATASET. Where DATASET already has a
+    manifest, its recorded superbpe, tokenizer_weights, wiki_max_docs and
+    near_dup_max_docs are used instead of the constants above (estimate then
+    counts the tokens of the tokenizer that exists: SuperBPE gives ~13 % fewer)."""
+    prep = manifest_prep_args()
+    superbpe = bool(prep.get("superbpe", SUPERBPE))
+    wiki_max = int(prep.get("wiki_max_docs", WIKI_MAX_DOCS) or 0)
+    near_dup_max = int(prep.get("near_dup_max_docs", 0) or 0)
+    if near_dup_max == _OLD_NEAR_DUP_DEFAULT:
+        near_dup_max = 0
     cmd = [sys.executable, "data_prep.py", "--out", DATASET, "--text-root", DATA]
     wiki = os.path.join(DATA, "wikipedia")
     if os.path.isdir(wiki):
-        cmd += ["--wiki-dir", wiki, "--wiki-max-docs", str(WIKI_MAX_DOCS)]
+        cmd += ["--wiki-dir", wiki, "--wiki-max-docs", str(wiki_max)]
     fineweb = os.path.join(DATA, "web", "fineweb-edu", "sample", "10BT", "*.parquet")
     if glob.glob(fineweb):
         cmd += ["--parquet", fineweb, "--parquet-name", "fineweb", "--min-score", "3"]
@@ -59,9 +88,25 @@ def build_command():
     except OSError:
         folders = set()
     weights = ",".join(f"{n}=3" for n in ("books", "articles") if n in folders)
+    if prep.get("tokenizer_weights"):
+        # the recorded weights, minus sources whose folder is gone (data_prep refuses a weight it cannot apply)
+        recorded = [w.strip() for w in str(prep["tokenizer_weights"]).split(",") if w.strip()]
+        weights = ",".join(w for w in recorded if w.split("=")[0].strip().lower() in folders)
     return cmd + ["--include-keywords", KEYWORDS, "--keyword-min-distinct", "3"] + (
         ["--tokenizer-weights", weights] if weights else []) + [
-        "--near-dup", "drop"] + (["--superbpe"] if SUPERBPE else [])
+        "--near-dup", "drop"] + (["--near-dup-max-docs", str(near_dup_max)] if near_dup_max else []) + (
+        ["--superbpe"] if superbpe else [])
+
+
+def checkpoint_optimizer(path):
+    """The optimizer a checkpoint was trained with (its train_config), read with
+    weights_only=True; OPTIMIZER when the file records none or cannot be read."""
+    try:
+        obj = tiny_gpt.safe_load(path, mmap=True)
+        found = (obj.get("train_config") or {}).get("optimizer")
+    except (SystemExit, Exception):  # noqa: BLE001 - an unreadable file only loses the hint
+        found = None
+    return found if found in ("adamw", "muon") else OPTIMIZER
 
 
 def train_command(hours, name, plan=False):
@@ -88,7 +133,8 @@ def gpu_busy():
 def step_build():
     if dataset_ready():
         print(f"The dataset is already built: {DATASET}\n(To rebuild, delete that folder or change DATASET at the "
-              "top of run_pipeline.py.)")
+              "top of run_pipeline.py. A rebuild trains a new tokenizer (32,768 pieces for this much text): existing "
+              "models can only be continued with `continue`, not resumed.)")
         return 0
     print(f"Building {DATASET} from {DATA}. This takes about 2 hours; the report is {DATASET}\\report.md.")
     return run(build_command())
@@ -129,7 +175,7 @@ def step_continue(hours, name, new_dataset):
         print(f"No earlier model {base}: train one first (python run_pipeline.py train --hours N).")
         return 1
     if not dataset_ready():
-        print(f"The earlier run's dataset {DATASET} is needed for its tokenizer; it is missing.")
+        print(f"The earlier run's dataset {DATASET} is needed for its train/validation split; it is missing.")
         return 1
     if not os.path.isfile(os.path.join(new_dataset, "manifest.json")):
         cmd = build_command()
@@ -145,8 +191,9 @@ def step_continue(hours, name, new_dataset):
     if gpu_busy():
         print(GPU_BUSY)
         return 1
+    # the optimizer the earlier model was trained with, not the constant (which may describe another run)
     return run([sys.executable, "tiny_gpt.py", "--dataset", new_dataset, "--init-from", base, "--name",
-                f"{name}_continued", "--time-budget-hours", str(hours), "--optimizer", OPTIMIZER])
+                f"{name}_continued", "--time-budget-hours", str(hours), "--optimizer", checkpoint_optimizer(base)])
 
 
 def step_posttrain(name):

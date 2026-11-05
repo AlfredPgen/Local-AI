@@ -8,9 +8,10 @@ with training time on this PC.
 
 Any data_prep.py option means the same here (they are passed to data_prep's own
 parser, so a data_prep command can be pasted with estimate_dataset.py in front).
-Without data_prep options it uses the usual layout: the folders of
-ai_training_data, Wikipedia (200,000 articles), FineWeb-Edu (score >= 3) and
-peS2o, with keywords.txt (at least 3 different terms) on the web sources.
+Without data_prep options it uses the command `run_pipeline.py build` would run
+(run_pipeline.build_command: the folders of ai_training_data, Wikipedia,
+FineWeb-Edu (score >= 3) and peS2o, keywords.txt on the web sources, and the
+built dataset's own settings where it exists).
 
 How: a sample of every source (--sample of the web records, at least 300
 files of each folder) goes through data_prep's real per-document checks:
@@ -24,15 +25,16 @@ data_prep ranks, so the kept size reflects the shorter top-ranked documents.
 
 Model sizes follow tiny_gpt.py's planner: at most --max-epochs passes over the
 data and at least --tokens-per-param training tokens per parameter. Training
-time uses the speed of the last training run in experiments.csv, converted to
-floating-point operations per second so that it carries over to other model
-sizes (or --tflops). The last column is the Chinchilla fit of loss against
+time uses the speed of the last training run on this kind of device (CUDA, MPS
+or CPU) in experiments.csv, converted to floating-point operations per second
+so that it carries over to other model sizes (tiny_gpt.sustained_speed, the
+planner's own rule), or --tflops. The last column is the Chinchilla fit of loss against
 parameters and tokens (Hoffmann et al. 2022): its values belong to their data,
 but it ranks the options.
 """
 
 import argparse
-import csv
+import dataclasses
 import glob
 import gzip
 import math
@@ -43,7 +45,6 @@ import tempfile
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-ROOT = os.path.join(os.path.expanduser("~"), "ai_training_data")
 sys.path.insert(0, HERE)
 import data_prep as dp  # noqa: E402
 
@@ -51,17 +52,11 @@ CHINCHILLA = (1.69, 406.4, 410.7, 0.34, 0.28)  # E, A, B, alpha, beta (Hoffmann 
 
 
 def default_prep_args():
-    args = ["--text-root", ROOT]
-    wiki = os.path.join(ROOT, "wikipedia")
-    if os.path.isdir(wiki):
-        args += ["--wiki-dir", wiki, "--wiki-max-docs", "200000"]
-    fineweb = os.path.join(ROOT, "web", "fineweb-edu", "sample", "10BT", "*.parquet")
-    if glob.glob(fineweb):
-        args += ["--parquet", fineweb, "--parquet-name", "fineweb", "--min-score", "3"]
-    pes2o = os.path.join(ROOT, "web", "pes2o", "data", "v2", "*.json.gz")
-    if glob.glob(pes2o):
-        args += ["--jsonl", pes2o, "--jsonl-name", "pes2o"]
-    return args + ["--include-keywords", os.path.join(HERE, "keywords.txt"), "--keyword-min-distinct", "3"]
+    """The data_prep options `run_pipeline.py build` uses (everything after
+    data_prep.py --out <folder>), so the estimate describes the build that would
+    run: one place for the data settings instead of a second, drifting copy."""
+    import run_pipeline
+    return run_pipeline.build_command()[4:]
 
 
 class Tally:
@@ -278,24 +273,18 @@ def chars_per_token(tok, texts, limit=2_000_000):
     return chars / tokens if tokens else float("nan")
 
 
-def measured_speed(path):
-    """FLOP/s of the last GPU training run in experiments.csv (6N + 12*L*ctx*d per token)."""
-    try:
-        with open(path, encoding="utf-8-sig", newline="") as handle:
-            rows = [r for r in csv.DictReader(handle) if r.get("event") == "training run"]
-    except OSError:
-        return None, ""
-    for r in reversed(rows):
-        try:
-            n, layers, ctx, d = (int(r[c]) for c in ("params", "layers", "ctx", "d_model"))
-            tokens, hours = float(r["tokens_seen"]), float(r["train_hours"])
-        except (KeyError, TypeError, ValueError):
-            continue
-        if hours > 0.2 and tokens > 0:
-            tok_s = tokens / (hours * 3600)
-            flops = tok_s * (6 * n + 12 * layers * ctx * d)
-            return flops, f"{r['name']} run of {r['time'][:10]}: {n / 1e6:.1f} M parameters at {tok_s:,.0f} tokens/s"
-    return None, ""
+def measured_speed(out_dir=HERE, device=None):
+    """(FLOP/s, description) of the last training run of 12 minutes or more on
+    this kind of device (default: the one tiny_gpt would train on) in
+    experiments.csv, or (None, why): tiny_gpt.sustained_speed, the planner's own
+    rule (flops_per_token of the run's shape, counting activation checkpointing).
+    A CUDA run's speed says nothing about a Mac, so other devices' rows are left out."""
+    import tiny_gpt
+    device = device or tiny_gpt.select_device("auto")
+    flops, how = tiny_gpt.sustained_speed(out_dir, device)
+    if not flops:
+        return None, f"no training run on this kind of device ({device.type}) yet: pass --tflops"
+    return flops, how
 
 
 def main(argv=None):
@@ -406,15 +395,12 @@ def main(argv=None):
     shapes = [(tiny_gpt.count_params(c)[0], c) for c in ladder]
     r, epochs, unique = opts.tokens_per_param, opts.max_epochs, total_tokens
     data_tokens = epochs * unique
-    flops, source = (opts.tflops * 1e12, f"--tflops {opts.tflops:g}") if opts.tflops else \
-        measured_speed(tiny_gpt.experiments_path(HERE) if os.path.isfile(tiny_gpt.experiments_path(HERE))
-                       else os.path.join(HERE, "experiments.csv"))
-
-    def ctx_of(c):  # tiny_gpt's one context rule (default_ctx): 1024 up to d 1024, 2048 up to d 2048, then 4096
-        return tiny_gpt.default_ctx(c.d_model)
+    flops, source = (opts.tflops * 1e12, f"--tflops {opts.tflops:g}") if opts.tflops else measured_speed(HERE)
 
     def per_token(n, c):
-        return 6 * n + 12 * c.n_layers * ctx_of(c) * c.d_model
+        # tiny_gpt's own rules: the context of default_ctx (1024 up to d 1024, 2048 up to d 2048, then 4096) and
+        # flops_per_token (6 per active parameter + 12 x layers x context x width)
+        return tiny_gpt.flops_per_token(dataclasses.replace(c, ctx=tiny_gpt.default_ctx(c.d_model)))
 
     def chinchilla(n, d):
         e, a, b, alpha, beta = CHINCHILLA
@@ -431,9 +417,9 @@ def main(argv=None):
 
     print(f"\nModel sizes (tiny_gpt planner rules: <= {epochs:g} epochs, >= {r:g} tokens per parameter)")
     if flops:
-        print(f"speed: {flops / 1e12:.1f} TFLOP/s, from the {source}")
+        print(f"speed: {flops / 1e12:.1f} TFLOP/s ({source})")
     else:
-        print("speed unknown (no training run in experiments.csv): pass --tflops for training hours")
+        print(f"speed unknown ({source}) for training hours")
     print(f"{'option':<16}{'params':>10}  {'shape':<11}{'tokens':>10}{'tok/par':>9}{'epochs':>8}{'hours':>10}"
           f"{'Chinchilla':>11}")
     fit = [(n, c) for n, c in shapes if n * r <= data_tokens]

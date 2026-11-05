@@ -61,9 +61,15 @@ def main(argv=None):
     p.add_argument("--batch", type=int, default=32)
     p.add_argument("--seed", type=int, default=99)
     p.add_argument("--device", default="auto")
+    p.add_argument("--force", action="store_true", help="use the GPU even if another job seems to be using it")
+    p.add_argument("--dataset", default=None,
+                   help="dataset for the held-out prompts and documents (default: the original checkpoint's, found "
+                        "by its stored path or by name in datasets/ with the same fingerprint)")
     args = p.parse_args(argv)
 
     device = tg.select_device(args.device)
+    if device.type != "cpu" and not args.force and tg.gpu_busy(HERE):
+        raise SystemExit(tg.GPU_BUSY_MESSAGE + " (Or use --device cpu, or pass --force.)")
     amp, amp_name, _ = tg.choose_precision(device, "auto", training=False)
     probes = tg.read_probes(tg.DEFAULT_PROBES)
     res = {}
@@ -71,14 +77,16 @@ def main(argv=None):
     docs = None
     for label, path in (("original", args.original), ("edited", args.edited)):
         model, tok, cfg, obj = tg.load_for_inference(path, device)
-        models_info[label] = {"path": os.path.abspath(path), "step": obj.get("step"),
+        models_info[label] = {"path": tg._home_short(os.path.abspath(path)), "step": obj.get("step"),
                               "edit": ((obj.get("edit") or {}).get("chosen") or {})}
         room = model.ctx - args.prompt_tokens - 1  # prompt (+ start token) and continuation must fit the context
         if args.new_tokens > room:
             print(f"Context is {model.ctx} tokens: generating {room} new tokens instead of {args.new_tokens}.")
             args.new_tokens = max(room, 1)
         if docs is None:
-            dataset = os.path.join(HERE, obj["dataset"]["path"])
+            override = args.dataset and (args.dataset if os.path.isdir(args.dataset)
+                                         else os.path.join(HERE, args.dataset))
+            dataset = tg.resolve_dataset(obj, override)
             prompts = ew.prompts_from_validation(dataset, tok, args.prompts, args.prompt_tokens, "test", args.seed)
             start = len(prompts[0])
             docs = cm.validation_documents(dataset, args.docs, 20_000)
@@ -87,7 +95,7 @@ def main(argv=None):
         print(f"{label}: bits per byte on {len(docs)} validation documents", flush=True)
         nll, nbytes = [], []
         for _, _, text in docs:
-            n, b = cm.document_nll(model, tok, text, device)
+            n, b = cm.document_nll(model, tok, text, device, amp)
             nll.append(n)
             nbytes.append(b)
         print(f"{label}: fact benchmark ({len(probes)} questions)", flush=True)
@@ -127,8 +135,8 @@ def main(argv=None):
     with open(base + ".json", "w", encoding="utf-8") as handle:
         json.dump(summary, handle, indent=1)
 
-    # side-by-side samples: the prompts where the original looped most
-    tok = tg.load_for_inference(args.original, "cpu")[1]
+    # side-by-side samples: the prompts where the original looped most (tok from the loop: an edited copy keeps
+    # the original's tokenizer)
     order = np.argsort(-o["rates"])[:6]
     with open(base + "_samples.md", "w", encoding="utf-8") as handle:
         handle.write("# Same prompt, same seed: original vs edited\n\n")

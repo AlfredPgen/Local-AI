@@ -644,7 +644,7 @@ class TestPipeline(unittest.TestCase):
         self.assertGreater(b_ck["energy"]["cpu"], 0)
         # paired document bootstrap between two checkpoints
         code, out_c = run(["compare_models.py", os.path.join(self.runs, "A_best.pt"), os.path.join(self.runs, "B.pt"),
-                           "--docs", "4", "--reps", "200"])
+                           "--docs", "4", "--reps", "200", "--device", "cpu"])
         self.assertEqual(code, 0, out_c)
         self.assertIn("Verdict:", out_c)
         self.assertTrue(glob.glob(os.path.join(self.runs, "compare_A_best_vs_B_*.csv")))
@@ -3823,6 +3823,360 @@ class TestFixes(unittest.TestCase):
                 torch.testing.assert_close(want, got, rtol=1e-4, atol=1e-5)
             ids.append(int(got.argmax()))
         self.assertEqual(len(ids), 23)
+
+
+class TestOtherScripts(unittest.TestCase):
+    """run_pipeline, compare_models, tools/edit_weights.py, finetune, benchmark's batched decoding, view_pt's
+    window budget, estimate_dataset and load_for_inference / resolve_dataset (fast, CPU, temporary folders)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.mkdtemp(prefix="tiny_gpt_scripts_")
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    @staticmethod
+    def model(seed=0, ctx=48, vocab=50, varied=True, **moe):
+        """A tiny model; varied=True draws the matrices wider than the training init, so greedy decoding does
+        not just repeat one token (a fresh model's outputs are nearly flat)."""
+        torch.manual_seed(seed)
+        cfg = tiny_gpt.ModelConfig(vocab_size=vocab, ctx=ctx, d_model=32, n_layers=2, n_heads=4, n_kv_heads=2, **moe)
+        model = tiny_gpt.TinyGPT(cfg).eval()
+        if varied:
+            with torch.no_grad():
+                for p in model.parameters():
+                    if p.dim() == 2:
+                        p.normal_(0, 0.4)
+        return model
+
+    def save_checkpoint(self, model, name, **extra):
+        path = os.path.join(self.tmp, name)
+        torch.save({"format": tiny_gpt.CHECKPOINT_FORMAT, "format_version": tiny_gpt.FORMAT_VERSION,
+                    "checkpoint_type": "inference", "model_config": dataclasses.asdict(model.cfg),
+                    "model": model.state_dict(), "step": 7, **extra}, path)
+        return path
+
+    # ---------------- run_pipeline (other-scripts-3, -19) ----------------
+    def test_run_pipeline_commands_follow_the_manifest_and_parse(self):
+        """build_command takes superbpe, tokenizer weights (of folders that exist), wiki_max_docs and
+        near_dup_max_docs from a built dataset's manifest (the retired 3,000,000 default is not repeated), and
+        its options and train_command's parse with data_prep's and tiny_gpt's own parsers; continue trains with
+        the base checkpoint's optimizer, read with weights_only=True."""
+        import run_pipeline
+        here = os.path.join(self.tmp, "pipe")
+        data = os.path.join(here, "data")
+        for sub in ("books", "notes", "wikipedia"):
+            os.makedirs(os.path.join(data, sub), exist_ok=True)
+        dataset = os.path.join(here, "datasets", "bio_all")
+        os.makedirs(dataset, exist_ok=True)
+        prep = {"superbpe": True, "tokenizer_weights": "books=3,articles=3", "wiki_max_docs": 1234,
+                "near_dup_max_docs": 3_000_000}
+        with open(os.path.join(dataset, "manifest.json"), "w", encoding="utf-8") as f:
+            json.dump({"prep_args": prep}, f)
+        with unittest.mock.patch.multiple(run_pipeline, HERE=here, DATASET=dataset, DATA=data, SUPERBPE=False):
+            cmd = run_pipeline.build_command()
+            self.assertIn("--superbpe", cmd, "the manifest's SuperBPE wins over the constant")
+            self.assertEqual(cmd[cmd.index("--tokenizer-weights") + 1], "books=3", "no articles folder here")
+            self.assertEqual(cmd[cmd.index("--wiki-max-docs") + 1], "1234")
+            self.assertNotIn("--near-dup-max-docs", cmd, "the old default is not a choice to repeat")
+            args = data_prep.parse_args(cmd[2:])
+            self.assertTrue(args.superbpe)
+            self.assertEqual((args.wiki_max_docs, args.near_dup_max_docs, args.near_dup), (1234, 0, "drop"))
+            with open(os.path.join(dataset, "manifest.json"), "w", encoding="utf-8") as f:
+                json.dump({"prep_args": {**prep, "near_dup_max_docs": 5_000_000, "superbpe": False}}, f)
+            cmd = run_pipeline.build_command()
+            self.assertEqual(cmd[cmd.index("--near-dup-max-docs") + 1], "5000000")
+            self.assertNotIn("--superbpe", cmd)
+            self.assertEqual(data_prep.parse_args(cmd[2:]).near_dup_max_docs, 5_000_000)
+            os.remove(os.path.join(dataset, "manifest.json"))
+            cmd = run_pipeline.build_command()  # no manifest: the constants
+            self.assertNotIn("--superbpe", cmd)
+            self.assertEqual(cmd[cmd.index("--wiki-max-docs") + 1], str(run_pipeline.WIKI_MAX_DOCS))
+            train = run_pipeline.train_command(12, "R", plan=True)
+            targs = tiny_gpt.parse_args(train[2:])
+            self.assertEqual((targs.name, targs.optimizer, targs.time_budget_hours, targs.plan),
+                             ("R", run_pipeline.OPTIMIZER, 12.0, True))
+        self.assertEqual((run_pipeline.RUN_NAME, run_pipeline.OPTIMIZER, run_pipeline.SUPERBPE),
+                         ("tinyGPT_muon", "muon", True))
+        # continue: the optimizer comes from the base checkpoint's train_config
+        base = self.save_checkpoint(self.model(varied=False), "R_best.pt", train_config={"optimizer": "adamw"})
+        self.assertEqual(run_pipeline.checkpoint_optimizer(base), "adamw")
+        self.assertEqual(run_pipeline.checkpoint_optimizer(os.path.join(self.tmp, "missing.pt")),
+                         run_pipeline.OPTIMIZER)
+        with open(os.path.join(dataset, "manifest.json"), "w", encoding="utf-8") as f:
+            json.dump({"prep_args": prep}, f)
+        os.makedirs(os.path.join(here, "new_ds"), exist_ok=True)
+        open(os.path.join(here, "new_ds", "manifest.json"), "w").close()
+        shutil.copy(base, os.path.join(here, "R_best.pt"))
+        calls = []
+        with unittest.mock.patch.multiple(run_pipeline, HERE=here, DATASET=dataset, DATA=data), \
+                unittest.mock.patch.object(run_pipeline, "run", side_effect=lambda cmd: calls.append(cmd) or 0), \
+                unittest.mock.patch.object(run_pipeline, "gpu_busy", return_value=False), \
+                redirect_stdout(io.StringIO()):
+            self.assertEqual(run_pipeline.step_continue(1, "R", os.path.join(here, "new_ds")), 0)
+        self.assertEqual(calls[-1][calls[-1].index("--optimizer") + 1], "adamw")
+        self.assertEqual(calls[-1][calls[-1].index("--init-from") + 1], os.path.join(here, "R_best.pt"))
+
+    # ---------------- load_for_inference, resolve_dataset (other-scripts-10, -13) ----------------
+    def test_load_for_inference_drops_the_second_copy(self):
+        """The model holds the checkpoint's own tensors and the returned dict has no "model" (one copy of the
+        weights); everything else is still there and generation equals the old copying path."""
+        path = self.save_checkpoint(self.model(seed=4), "L.pt", metrics={"best_val": 2.5},
+                                    dataset={"path": "x", "fingerprint": "f"})
+        with unittest.mock.patch.object(tiny_gpt, "tokenizer_from_checkpoint", return_value=CharTok()):
+            model, tok, cfg, obj = tiny_gpt.load_for_inference(path)
+            old_model = tiny_gpt.model_from_checkpoint(tiny_gpt.safe_load(path))[0]
+        self.assertNotIn("model", obj)
+        self.assertEqual((obj["step"], obj["metrics"]["best_val"], obj["dataset"]["fingerprint"]), (7, 2.5, "f"))
+        self.assertTrue(all(p.dtype == torch.float32 and not p.is_meta for p in model.parameters()))
+        gen = torch.Generator()
+        a = tiny_gpt.generate(model, tok, "gene drift", 20, torch.device("cpu"), generator=gen.manual_seed(1))
+        b = tiny_gpt.generate(old_model, tok, "gene drift", 20, torch.device("cpu"), generator=gen.manual_seed(1))
+        self.assertEqual(a, b)
+
+    def test_resolve_dataset_by_path_then_by_name_with_the_same_fingerprint(self):
+        home = os.path.join(self.tmp, "repo")
+        stored = os.path.join(home, "datasets", "bio_x")
+        os.makedirs(stored, exist_ok=True)
+        manifest = {"format": data_prep.FORMAT, "format_version": 1, "fingerprint": "abc"}
+        with open(os.path.join(stored, "manifest.json"), "w", encoding="utf-8") as f:
+            json.dump(manifest, f)
+        with unittest.mock.patch.object(tiny_gpt, "HERE", home):
+            obj = {"dataset": {"path": stored, "fingerprint": "abc"}}
+            self.assertEqual(tiny_gpt.resolve_dataset(obj), stored)
+            self.assertEqual(tiny_gpt.resolve_dataset(obj, "other"), "other", "--dataset wins as given")
+            moved = {"dataset": {"path": r"C:\Users\someone\proj\datasets\bio_x", "fingerprint": "abc"}}
+            self.assertEqual(os.path.normpath(tiny_gpt.resolve_dataset(moved)), os.path.normpath(stored))
+            self.assertEqual(os.path.normpath(tiny_gpt.resolve_dataset({"dataset": {"path": "datasets/bio_x",
+                                                                                     "fingerprint": "abc"}})),
+                             os.path.normpath(stored), "a relative path from the project folder")
+            with self.assertRaises(SystemExit) as ctx:
+                tiny_gpt.resolve_dataset({"dataset": {"path": stored, "fingerprint": "zzz"}})
+            self.assertIn("different fingerprint", str(ctx.exception.code))
+            with self.assertRaises(SystemExit) as ctx:
+                tiny_gpt.resolve_dataset({"dataset": {"path": "/Users/x/datasets/elsewhere", "fingerprint": "abc"}})
+            self.assertIn("--dataset", str(ctx.exception.code))
+            with self.assertRaises(SystemExit):
+                tiny_gpt.resolve_dataset({})
+
+    # ---------------- compare_models (other-scripts-2) ----------------
+    def test_compare_models_autocast_only_off_the_cpu(self):
+        """The CPU scores in float32 (choose_precision gives no autocast type there and document_nll leaves
+        autocast disabled); an autocast type, when given, is used."""
+        import compare_models
+        cpu = torch.device("cpu")
+        amp, _, _ = tiny_gpt.choose_precision(cpu, "auto", training=False)
+        self.assertIsNone(amp)
+        class Tok(CharTok):
+            def is_special(self, t):
+                return t == self.bos_id
+        model, tok = self.model(seed=2), Tok()
+        seen = []
+        real = torch.autocast
+
+        def spy(*a, **k):
+            seen.append((k.get("dtype"), k.get("enabled")))
+            return real(*a, **k)
+        with unittest.mock.patch.object(torch, "autocast", spy):
+            nll, nbytes = compare_models.document_nll(model, tok, "allele frequency drift " * 4, cpu, amp)
+            compare_models.document_nll(model, tok, "allele frequency drift " * 4, cpu, torch.bfloat16)
+        self.assertTrue(seen and seen[0][1] is False, seen)
+        self.assertIn((torch.bfloat16, True), seen)
+        self.assertGreater(nll, 0)
+        self.assertGreater(nbytes, 0)
+
+    # ---------------- tools/edit_weights.py (other-scripts-1, -8, -19) ----------------
+    def test_edit_weights_edits_undo_and_metrics(self):
+        sys.path.insert(0, os.path.join(HERE, "tools"))
+        import edit_weights as ew
+        model = self.model(seed=6)
+        before = {k: v.clone() for k, v in model.state_dict().items()}
+        for edit in ({"kind": "neurons", "layer": 1, "neurons": [0, 3, 5]},
+                     {"kind": "direction", "layer": 0, "alpha": 0.5,
+                      "direction": torch.nn.functional.normalize(torch.randn(32), dim=0)}):
+            undo = ew.apply_edit(model, edit)
+            changed = [k for k, v in model.state_dict().items() if not torch.equal(v, before[k])]
+            if edit["kind"] == "neurons":
+                self.assertEqual(changed, ["blocks.1.ffn.down.weight"])
+                self.assertTrue((model.blocks[1].ffn.down.weight[:, [0, 3, 5]] == 0).all())
+            else:
+                self.assertEqual(sorted(changed), ["blocks.0.attn.o_proj.weight", "blocks.0.ffn.down.weight"])
+            undo()
+            self.assertTrue(all(torch.equal(v, before[k]) for k, v in model.state_dict().items()), edit["kind"])
+        last = {"loss": 2.0, "step": 7, "probes": {"accuracy": 0.5}}
+        m = ew.edited_metrics({"history": [1], "best_val": 1.9, "last_eval": last})
+        self.assertEqual((m["history"], m["best_val"], m["last_eval"], m["base_last_eval"]), ([1], 1.9, None, last))
+        self.assertEqual(ew.edited_metrics(m)["base_last_eval"], last, "an edit of an edit keeps the original's")
+        # band statistics: float64 sums on the CPU from float32 per-batch sums, equal to a direct float64 sum
+        stats = ew.BandStats(2, 3, 4)
+        gen = torch.Generator().manual_seed(0)
+        feats, labels, bands = torch.randn(50, 4, generator=gen), torch.randint(0, 2, (50,), generator=gen), \
+            torch.randint(0, 3, (50,), generator=gen)
+        stats.add(1, feats[:20], labels[:20], bands[:20])
+        stats.add(1, feats[20:], labels[20:], bands[20:])
+        self.assertEqual(stats.s[0].dtype, torch.float64)
+        self.assertEqual(stats.s[0].device.type, "cpu")
+        for v in (0, 1):
+            sel = labels == v
+            want = torch.zeros(3, 4, dtype=torch.float64).index_add_(0, bands[sel], feats[sel].double())
+            torch.testing.assert_close(stats.s[v][1], want, rtol=1e-6, atol=1e-6)
+            self.assertEqual(stats.n[v, 1].tolist(), torch.bincount(bands[sel], minlength=3).double().tolist())
+        self.assertTrue((stats.s[0][0] == 0).all(), "layer 0 untouched")
+
+    def test_viewer_does_not_reuse_an_edited_files_stored_evaluation(self):
+        import view_pt
+        sha = tiny_gpt.file_sha256(tiny_gpt.DEFAULT_PROBES)
+        stored = {"file_sha256": sha, "accuracy": 0.5}
+        args = types_ns(probes=tiny_gpt.DEFAULT_PROBES)
+        ck = types_ns(metrics={"last_eval": {"step": 7, "probes": stored}}, obj={"step": 7}, finetune=None, edit=None)
+        self.assertIs(view_pt.probe_report(ck, None, None, args), stored)
+        ck.edit = {"chosen": {"kind": "neurons"}}
+        self.assertIsNone(view_pt.probe_report(ck, None, None, args), "edited weights are scored, not looked up")
+
+    # ---------------- finetune (other-scripts-6, -7) ----------------
+    def test_finetune_learning_rate_and_batched_tokenisation(self):
+        import finetune
+        self.assertEqual([finetune.default_lr(n, "sft") for n in (20e6, 216e6, 500e6, 1e9, 3e9)],
+                         [1e-4, 1e-4, 5e-5, 5e-5, 2e-5])
+        self.assertAlmostEqual(finetune.default_lr(216e6, "dpo"), 1e-5)
+
+        class BatchTok(CharTok):
+            eos_id, calls = 45, 0
+
+            def encode_batch(self, texts, threads=1):
+                BatchTok.calls += 1
+                return [self.encode(t) for t in texts]
+        for tok in (CharTok(), BatchTok()):
+            for prompt, answer, ctx in (("What is drift?", "Random change.", 64), ("Q" * 50, "A" * 30, 32)):
+                question = tok.encode(finetune.TEMPLATE.format(prompt=prompt.strip()))
+                self.assertEqual(finetune.pair_from_ids(tok, question, tok.encode(answer), ctx),
+                                 finetune.encode_pair(tok, prompt, answer, ctx))
+            self.assertEqual(finetune.encode_texts(tok, ["ab", "c"]), [tok.encode("ab"), tok.encode("c")])
+        self.assertEqual(BatchTok.calls, 1)
+
+    # ---------------- benchmark (other-scripts-5) ----------------
+    def batched_matches_single(self, model):
+        import benchmark
+        import random
+        cpu, tok = torch.device("cpu"), CharTok()
+        rng = random.Random(0)
+        # 20 prompts of 1-40 characters: some groups mix lengths (left padding), the longest need the one-at-a-time
+        # path (prompt + 12 new tokens > ctx 48)
+        prompts = ["".join(rng.choice("abcdefghij klmnop") for _ in range(rng.randint(1, 40))) for _ in range(20)]
+        free = [benchmark.greedy_generate(model, tok, p, 12, cpu) for p in prompts]
+        self.assertGreater(len({c for f in free for c in f}), 5, "the model must not just repeat one token")
+
+        def stop_for(text):  # a character that first appears after a few tokens: the row stops early
+            return next(((c,) for j, c in enumerate(text) if j >= 2 and c not in text[:j]), ())
+        stops = [stop_for(f) if i % 2 == 0 else () for i, f in enumerate(free)]
+        want = [benchmark.greedy_generate(model, tok, p, 12, cpu, stops=s) for p, s in zip(prompts, stops)]
+        got = benchmark.batched_greedy(model, tok, prompts, 12, cpu, item_stops=stops, batch=6)
+        self.assertEqual(got, want)
+        self.assertLess(min(len(w) for w in want), 12, "some rows finish early and leave the batch")
+        self.assertEqual(benchmark.batched_greedy(model, tok, prompts[:5], 12, cpu, stops=("Q",), batch=3),
+                         [benchmark.greedy_generate(model, tok, p, 12, cpu, stops=("Q",)) for p in prompts[:5]])
+
+    def test_batched_greedy_equals_one_at_a_time(self):
+        """benchmark.batched_greedy (left-padded rows, key-padding mask in the KV cache) gives greedy_generate's
+        texts token for token on 20 items, with per-row stop strings and rows leaving the batch."""
+        self.batched_matches_single(self.model(seed=1))
+
+    def test_batched_greedy_equals_one_at_a_time_with_experts(self):
+        """The same with a 2-layer mixture-of-experts model (4 experts, 2 per token): routing is per token, so the
+        padding rows change nothing for the others."""
+        self.batched_matches_single(self.model(seed=1, n_experts=4, experts_per_token=2, moe_every=1))
+
+    def test_key_padding_mask_in_the_kv_cache(self):
+        """A left-padded row decoded with a key_valid mask gives the logits of the same row alone."""
+        model, cpu = self.model(seed=8, varied=False), torch.device("cpu")
+        row = torch.randint(1, 50, (1, 9))
+        with torch.no_grad():
+            alone = model.lm_head(model(row, return_hidden=True, cache=model.new_cache())[:, -1])
+            padded = torch.cat([torch.zeros(1, 4, dtype=torch.long), row], dim=1)
+            other = torch.randint(1, 50, (1, 13))
+            cache = model.new_cache()
+            valid = torch.tensor([[False] * 4 + [True] * 9 + [True], [True] * 14])
+            for layer in cache:
+                layer["key_valid"] = valid
+            h = model(torch.cat([padded, other]), return_hidden=True, cache=cache)
+            self.assertTrue(torch.isfinite(h).all(), "padding queries attend to themselves: no NaN")
+            torch.testing.assert_close(model.lm_head(h[:1, -1]), alone, rtol=1e-4, atol=1e-4)
+            nxt = torch.tensor([[7], [7]])
+            step = model.lm_head(model(nxt, return_hidden=True, cache=cache)[:, -1])
+            ref = model.lm_head(model(torch.cat([row, nxt[:1]], dim=1), return_hidden=True)[:, -1])
+            torch.testing.assert_close(step[:1], ref, rtol=1e-4, atol=1e-4)
+
+    # ---------------- view_pt (other-scripts-16) ----------------
+    def test_dashboard_window_budget_scales_with_the_model(self):
+        import view_pt
+
+        def cfg(d, layers):
+            return tiny_gpt.ModelConfig(vocab_size=16384, ctx=1024, d_model=d, n_layers=layers, n_heads=d // 64,
+                                        n_kv_heads=max(1, d // 256))
+        self.assertEqual(view_pt.window_budget(cfg(256, 4)), 16)
+        self.assertEqual(view_pt.window_budget(cfg(1024, 16)), 16, "the 216M model keeps 16 windows")
+        self.assertEqual(view_pt.window_budget(cfg(2048, 24)), 4, "1B+: 4 windows")
+        big = types_ns(cfg=cfg(4096, 2), weights={}, embedding=None)
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        fig, ax = plt.subplots()
+        with unittest.mock.patch.object(torch.linalg, "svdvals", side_effect=AssertionError("no SVD")):
+            view_pt.panel_spectra(ax, big)
+        plt.close(fig)
+
+    # ---------------- estimate_dataset (other-scripts-17) ----------------
+    def test_estimate_dataset_shares_the_pipeline_and_device_speed(self):
+        import estimate_dataset
+        import run_pipeline
+        self.assertEqual(estimate_dataset.default_prep_args(), run_pipeline.build_command()[4:])
+        out = os.path.join(self.tmp, "speed")
+        os.makedirs(os.path.join(out, "results"), exist_ok=True)
+        with open(os.path.join(out, "results", "experiments.csv"), "w", encoding="utf-8", newline="") as f:
+            w = csv_writer(f)
+            w.writerow(["time", "event", "name", "params", "d_model", "layers", "heads", "kv_heads", "ctx", "vocab",
+                        "tokens_seen", "train_hours", "device"])
+            w.writerow(["2026-11-01T00:00", "training run", "gpu_run", "20000000", "384", "6", "6", "2", "1024",
+                        "16384", "1000000000", "1.0", "cuda"])
+        flops, how = estimate_dataset.measured_speed(out, torch.device("cpu"))
+        self.assertIsNone(flops)
+        self.assertIn("--tflops", how)
+        flops, how = estimate_dataset.measured_speed(out, torch.device("cuda"))
+        self.assertGreater(flops, 0)
+        self.assertIn("gpu_run", how)
+
+    # ---------------- posttrain (other-scripts-19) ----------------
+    def test_posttrain_evaluate_on_ten_questions(self):
+        import posttrain
+        data = os.path.join(self.tmp, "posttrain")
+        os.makedirs(data, exist_ok=True)
+        with open(os.path.join(data, "eval_mcq.jsonl"), "w", encoding="utf-8") as f:
+            for i in range(10):
+                f.write(json.dumps({"category": f"cat{i % 2}:x", "prompt": f"Which gene number {i}?",
+                                    "answer": "alpha", "distractors": ["beta", "gamma", "delta"]}) + "\n")
+        path = self.save_checkpoint(self.model(seed=9, ctx=64), "P.pt")
+        args = types_ns(device="cpu", data_dir=data, probes=os.path.join(self.tmp, "no_probes.tsv"),
+                        trust_checkpoint=False, max_new_tokens=8)
+        with unittest.mock.patch.object(tiny_gpt, "tokenizer_from_checkpoint", return_value=CharTok()), \
+                redirect_stdout(io.StringIO()) as out:
+            posttrain.evaluate([path], args)
+        with open(os.path.join(data, "posttrain_report.md"), encoding="utf-8") as handle:
+            report = handle.read()
+        self.assertIn("| P.pt |", report)
+        self.assertIn("cat0", report)
+        self.assertIn("multiple choice", out.getvalue())
+
+
+def types_ns(**kw):
+    import types
+    return types.SimpleNamespace(**kw)
+
+
+def csv_writer(handle):
+    import csv
+    return csv.writer(handle)
 
 
 class TestRxiv(unittest.TestCase):

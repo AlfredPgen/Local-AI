@@ -7,8 +7,9 @@ the next token of raw text. Post-training teaches it to *answer*:
         answer tokens, so the model learns to respond rather than to write
         questions. Data: JSON Lines {"prompt": "...", "response": "..."}.
   dpo   learn which of two answers is preferred (Direct Preference
-        Optimisation, Rafailov et al. 2023). A frozen copy of the starting
-        model is the reference; the loss pushes the log-probability ratio of
+        Optimisation, Rafailov et al. 2023). The starting model is the
+        reference (its log-probabilities of every pair are computed once,
+        before the first update); the loss pushes the log-probability ratio of
         the chosen answer above that of the rejected one:
             L = -log sigmoid( beta * [(log pi(c) - log ref(c)) - (log pi(r) - log ref(r))] )
         Data: {"prompt": "...", "chosen": "...", "rejected": "..."}.
@@ -31,7 +32,6 @@ padding (--no-length-grouping: plain shuffled batches).
 """
 
 import argparse
-import copy
 import dataclasses
 import gc
 import json
@@ -75,9 +75,26 @@ def encode_pair(tok, prompt, response, ctx):
     model learns to stop. If the pair is longer than the context, the question is
     cut from the left (keeping the template's '### Answer:' next to the answer) and
     then the end of the answer, so training always covers answer tokens."""
+    return pair_from_ids(tok, tok.encode(TEMPLATE.format(prompt=prompt.strip())), tok.encode(response.strip()), ctx)
+
+
+def encode_texts(tok, texts):
+    """Token ids of many texts in one call, on every CPU thread (tokenizer's
+    encode_batch: ~15x faster than one encode per text); one at a time for a
+    tokenizer without it."""
+    texts = list(texts)
+    batch = getattr(tok, "encode_batch", None)
+    if batch is None or not texts:
+        return [tok.encode(t) for t in texts]
+    return batch(texts, threads=os.cpu_count() or 1)
+
+
+def pair_from_ids(tok, question, response_ids, ctx):
+    """encode_pair from already tokenised parts: `question` is the template with
+    the prompt, `response_ids` the answer without its end token."""
     bos = [tok.bos_id] if tok.bos_id >= 0 else []
-    question = tok.encode(TEMPLATE.format(prompt=prompt.strip()))
-    answer = tok.encode(response.strip()) + ([tok.eos_id] if tok.eos_id >= 0 else [])
+    question = list(question)
+    answer = list(response_ids) + ([tok.eos_id] if tok.eos_id >= 0 else [])
     room = ctx + 1 - len(bos)
     truncated = len(question) + len(answer) > room
     if truncated:
@@ -142,6 +159,15 @@ def length_grouped_batches(items, batch, rng, group=50):
     return out
 
 
+def default_lr(n_params, mode):
+    """Fine-tuning learning rate by base model size: 1e-4 below 300M parameters,
+    5e-5 up to 1B, 2e-5 above (bigger models move further per step at the same
+    rate); DPO one tenth of that (its loss is a small preference margin on a
+    model that already answers)."""
+    lr = 1e-4 if n_params < 300e6 else 5e-5 if n_params <= 1e9 else 2e-5
+    return lr / 10 if mode == "dpo" else lr
+
+
 def gpu_busy(out_dir=None):
     """Another training job on this machine (tiny_gpt.gpu_busy: live training locks here and in out_dir, or an
     occupied NVIDIA GPU)."""
@@ -198,11 +224,11 @@ def train(args):
     random.Random(args.seed).shuffle(rows)
     n_val = max(1, int(round(args.val_fraction * len(rows))))
     val_rows, train_rows = rows[:n_val], rows[n_val:]
-    reference = None
-    if args.mode == "dpo":
-        reference = copy.deepcopy(model).eval()
-        for p in reference.parameters():
-            p.requires_grad_(False)
+    if args.lr is None:
+        args.lr = default_lr(tiny_gpt.count_params(cfg)[0], args.mode)
+        lr_note = " (default for this model size; --lr sets it)"
+    else:
+        lr_note = ""
     model.train()
     model.grad_checkpoint = args.activation_checkpointing
     mem = {"micro": min(args.micro_batch or args.batch, args.batch)}  # halved, or checkpointing added, on OOM
@@ -226,13 +252,19 @@ def train(args):
     schedule = tiny_gpt.LRSchedule("cosine", total, args.lr, args.lr * 0.1, max(1, total // 10))
     print(f"{args.mode.upper()} from {args.base} on {tiny_gpt.device_label(device)} ({amp_name}) | "
           f"{len(train_rows)} training and {len(val_rows)} held-out examples | {args.epochs} epochs x "
-          f"{steps_per_epoch} steps | lr {args.lr:.1e}" + (f" | beta {args.beta}" if args.mode == "dpo" else ""))
+          f"{steps_per_epoch} steps | lr {args.lr:.1e}{lr_note}" + (f" | beta {args.beta}" if args.mode == "dpo"
+                                                                     else ""))
 
     def encode_rows(rows_):
+        # two tokenizer calls for all rows (the questions, then every answer) instead of two or four per row
+        questions = encode_texts(tok, [TEMPLATE.format(prompt=r["prompt"].strip()) for r in rows_])
+        keys = ("response",) if args.mode == "sft" else ("chosen", "rejected")
+        answers = encode_texts(tok, [r[k].strip() for r in rows_ for k in keys])
+        pairs = [pair_from_ids(tok, questions[i], answers[i * len(keys) + j], cfg.ctx)
+                 for i in range(len(rows_)) for j in range(len(keys))]
         if args.mode == "sft":
-            return [encode_pair(tok, r["prompt"], r["response"], cfg.ctx) for r in rows_]
-        return [(encode_pair(tok, r["prompt"], r["chosen"], cfg.ctx), encode_pair(tok, r["prompt"], r["rejected"], cfg.ctx))
-                for r in rows_]
+            return pairs
+        return [(pairs[2 * i], pairs[2 * i + 1]) for i in range(len(rows_))]
 
     train_items, val_items = encode_rows(train_rows), encode_rows(val_rows)
     cut = sum(it[2] if args.mode == "sft" else (it[0][2] or it[1][2]) for it in train_items + val_items)
@@ -240,8 +272,12 @@ def train(args):
         print(f"note: {cut} example(s) longer than the context ({cfg.ctx} tokens) were shortened: the question from "
               "the left, then the end of the answer")
 
-    if reference is not None:
-        # The frozen reference never changes: score every pair once, then free the copy.
+    if args.mode == "dpo":
+        # The reference is the starting model and never changes: score every pair once with the model itself
+        # before its first update (log ref(c), log ref(r): two numbers per pair, exactly what a frozen copy would
+        # give), so no copy of the weights is kept and no reference forward runs per step.
+        model.eval()
+        reference = model
         with torch.no_grad():
             for items in (train_items, val_items):
                 i = 0
@@ -265,6 +301,7 @@ def train(args):
                     items[i:i + len(chunk)] = [(c, r, a, b) for (c, r, *_), a, b in zip(chunk, rc, rr)]
                     i += len(chunk)
         del reference
+        model.train()
         free_memory(device)
     val_items.sort(key=item_length)  # held-out batches of similar length: less padding, same averages
 
@@ -418,7 +455,9 @@ def main(argv=None):
         s.add_argument("--activation-checkpointing", action="store_true",
                        help="recompute blocks in the backward pass (less memory, slower; switched on "
                             "automatically after an out-of-memory error at micro-batch 1)")
-        s.add_argument("--lr", type=float, default=1e-4 if mode == "sft" else 1e-5)
+        s.add_argument("--lr", type=float, default=None,
+                       help="learning rate (default by model size: 1e-4 below 300M parameters, 5e-5 up to 1B, 2e-5 "
+                            "above; DPO one tenth)")
         s.add_argument("--beta", type=float, default=0.1, help="DPO: strength of the preference")
         s.add_argument("--weight-decay", type=float, default=0.0)
         s.add_argument("--val-fraction", type=float, default=0.1)
@@ -450,7 +489,8 @@ def main(argv=None):
         for path in (args.base, args.data):
             if not os.path.exists(path):
                 p.error(f"not found: {path}")
-        if not (1 <= args.epochs <= 100 and 1 <= args.batch <= 1024 and 0 < args.lr < 1 and 0 < args.val_fraction < 0.5
+        if not (1 <= args.epochs <= 100 and 1 <= args.batch <= 1024 and (args.lr is None or 0 < args.lr < 1)
+                and 0 < args.val_fraction < 0.5
                 and (args.micro_batch is None or 1 <= args.micro_batch <= args.batch)):
             p.error("check --epochs (1-100), --batch (1-1024), --micro-batch (1 to --batch), --lr (0-1) and "
                     "--val-fraction (0-0.5)")

@@ -59,7 +59,7 @@ Last updated 27 October 2026.
       at 2-3 learning rates; keep Muon only if its loss is clearly lower at the same step.
 - [ ] **8-bit optimizer** (`bitsandbytes`) would let models above about 300M parameters fit on the 8 GB GPU.
       Needs approval to install: `python -m pip install bitsandbytes`.
-- [ ] **Dashboard for big models:** use fewer text windows for the CPU forward-pass panels in `view_pt.py`
+- [x] **Dashboard for big models:** use fewer text windows for the CPU forward-pass panels in `view_pt.py`
       when the model has 1B+ parameters.
 - [ ] **Benchmark suite** (`benchmark.py`, 21 free benchmarks in `benchmarks\`): only a 50-question trial of
       tinyGPT_best.pt was run (all near chance). Still to do: run the coding benchmarks end to end through the WSL

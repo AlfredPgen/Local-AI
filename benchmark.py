@@ -35,6 +35,12 @@ Examples
 
 Benchmark data carries canary strings (LAB-Bench) and must never be used for
 training: benchmarks\ is git-ignored and outside the training-data folders.
+
+Cost: the multiple-choice sets take minutes. MedCalc and the coding sets
+generate text (greedy, several rows decoded together, --batch) and the coding
+sets then run every completion in the sandbox, which dominates: run them on
+final models only, e.g. --benchmarks medcalc,humaneval --limit 200, and score
+intermediate checkpoints with the multiple-choice sets.
 """
 
 import argparse
@@ -934,24 +940,110 @@ def greedy_generate(model, tok, prompt, max_new_tokens, device, amp_dtype=None, 
     return cut_at_stops(text, stops) if stops else text
 
 
-def score_numeric(model, tok, items, device, amp_dtype, max_new_tokens=24):
+def _greedy_fits(model, n_prompt, max_new_tokens):
+    """True when a prompt of n_prompt tokens and its continuation stay inside one
+    context window, so greedy_generate's decoder never restarts its cache (the
+    last logits are taken after n_prompt + max_new_tokens - 1 tokens)."""
+    return n_prompt + max_new_tokens - 1 <= model.ctx
+
+
+def batched_greedy(model, tok, prompts, max_new_tokens, device, amp_dtype=None, stops=(), item_stops=None,
+                   batch=16):
+    """greedy_generate for many prompts, `batch` rows decoded together: the
+    same texts, one forward pass per step for the whole group instead of one
+    per prompt. The prompts are sorted by length (little padding) and each group
+    is left-padded to its longest prompt; the padding is masked out of attention
+    by a key-padding mask in the KV cache (GroupedQueryAttention._forward_cached),
+    and with RoPE only relative positions count, so a padded row's real tokens
+    get the attention they would get alone. After each step the new token of
+    every row is checked for the end token and the row's stop strings (item_stops,
+    one sequence per prompt, else `stops`), and finished rows leave the batch.
+    Prompts whose continuation would outgrow the context, and models other than
+    TinyGPT, go through greedy_generate one at a time. Returns the texts in the
+    order of `prompts`."""
+    import torch
+    import tiny_gpt
+    prompts = list(prompts)
+    per_stops = list(item_stops) if item_stops is not None else [stops] * len(prompts)
+    out = [None] * len(prompts)
+    prefix = [tok.bos_id] if tok.bos_id >= 0 else []
+    encoded = [prefix + tok.encode(p) for p in prompts]
+    single = [i for i, ids in enumerate(encoded)
+              if not isinstance(model, tiny_gpt.TinyGPT) or not _greedy_fits(model, len(ids), max_new_tokens)]
+    for i in single:
+        out[i] = greedy_generate(model, tok, prompts[i], max_new_tokens, device, amp_dtype, stops=per_stops[i])
+    order = sorted((i for i in range(len(prompts)) if out[i] is None), key=lambda i: (len(encoded[i]), i))
+    start = len(prefix)
+    for g in range(0, len(order), max(1, int(batch))):
+        group = order[g:g + max(1, int(batch))]
+        ids = [list(encoded[i]) for i in group]
+        n_prompt = [len(r) for r in ids]
+        heads = [tok.decode(r[start:]) for r in ids]
+        texts = [""] * len(group)
+        width = max(n_prompt)
+        x = torch.zeros((len(group), width), dtype=torch.long)
+        valid = torch.zeros((len(group), width + max_new_tokens), dtype=torch.bool)
+        for r, row in enumerate(ids):  # left padding: every row's last prompt token in the last column
+            x[r, width - len(row):] = torch.tensor(row)
+            valid[r, width - len(row):] = True
+        valid = valid.to(device)
+        cache = model.new_cache()
+        active = list(range(len(group)))  # rows of the group still decoding, in cache order
+        new = x.to(device)
+        with torch.no_grad():
+            for _ in range(max_new_tokens):
+                for layer in cache:
+                    layer["key_valid"] = valid
+                with torch.autocast(device.type, dtype=amp_dtype or torch.float32, enabled=amp_dtype is not None):
+                    h = model(new, return_hidden=True, cache=cache)
+                    logits = model.lm_head(h[:, -1])
+                nxt = logits.float().argmax(-1).tolist()
+                keep = []
+                for pos, r in enumerate(active):
+                    token = int(nxt[pos])
+                    if token == tok.eos_id:
+                        continue
+                    ids[r].append(token)
+                    full = tok.decode(ids[r][start:])
+                    texts[r] = full[len(heads[r]):] if full.startswith(heads[r]) else tok.decode(ids[r][n_prompt[r]:])
+                    row_stops = per_stops[group[r]]
+                    if row_stops and any(s in texts[r] for s in row_stops):
+                        continue
+                    keep.append(pos)
+                if not keep:
+                    break
+                if len(keep) < len(active):  # finished rows leave the batch (and the cache)
+                    index = torch.tensor(keep, device=device)
+                    for layer in cache:
+                        layer["k"], layer["v"] = layer["k"][index], layer["v"][index]
+                    valid = valid[index]
+                active = [active[p] for p in keep]
+                new = torch.tensor([[ids[r][-1]] for r in active], device=device)
+        for r, i in enumerate(group):
+            out[i] = cut_at_stops(texts[r], per_stops[i]) if per_stops[i] else texts[r]
+    return out
+
+
+def score_numeric(model, tok, items, device, amp_dtype, max_new_tokens=24, batch=16):
+    prompts = [f"{it.get('context', '').strip()}\n\nQuestion: {it['question'].strip()}\nAnswer:" for it in items]
+    gens = batched_greedy(model, tok, prompts, max_new_tokens, device, amp_dtype, stops=["\n"], batch=batch)
     rows = []
-    for it in items:
-        prompt = f"{it.get('context', '').strip()}\n\nQuestion: {it['question'].strip()}\nAnswer:"
-        gen = greedy_generate(model, tok, prompt, max_new_tokens, device, amp_dtype, stops=["\n"])
+    for it, gen in zip(items, gens):
         ok, parsed = numeric_correct(it, gen)
         rows.append({"id": it["id"], "category": it["category"], "correct": bool(ok), "chance": 0.0,
                      "floor_correct": None, "answer": it["answer"], "parsed": parsed, "generated": gen[:200]})
     return rows
 
 
-def score_code(model, tok, items, device, amp_dtype, sandbox, max_new_tokens=256, timeout=20, log=print):
+def score_code(model, tok, items, device, amp_dtype, sandbox, max_new_tokens=256, timeout=20, log=print, batch=16):
     rows = []
-    for k, it in enumerate(items, 1):
+    t0 = time.time()
+    gens = batched_greedy(model, tok, [code_prompt(it) for it in items], max_new_tokens, device, amp_dtype,
+                          item_stops=[CODE_STOPS[it["style"]] for it in items], batch=batch)
+    log(f"    {len(items)} completions generated in {time.time() - t0:,.0f} s; running the tests", flush=True)
+    for k, (it, gen) in enumerate(zip(items, gens), 1):
         style = it["style"]
         runner = "blender" if style == "blender" else "python"
-        gen = greedy_generate(model, tok, code_prompt(it), max_new_tokens, device, amp_dtype,
-                              stops=CODE_STOPS[style])
         res = sandbox.run(code_program(it, gen), timeout=timeout, runner=runner)
         rows.append({"id": it["id"], "category": it["category"], "correct": bool(res.passed), "chance": 0.0,
                      "floor_correct": None, "status": res.status, "generated": gen[:400],
@@ -1087,10 +1179,11 @@ def cmd_run(args):
             rows = score_mcq(model, tok, items, device, amp_dtype, floor=not args.no_floor, batch_size=args.batch)
             note += "; option log-likelihood per character"
         elif spec["kind"] == "numeric":
-            rows = score_numeric(model, tok, items, device, amp_dtype)
+            rows = score_numeric(model, tok, items, device, amp_dtype, batch=args.batch)
             note += "; greedy, first number, MedCalc tolerance"
         else:
-            rows = score_code(model, tok, items, device, amp_dtype, sandbox, args.max_new_tokens, args.timeout)
+            rows = score_code(model, tok, items, device, amp_dtype, sandbox, args.max_new_tokens, args.timeout,
+                              batch=args.batch)
             note += f"; greedy pass@1, tests in {sandbox.name} sandbox"
         write_item_csv(os.path.join(run_dir, f"{name}.csv"), rows)
         summaries = summarise(rows)
@@ -1332,7 +1425,8 @@ def parse_args(argv=None):
     r.add_argument("--device", choices=("auto", "cuda", "mps", "cpu"), default="auto")
     r.add_argument("--force", action="store_true", help="use the GPU even if another job seems to be using it")
     r.add_argument("--no-floor", action="store_true", help="skip the shuffled-question floor (4x faster MCQ)")
-    r.add_argument("--batch", type=int, default=32, help="sequences per batch for MCQ scoring")
+    r.add_argument("--batch", type=int, default=32,
+                   help="sequences per batch: MCQ scoring, and rows decoded together for MedCalc and the code sets")
     r.add_argument("--max-new-tokens", type=int, default=256, help="generated tokens per coding item")
     r.add_argument("--timeout", type=int, default=20, help="seconds per test run in the sandbox")
     r.add_argument("--sandbox", choices=("auto", "docker", "wsl"), default="auto")
