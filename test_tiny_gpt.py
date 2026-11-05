@@ -497,21 +497,28 @@ class TestPipeline(unittest.TestCase):
         self.assertIn("is not above this run's warmup", out_w)
 
         def metrics(text):
-            return {int(m.group(1)): (float(m.group(2)), float(m.group(3)), int(m.group(4)), m.group(5)) for m in
-                    re.finditer(r"step +(\d+)/24 \| train ([\d.]+) \| val ([\d.]+) @(\d+).*?\| (NEW BEST.*|best .*)", text)}
+            # (train, val, measured-at step, status, val(ema) or None): the EMA is scored beside the raw weights
+            # while the learning rate is above 5% of peak
+            return {int(m.group(1)): (float(m.group(2)), float(m.group(3)), int(m.group(4)), m.group(6),
+                                      float(m.group(5)) if m.group(5) else None) for m in
+                    re.finditer(r"step +(\d+)/24 \| train ([\d.]+) \| val ([\d.]+) @(\d+)(?:.*? val\(ema\) ([\d.]+))?"
+                                r".*?\| (NEW BEST.*|best .*)", text)}
 
         a, b = metrics(out), metrics(out_r)
         self.assertEqual(sorted(a), [8, 16, 24])
-        for step, (tr, va, at, status) in a.items():
+        for step, (tr, va, at, status, _ema) in a.items():
             self.assertEqual(at, step, "validation must be labelled with the step it was measured at")
         self.assertEqual(len({v[1] for v in a.values()}), 3, "validation must be re-measured at every evaluation")
         self.assertEqual(a[24][:2], b[24][:2], "resumed run must reproduce the uninterrupted run exactly")
-        # NEW BEST exactly when validation improved on every earlier value
+        # NEW BEST exactly when validation (the better of the raw and the EMA weights) improved on every earlier value
         best = float("inf")
         for step in sorted(a):
-            improved = a[step][1] < best
+            candidate = a[step][1] if a[step][4] is None else min(a[step][1], a[step][4])
+            improved = candidate < best
             self.assertEqual(a[step][3].startswith("NEW BEST"), improved)
-            best = min(best, a[step][1])
+            self.assertEqual(a[step][3].endswith("(ema weights)"), improved and a[step][4] is not None
+                             and a[step][4] < a[step][1])
+            best = min(best, candidate)
         lines = out.splitlines()
         for i, line in enumerate(lines):
             if re.match(r"step +(8|16|24)/24 \| train", line):
@@ -544,6 +551,12 @@ class TestPipeline(unittest.TestCase):
         self.assertIn("optimizer", train_ck)
         self.assertEqual(best_ck["checkpoint_type"], "inference")
         self.assertNotIn("optimizer", best_ck)
+        # new runs: QK-norm on, an EMA of the weights kept in the training state, the best file says which it holds
+        self.assertTrue(train_ck["model_config"]["qk_norm"])
+        self.assertEqual((train_ck["ema"]["decay"], train_ck["weights"]), (0.999, "raw"))
+        self.assertEqual(set(train_ck["ema"]["state"]), set(train_ck["model"]))
+        self.assertIn(best_ck["weights"], ("raw", "ema"))
+        self.assertNotIn("ema", best_ck, "the inference-only file carries one set of weights")
         self.assertEqual(train_ck["model"]["lm_head.weight"].data_ptr(),
                          train_ck["model"]["token_embedding.weight"].data_ptr())
         self.assertEqual(len(train_ck["metrics"]["history"]), 4, "baseline + 3 evaluations")
@@ -1225,7 +1238,8 @@ class TestPipeline(unittest.TestCase):
         self.assertAlmostEqual(losses[0], losses[1], places=3)
 
     def test_muon_optimizer(self):
-        """--optimizer muon: Muon for the 14 block matrices, AdamW for the embedding and 5 norm gains; an
+        """--optimizer muon: Muon for the 14 block matrices, AdamW for the embedding and 9 norm gains (5 RMSNorm
+        gains and the 4 QK-norm gains new runs have); an
         interrupted run resumes exactly, keeps its optimizer, and the recipe reaches experiments.csv."""
         import csv
         log = os.path.join(self.runs, "log.txt")
@@ -1240,7 +1254,7 @@ class TestPipeline(unittest.TestCase):
                            "--no-probes", "--optimizer", "adamw"])
         self.assertEqual(code, 0, out_r)
         self.assertIn("--optimizer adamw ignored on --resume", out_r)
-        self.assertIn("optimizer state 20/20 tensors", out_r)
+        self.assertIn("optimizer state 24/24 tensors", out_r)
 
         def val16(text):
             return re.findall(r"step +16/16 \| train [\d.]+ \| val ([\d.]+)", text)
@@ -1249,10 +1263,10 @@ class TestPipeline(unittest.TestCase):
         self.assertEqual(val16(out), val16(out_r), "a resumed Muon run must reproduce the uninterrupted run")
         ck = torch.load(os.path.join(self.runs, "N.pt"), map_location="cpu", weights_only=True)
         self.assertEqual(ck["train_config"]["optimizer"], "muon")
-        self.assertEqual(len(ck["optimizer_param_names"]), 20)
+        self.assertEqual(len(ck["optimizer_param_names"]), 24)
         kinds = [sorted(k for k in s if k != "step") for s in ck["optimizer"]["state"].values()]
         self.assertEqual(sum(k == ["momentum_buffer"] for k in kinds), 14)
-        self.assertEqual(sum(k == ["exp_avg", "exp_avg_sq"] for k in kinds), 6)
+        self.assertEqual(sum(k == ["exp_avg", "exp_avg_sq"] for k in kinds), 10)
         with open(os.path.join(self.runs, "results", "experiments.csv"), encoding="utf-8-sig", newline="") as handle:
             row = [r for r in csv.DictReader(handle) if r["name"] == "N" and r["event"] == "training run"][-1]
         self.assertEqual((row["optimizer"], row["schedule"], row["decay_shape"], row["betas"], row["micro_batch"]),
@@ -1262,7 +1276,7 @@ class TestPipeline(unittest.TestCase):
         self.assertEqual(code, 0, out_p)
         code, out_q = run(muon + ["--name", "Q", "--steps", "16", "--init-from", os.path.join(self.runs, "P.pt")])
         self.assertEqual(code, 0, out_q)
-        self.assertIn("optimizer state restored for 6/20 tensors", out_q)
+        self.assertIn("optimizer state restored for 10/24 tensors", out_q)
         self.assertIn("learning rate re-warmed over 8 steps for the 14 tensors whose optimizer state restarts", out_q)
         self.assertEqual(torch.load(os.path.join(self.runs, "Q.pt"), map_location="cpu",
                                     weights_only=True)["train_config"].get("rewarm_steps"), 8)
@@ -1270,7 +1284,7 @@ class TestPipeline(unittest.TestCase):
         code, out_v = run(["view_pt.py", os.path.join(self.runs, "N.pt"), "--plot", "--out", png, "--dpi", "50",
                            "--no-forward"])
         self.assertEqual(code, 0, out_v)
-        self.assertIn("optimizer: Muon + AdamW state for 20 tensors", out_v)
+        self.assertIn("optimizer: Muon + AdamW state for 24 tensors", out_v)
         self.assertNotIn("panel failed", out_v)
 
     # ---------------- interrupted steps, first-step out-of-memory, resume refusals ----------------
@@ -3201,6 +3215,205 @@ class TestFixes(unittest.TestCase):
         # --init-from plans with the checkpoint's shape, the tying included
         self.assertEqual(tiny_gpt._args_with_shape(args, untied_cfg).tie_embeddings, "off")
         self.assertEqual(tiny_gpt._args_with_shape(args, model.cfg).tie_embeddings, "on")
+
+    def test_qk_norm_model_cache_config_and_export(self):
+        """QK-norm (quality-3): one gain vector per query and key norm per layer, counted by count_params; the
+        attention logits are bounded by sqrt(head_dim) x gain^2; the KV cache agrees with a full forward pass;
+        a config dict from before the field loads with it off; the gains sit in the no-decay AdamW group and
+        never on Muon; a safetensors export round-trips them; --init-from plans with the checkpoint's setting."""
+        cfg = tiny_gpt.ModelConfig(vocab_size=50, ctx=16, d_model=32, n_layers=2, n_heads=4, n_kv_heads=2,
+                                   qk_norm=True)
+        torch.manual_seed(1)
+        model = tiny_gpt.TinyGPT(cfg)
+        attn = model.blocks[0].attn
+        self.assertEqual(tuple(attn.q_norm.weight.shape), (cfg.head_dim,))
+        self.assertEqual(model.param_counts()[0], tiny_gpt.count_params(cfg)[0])
+        plain = tiny_gpt.ModelConfig(**{**dataclasses.asdict(cfg), "qk_norm": False})
+        self.assertEqual(tiny_gpt.count_params(cfg)[0] - tiny_gpt.count_params(plain)[0],
+                         cfg.n_layers * 2 * cfg.head_dim)
+        self.assertIsNone(tiny_gpt.TinyGPT(plain).blocks[0].attn.q_norm)
+        x = torch.randint(0, 50, (2, 16))
+        logits = model(x)
+        self.assertEqual(tuple(logits.shape), (2, 16, 50))
+        logits.float().logsumexp(-1).mean().backward()
+        self.assertTrue(all(p.grad is not None for n, p in model.named_parameters() if "_norm" in n))
+        model.eval()
+        with torch.no_grad():
+            full = model(x)
+            cache = model.new_cache()
+            parts = [model(x[:, :5], cache=cache)] + [model(x[:, i:i + 1], cache=cache) for i in range(5, 16)]
+            torch.testing.assert_close(torch.cat(parts, 1), full, rtol=1e-4, atol=1e-4)
+            # |q . k| <= |q| |k| = head_dim x (gain^2, 1 at init), so the logits q.k / sqrt(d) are bounded by sqrt(d)
+            q, k, _ = attn._qkv(model.blocks[0].attn_norm(model.token_embedding(x)), model.rope)
+            scores = (q @ k.repeat_interleave(attn.n_rep, dim=1).transpose(-1, -2)) / math.sqrt(attn.head_dim)
+            self.assertLessEqual(scores.abs().max().item(), math.sqrt(attn.head_dim) + 1e-4)
+            self.assertAlmostEqual(q.pow(2).mean(-1).max().item(), 1.0, places=3, msg="queries have RMS 1")
+        old = {k: v for k, v in dataclasses.asdict(cfg).items() if k != "qk_norm"}
+        self.assertFalse(tiny_gpt.ModelConfig(**old).qk_norm, "checkpoints from before the field load with it off")
+        obj = {"format": tiny_gpt.CHECKPOINT_FORMAT, "checkpoint_type": "inference",
+               "model_config": dataclasses.asdict(cfg), "model": model.state_dict()}
+        self.assertTrue(tiny_gpt.config_from_checkpoint(obj).qk_norm)
+        settings = {"optimizer": "muon", "lr": 1e-3, "betas": [0.9, 0.95], "weight_decay": 0.1}
+        _, _, names, _ = tiny_gpt.build_optimizer(model, settings, torch.device("cpu"))
+        self.assertIn("blocks.0.attn.q_norm.weight", names[1], "1-D gains: AdamW without weight decay")
+        self.assertNotIn("blocks.0.attn.k_norm.weight", names[0] + names[2])
+        path = os.path.join(self.tmp, "qk.safetensors")
+        tensors = {k: v for k, v in model.state_dict().items() if k != "lm_head.weight"}
+        tiny_gpt.write_safetensors(tensors, path, {"qk_norm": cfg.qk_norm})
+        back, meta = tiny_gpt.read_safetensors(path)
+        self.assertEqual(meta.get("qk_norm"), "True")
+        self.assertIn("blocks.1.attn.k_norm.weight", back)
+        again = tiny_gpt.TinyGPT(cfg).eval()
+        again.load_state_dict(back, strict=False)
+        with torch.no_grad():
+            torch.testing.assert_close(again(x), full)
+        args = tiny_gpt.parse_args(["--name", "x"])
+        self.assertIsNone(args.qk_norm, "unset: on for new runs, the checkpoint's on --resume/--init-from")
+        self.assertEqual(tiny_gpt._args_with_shape(args, cfg).qk_norm, "on")
+        self.assertEqual(tiny_gpt._args_with_shape(args, plain).qk_norm, "off")
+
+    def test_quality_flags_in_the_plan(self):
+        """--qk-norm (default on), --lr-scale (multiplies the heuristic rate, printed, recorded; no effect with --lr;
+        LR_TABLE untouched), --ema (default 0.999, off removes it; resolve_ema keeps a resumed run as it was) and
+        --doc-mask (default off) in plan_run and parse_args."""
+        manifest = {"tokenizer": {"vocab_size": 700},
+                    "sources": {"md": {"train": {"tokens": 5_000_000}, "doc_tokens_percentiles": {"50": 300}}}}
+
+        def plan(argv):
+            args = tiny_gpt.parse_args(["--name", "x", "--d-model", "64"] + argv)
+            with unittest.mock.patch.object(tiny_gpt, "device_memory_budget",
+                                            return_value=(4 * 2 ** 30, "4 GiB (test)")):
+                return tiny_gpt.plan_run(args, manifest, torch.device("cpu"), None)
+
+        cfg, st, lines = plan([])
+        text = "\n".join(lines)
+        self.assertTrue(cfg.qk_norm)
+        self.assertEqual((st["lr_scale"], st["ema"], st["doc_mask"]), (1.0, 0.999, False))
+        self.assertIn(", QK-norm, ctx 256", text)
+        self.assertIn("weights: EMA with decay 0.999 per step", text)
+        self.assertNotIn("--lr-scale", text)
+        cfg2, st2, lines2 = plan(["--lr-scale", "2", "--qk-norm", "off", "--ema", "off", "--doc-mask", "on"])
+        text2 = "\n".join(lines2)
+        self.assertAlmostEqual(st2["lr"], 2 * st["lr"])
+        self.assertEqual((st2["lr_scale"], st2["ema"], st2["doc_mask"], cfg2.qk_norm), (2.0, 0.0, True, False))
+        self.assertIn("x --lr-scale 2", text2)
+        self.assertIn("no EMA (--ema off)", text2)
+        self.assertIn("document mask on", text2)
+        self.assertNotIn("QK-norm", text2)
+        _, st3, lines3 = plan(["--lr", "1e-3", "--lr-scale", "2", "--ema", "0.99"])
+        self.assertEqual((st3["lr"], st3["ema"]), (1e-3, 0.99))
+        self.assertIn("learning rate 1.00e-03 peak (set)", "\n".join(lines3))
+        self.assertEqual(tiny_gpt.LR_TABLE, [(1e6, 2.0e-3), (1e7, 1.2e-3), (1e8, 6.0e-4), (1e9, 3.0e-4)],
+                         "the table changes only after the sweep")
+        self.assertEqual(tiny_gpt.parse_args(["--name", "x", "--ema", "off"]).ema, 0.0)
+        self.assertIsNone(tiny_gpt.parse_args(["--name", "x"]).ema)
+        for bad in (["--lr-scale", "0"], ["--ema", "1.5"], ["--ema", "maybe"], ["--qk-norm", "maybe"],
+                    ["--doc-mask", "1"]):
+            with redirect_stdout(io.StringIO()), self.assertRaises(SystemExit):
+                with open(os.devnull, "w") as devnull:
+                    old = sys.stderr
+                    sys.stderr = devnull
+                    try:
+                        tiny_gpt.parse_args(["--name", "x"] + bad)
+                    finally:
+                        sys.stderr = old
+        # resolve_ema: a resumed run never gains an average silently
+        s = {}
+        self.assertEqual((tiny_gpt.resolve_ema(s, None, resumed=True), s["ema"]), (0.0, 0.0))
+        self.assertEqual(tiny_gpt.resolve_ema({"ema": 0.999}, None, resumed=True), 0.999)
+        self.assertEqual(tiny_gpt.resolve_ema({}, 0.99, resumed=True), 0.99)
+        self.assertEqual(tiny_gpt.resolve_ema({"ema": 0.999}, 0.0, resumed=True), 0.0)
+        self.assertEqual(tiny_gpt.resolve_ema({}, None, resumed=False), 0.999)
+        self.assertEqual(tiny_gpt.resolve_ema({}, 0.0, resumed=False), 0.0)
+        self.assertIn("lr_scale", tiny_gpt.EXPERIMENT_COLUMNS)
+        self.assertIn("ema", tiny_gpt.EXPERIMENT_COLUMNS)
+
+    def test_ema_update_arithmetic_and_weight_swap(self):
+        """The EMA (quality-7): fp32 CPU copies that keep the tied embedding one tensor; ema <- d ema + (1 - d) w
+        per update, compounding; swapped_weights scores the average in place and restores the raw weights, the
+        parameter objects unchanged; the bf16 copy for --best-bf16 keeps the tie."""
+        model = self.small_model(seed=2)
+        ema = tiny_gpt.ema_init(model.state_dict().items())
+        self.assertIs(ema["lm_head.weight"], ema["token_embedding.weight"], "tied storage stays one tensor")
+        self.assertNotEqual(ema["norm.weight"].data_ptr(), model.norm.weight.data_ptr(), "a copy, not a view")
+        self.assertEqual(ema["norm.weight"].dtype, torch.float32)
+        before = {k: v.clone() for k, v in model.state_dict().items()}
+        for k, v in ema.items():
+            torch.testing.assert_close(v, before[k])
+        with torch.no_grad():
+            for p in model.parameters():
+                p.add_(0.5)
+        tiny_gpt.ema_update(ema, model, 0.9)
+        for k, v in model.state_dict().items():
+            torch.testing.assert_close(ema[k], 0.9 * before[k] + 0.1 * v)
+        tiny_gpt.ema_update(ema, model, 0.9)
+        for k, v in model.state_dict().items():
+            torch.testing.assert_close(ema[k], 0.81 * before[k] + 0.19 * v)
+        self.assertIs(ema["lm_head.weight"], ema["token_embedding.weight"])
+        x = torch.randint(0, 50, (1, 8))
+        with torch.no_grad():
+            raw_out = model(x)
+            norm_param = model.norm.weight
+            with tiny_gpt.swapped_weights(model, ema) as swapped:
+                self.assertIs(swapped, model)
+                for k, v in model.state_dict().items():
+                    torch.testing.assert_close(v, ema[k])
+                self.assertIs(model.norm.weight, norm_param, "copied in place: the parameter objects stay")
+                inside = model(x)
+            torch.testing.assert_close(model(x), raw_out)
+            self.assertIs(model.lm_head.weight, model.token_embedding.weight)
+        self.assertFalse(torch.allclose(inside, raw_out))
+        half = tiny_gpt.ema_weights_for_checkpoint(ema, bf16=True)
+        self.assertEqual(half["norm.weight"].dtype, torch.bfloat16)
+        self.assertIs(half["lm_head.weight"], half["token_embedding.weight"])
+        self.assertIs(tiny_gpt.ema_weights_for_checkpoint(ema), ema)
+        self.assertEqual(tiny_gpt.EMA_EVERY, 10)
+        self.assertAlmostEqual(tiny_gpt.EMA_DECAY_DEFAULT ** tiny_gpt.EMA_EVERY, 0.990, places=3)
+
+    def test_document_mask_blocks_and_single_document_logits(self):
+        """The document mask (quality-6): a by-hand block-diagonal causal mask on a two-document window; a
+        single-document window gives the unmasked logits; with the mask the second document of a window is scored
+        as if it stood alone (RoPE is relative); the recomputed (checkpointed) blocks see the same mask; the
+        memory estimate adds B x T x T bytes."""
+        model = self.small_model(seed=4)  # ctx 16, vocab 50
+        sep = 1
+        x = torch.tensor([[sep, 10, 11, 12, sep, 20, 21, 22]])
+        mask = tiny_gpt.document_mask(x, sep)
+        self.assertEqual((tuple(mask.shape), mask.dtype), ((1, 1, 8, 8), torch.bool))
+        want = torch.zeros(8, 8, dtype=torch.bool)
+        for i in range(8):
+            for j in range(i + 1):
+                want[i, j] = (i < 4) == (j < 4)
+        self.assertTrue(torch.equal(mask[0, 0], want))
+        single = torch.tensor([[sep, 10, 11, 12, 13, 20, 21, 22]])
+        self.assertTrue(torch.equal(tiny_gpt.document_mask(single, sep)[0, 0],
+                                    torch.ones(8, 8, dtype=torch.bool).tril()))
+        with torch.no_grad():
+            plain = model(single)
+            model.doc_sep_id = sep
+            torch.testing.assert_close(model(single), plain, rtol=1e-5, atol=1e-5)
+            two = model(x)
+            alone = model(x[:, 4:])
+            torch.testing.assert_close(two[:, 4:], alone, rtol=1e-4, atol=1e-4)
+            if tiny_gpt._enable_gqa_supported():
+                model.set_attention_impl("gqa_native")
+                torch.testing.assert_close(model(x), two, rtol=1e-5, atol=1e-5)
+                model.set_attention_impl("repeat_kv")
+            model.doc_sep_id = None
+            self.assertFalse(torch.allclose(model(x)[:, 4:], alone, atol=1e-3), "unmasked, the second document "
+                                                                                   "sees the first")
+        model.doc_sep_id = sep
+        model.train()  # dropout 0: the recomputed blocks give the eval-mode logits
+        model.grad_checkpoint = True
+        out = model(x)
+        torch.testing.assert_close(out, two, rtol=1e-5, atol=1e-5)
+        out.sum().backward()
+        self.assertIsNotNone(model.blocks[0].attn.q_proj.weight.grad)
+        cfg = model.cfg
+        self.assertEqual(tiny_gpt.estimate_train_bytes(cfg, 3, True, doc_mask=True)
+                         - tiny_gpt.estimate_train_bytes(cfg, 3, True), 3 * cfg.ctx * cfg.ctx)
+        self.assertEqual(tiny_gpt.estimate_train_bytes(cfg, 3, True, checkpointing=True, doc_mask=True)
+                         - tiny_gpt.estimate_train_bytes(cfg, 3, True, checkpointing=True), 3 * cfg.ctx * cfg.ctx)
 
 
 class TestRxiv(unittest.TestCase):

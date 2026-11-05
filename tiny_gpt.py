@@ -483,6 +483,9 @@ class ModelConfig:
     dropout: float = 0.0
     norm_eps: float = 1e-6
     tie_embeddings: bool = True
+    # QK-norm (an RMSNorm over each query and key head before RoPE). False is the dense default every checkpoint
+    # written before the field existed loads with; the planner turns it on for new runs.
+    qk_norm: bool = False
 
     def __post_init__(self):
         if not self.ffn_hidden:
@@ -573,7 +576,7 @@ class SwiGLU(nn.Module):
 class GroupedQueryAttention(nn.Module):
     """n_heads query heads share n_kv_heads key/value heads (GQA)."""
 
-    def __init__(self, dim, n_heads, n_kv_heads, dropout):
+    def __init__(self, dim, n_heads, n_kv_heads, dropout, qk_norm=False, norm_eps=1e-6):
         super().__init__()
         self.n_heads, self.n_kv_heads = n_heads, n_kv_heads
         self.n_rep = n_heads // n_kv_heads
@@ -584,31 +587,51 @@ class GroupedQueryAttention(nn.Module):
         self.k_proj = nn.Linear(dim, n_kv_heads * self.head_dim, bias=False)
         self.v_proj = nn.Linear(dim, n_kv_heads * self.head_dim, bias=False)
         self.o_proj = nn.Linear(dim, dim, bias=False)
+        # QK-norm (Dehghani et al. 2023; Wortsman et al. 2023): an RMSNorm over every query and every key head,
+        # applied after the projection and before RoPE (the Gemma 3 / Qwen3 / OLMo 2 order), one gain vector of
+        # head_dim values shared by all heads. Each normalised vector has RMS 1 (times its gain), so the attention
+        # logits q.k / sqrt(d) are bounded by sqrt(d) x gain^2 whatever the learning rate: the logit-growth
+        # instability at high rates disappears and the loss-against-LR curve flattens. Off, the layer is exactly
+        # the plain GQA it always was.
+        self.q_norm = RMSNorm(self.head_dim, norm_eps) if qk_norm else None
+        self.k_norm = RMSNorm(self.head_dim, norm_eps) if qk_norm else None
 
     def _qkv(self, x, rope, pos=0):
+        """Rotated queries and keys plus values, (B, heads, T, head_dim). The single path for training,
+        KV-cached decoding and attention_weights, so QK-norm reaches all three alike."""
         b, t, _ = x.shape
         q = self.q_proj(x).view(b, t, self.n_heads, self.head_dim).transpose(1, 2)
         k = self.k_proj(x).view(b, t, self.n_kv_heads, self.head_dim).transpose(1, 2)
         v = self.v_proj(x).view(b, t, self.n_kv_heads, self.head_dim).transpose(1, 2)
+        if self.q_norm is not None:
+            q, k = self.q_norm(q), self.k_norm(k)
         q, k = rope(q, k, pos)
         return q, k, v
 
-    def forward(self, x, rope, cache=None):
+    def forward(self, x, rope, cache=None, mask=None):
         """cache: None (training, scoring), or this layer's dict for KV-cached decoding:
         the keys and values of the tokens seen so far are kept in it, so each new token
-        costs one position of work instead of the whole sequence."""
+        costs one position of work instead of the whole sequence. mask: None (plain
+        causal attention, the fast kernels) or a boolean (B, 1, T, T) document mask from
+        document_mask(), causal and confined to each document."""
         if cache is not None:
             return self._forward_cached(x, rope, cache)
         b, t, _ = x.shape
         q, k, v = self._qkv(x, rope)
         p = self.dropout if self.training else 0.0
         if self.impl == "gqa_native" and self.n_rep > 1:
-            y = F.scaled_dot_product_attention(q, k, v, dropout_p=p, is_causal=True, enable_gqa=True)
+            if mask is None:
+                y = F.scaled_dot_product_attention(q, k, v, dropout_p=p, is_causal=True, enable_gqa=True)
+            else:
+                y = F.scaled_dot_product_attention(q, k, v, attn_mask=mask, dropout_p=p, enable_gqa=True)
         else:
             if self.n_rep > 1:
                 k = k.repeat_interleave(self.n_rep, dim=1)
                 v = v.repeat_interleave(self.n_rep, dim=1)
-            y = F.scaled_dot_product_attention(q, k, v, dropout_p=p, is_causal=True)
+            if mask is None:
+                y = F.scaled_dot_product_attention(q, k, v, dropout_p=p, is_causal=True)
+            else:
+                y = F.scaled_dot_product_attention(q, k, v, attn_mask=mask, dropout_p=p)
         return self.o_proj(y.transpose(1, 2).contiguous().view(b, t, -1))
 
     def _forward_cached(self, x, rope, cache):
@@ -633,7 +656,8 @@ class GroupedQueryAttention(nn.Module):
 
     @torch.no_grad()
     def attention_weights(self, x, rope):
-        """Explicit causal softmax(QK^T/sqrt(d)) per head, shape (B, H, T, T)."""
+        """Explicit causal softmax(QK^T/sqrt(d)) per head, shape (B, H, T, T) (for the
+        viewer; plain causal, without the optional document mask)."""
         q, k, _ = self._qkv(x, rope)
         k = k.repeat_interleave(self.n_rep, dim=1)
         t = q.size(-2)
@@ -647,13 +671,27 @@ class TransformerBlock(nn.Module):
         super().__init__()
         self.attn_norm = RMSNorm(cfg.d_model, cfg.norm_eps)
         self.ffn_norm = RMSNorm(cfg.d_model, cfg.norm_eps)
-        self.attn = GroupedQueryAttention(cfg.d_model, cfg.n_heads, cfg.n_kv_heads, cfg.dropout)
+        self.attn = GroupedQueryAttention(cfg.d_model, cfg.n_heads, cfg.n_kv_heads, cfg.dropout, cfg.qk_norm,
+                                          cfg.norm_eps)
         self.ffn = SwiGLU(cfg.d_model, cfg.ffn_hidden, cfg.dropout)
         self.resid_dropout = nn.Dropout(cfg.dropout)
 
-    def forward(self, x, rope, cache=None):
-        x = x + self.resid_dropout(self.attn(self.attn_norm(x), rope, cache))
+    def forward(self, x, rope, cache=None, mask=None):
+        x = x + self.resid_dropout(self.attn(self.attn_norm(x), rope, cache, mask))
         return x + self.ffn(self.ffn_norm(x))
+
+
+def document_mask(tokens, sep_id):
+    """Boolean (B, 1, T, T) attention mask for the windows `tokens` (B, T): position i
+    may attend to position j when j <= i (causal) and both lie in the same document.
+    Documents are delimited by `sep_id`, the BOS token data_prep puts at the start of
+    every document, so doc_id = cumsum(tokens == sep_id) and the BOS belongs to the
+    document it opens. A window without a separator is one document and the mask is
+    the plain causal one. Memory: B x T x T bytes."""
+    doc = (tokens == sep_id).cumsum(dim=1)
+    same = doc.unsqueeze(-1) == doc.unsqueeze(-2)
+    causal = torch.ones(tokens.size(1), tokens.size(1), dtype=torch.bool, device=tokens.device).tril()
+    return (same & causal).unsqueeze(1)
 
 
 class TinyGPT(nn.Module):
@@ -679,6 +717,11 @@ class TinyGPT(nn.Module):
         # Activation checkpointing: keep only each block's input during the forward pass and recompute the
         # block in the backward pass (about a third more compute, a fraction of the activation memory).
         self.grad_checkpoint = False
+        # Document mask (--doc-mask on): the id of the token that starts every document (BOS); attention then
+        # stays within each document of a window (document_mask). None: plain causal attention over the window.
+        # A training-objective setting kept in train_config, not part of the architecture, so a checkpoint's
+        # weights load whichever way it was trained.
+        self.doc_sep_id = None
 
     @staticmethod
     def _init_weights(module):
@@ -708,13 +751,16 @@ class TinyGPT(nn.Module):
             raise ValueError(f"KV cache full: {self.cache_length(cache)} + {tokens.size(1)} tokens > ctx {self.ctx}")
         x = self.embedding_dropout(self.token_embedding(tokens))
         recompute = self.grad_checkpoint and self.training and torch.is_grad_enabled() and cache is None
+        # the document mask applies to whole windows (training, evaluation, scoring); KV-cached decoding
+        # continues one text and keeps plain causal attention
+        mask = document_mask(tokens, self.doc_sep_id) if self.doc_sep_id is not None and cache is None else None
         for i, block in enumerate(self.blocks):
             if recompute:
-                x = torch.utils.checkpoint.checkpoint(block, x, self.rope, use_reentrant=False)
+                x = torch.utils.checkpoint.checkpoint(block, x, self.rope, None, mask, use_reentrant=False)
             elif cache is not None:
                 x = block(x, self.rope, cache[i])
             else:
-                x = block(x, self.rope)
+                x = block(x, self.rope, None, mask)
         x = self.norm(x)
         return x if return_hidden else self.lm_head(x)
 
@@ -727,6 +773,8 @@ class TinyGPT(nn.Module):
 
 
 LOSS_CHUNK_TOKENS = 4096  # tokens per piece when the loss is computed in pieces
+EMA_DECAY_DEFAULT = 0.999  # per-step decay of the weight average new runs keep (--ema)
+EMA_EVERY = 10  # steps between EMA updates; the per-step decay is compounded over them (0.999^10 ~ 0.990)
 # FP16 updates the GradScaler may skip in a row (overflowing gradients) before the run counts as diverged; a fresh
 # run's scale (65,536) settles within a handful of skips, so 20 in a row means no update is getting through
 MAX_OVERFLOW_SKIPS = 20
@@ -806,6 +854,8 @@ def count_params(cfg):
     d, h = cfg.d_model, cfg.ffn_hidden
     kv = cfg.n_kv_heads * cfg.head_dim
     per_layer = d * d * 2 + d * kv * 2 + 3 * d * h + 2 * d
+    if getattr(cfg, "qk_norm", False):
+        per_layer += 2 * cfg.head_dim  # the query and key norm gains, shared across heads
     embed = cfg.vocab_size * d * (1 if cfg.tie_embeddings else 2)
     return per_layer * cfg.n_layers + d + embed, per_layer * cfg.n_layers + d
 
@@ -1000,6 +1050,86 @@ def cpu_state_dict(model):
             seen[ident] = value.detach().to("cpu", copy=True)
         out[key] = seen[ident]
     return out
+
+
+def resolve_ema(settings, requested, resumed):
+    """The EMA decay this session trains with (0.0 = off), written into the settings.
+    A new run averages with EMA_DECAY_DEFAULT unless --ema says otherwise. A resumed
+    run keeps what its checkpoint says, and a checkpoint from before the key existed
+    says off: a run never gains an average silently. --ema on a resume overrides (a
+    decay starts the average from the current weights, off removes it)."""
+    if resumed:
+        settings.setdefault("ema", 0.0)
+        if requested is not None:
+            settings["ema"] = float(requested)
+    else:
+        settings["ema"] = EMA_DECAY_DEFAULT if requested is None else float(requested)
+    return float(settings["ema"] or 0.0)
+
+
+def ema_init(items):
+    """Fresh fp32 CPU copies of the tensors in `items` ((name, tensor) pairs, a
+    state_dict's or a saved EMA's), tensors that share storage (tied embeddings)
+    staying one tensor, so the average costs 4 bytes per unique parameter."""
+    out, seen = {}, {}
+    for key, value in items:
+        ident = (value.data_ptr(), tuple(value.shape), value.dtype)
+        if ident not in seen:
+            v = value.detach()
+            seen[ident] = v.to(device="cpu", dtype=torch.float32 if v.is_floating_point() else v.dtype, copy=True)
+        out[key] = seen[ident]
+    return out
+
+
+@torch.no_grad()
+def ema_update(ema, model, decay):
+    """ema <- decay x ema + (1 - decay) x w for every unique tensor (torch.lerp with
+    weight 1 - decay), the weights read from the device once per update. Called every
+    EMA_EVERY steps with the per-step decay compounded: d_update = d_step ** EMA_EVERY."""
+    done = set()
+    for key, value in model.state_dict().items():
+        e = ema[key]
+        if id(e) in done:
+            continue
+        done.add(id(e))
+        w = value.detach().to(device="cpu", dtype=e.dtype)
+        if e.is_floating_point():
+            e.lerp_(w, 1.0 - decay)
+        else:
+            e.copy_(w)
+
+
+def ema_weights_for_checkpoint(ema, bf16=False):
+    """The EMA tensors as an inference-only checkpoint stores them: as they are (fp32,
+    tied storage shared), or cast to bfloat16 for --best-bf16."""
+    if not bf16:
+        return ema
+    out, seen = {}, {}
+    for key, value in ema.items():
+        if id(value) not in seen:
+            seen[id(value)] = value.to(torch.bfloat16) if value.is_floating_point() else value
+        out[key] = seen[id(value)]
+    return out
+
+
+class swapped_weights:
+    """with swapped_weights(model, weights): the model carries `weights` (a state_dict
+    such as the EMA) inside the block and its own weights again afterwards, copied in
+    place (load_state_dict), so the parameter tensors the optimizer and a compiled
+    graph hold stay the same objects. The raw weights wait on the CPU meanwhile."""
+
+    def __init__(self, model, weights):
+        self.model, self.weights, self.raw = model, weights, None
+
+    def __enter__(self):
+        self.raw = cpu_state_dict(self.model)
+        self.model.load_state_dict(self.weights)
+        return self.model
+
+    def __exit__(self, *exc):
+        self.model.load_state_dict(self.raw)
+        self.raw = None
+        return False
 
 
 def weights_for_checkpoint(model, device, bf16=False):
@@ -2148,7 +2278,7 @@ def attention_keeps_scores(device):
 
 
 def estimate_train_bytes(cfg, micro_batch, amp=True, checkpointing=False, loss_chunk=0, optimizer="adamw",
-                         device=None):
+                         device=None, doc_mask=False):
     """Training memory: FP32 weights and gradients (4 + 4 bytes per parameter),
     the half-precision weight copies autocast keeps during a step (2), optimizer
     state (AdamW 8; Muon 4 for the block matrices), activations kept for the
@@ -2162,7 +2292,8 @@ def estimate_train_bytes(cfg, micro_batch, amp=True, checkpointing=False, loss_c
     attention_keeps_scores(device) true (MPS), each layer also keeps its causal
     scores: n_heads x ctx x 6 bytes per token (the bf16 cast copy, 2, and the fp32
     softmax output, 4); with checkpointing the `+ t * per_token_layer` term already
-    charges them for the one block being recomputed."""
+    charges them for the one block being recomputed. doc_mask adds the boolean
+    (B, 1, T, T) document mask, one byte per entry."""
     n_total, n_nonembed = count_params(cfg)
     t = micro_batch * cfg.ctx
     b = 2 if amp else 4
@@ -2174,6 +2305,8 @@ def estimate_train_bytes(cfg, micro_batch, amp=True, checkpointing=False, loss_c
         activations = t * cfg.n_layers * 4 * cfg.d_model + t * per_token_layer  # the residual stream is FP32
     else:
         activations = t * cfg.n_layers * per_token_layer
+    if doc_mask:
+        activations += t * cfg.ctx  # B x T x T bytes
     logits = (min(t, loss_chunk) if loss_chunk else t) * cfg.vocab_size * (b + 4 + 4)
     if loss_chunk:
         logits += t * cfg.d_model * (4 + 4)  # the (FP32) hidden states and their gradient, kept whole
@@ -2192,7 +2325,7 @@ def memory_options(checkpointing="auto", loss_chunk=None):
 
 
 def choose_memory_plan(cfg, tokens_per_step, budget_bytes, amp, optimizer="adamw", checkpointing="auto",
-                       loss_chunk=None, micro=None, device=None):
+                       loss_chunk=None, micro=None, device=None, doc_mask=False):
     """(micro-batch, accumulation, activation checkpointing, loss chunk tokens):
     the cheapest memory option that reaches a micro-batch of about 2k tokens
     (min(target, 2048 // ctx) sequences: 2 at ctx 1024, 1 at ctx >= 2048), else
@@ -2208,7 +2341,7 @@ def choose_memory_plan(cfg, tokens_per_step, budget_bytes, amp, optimizer="adamw
     options = memory_options(checkpointing, loss_chunk)
     if device is not None and cfg.ctx >= 2048 and attention_keeps_scores(device):
         options.sort(key=lambda o: (not o[0], o[1] != 0))
-    fits = lambda m, o: estimate_train_bytes(cfg, m, amp, o[0], o[1], optimizer, device) <= budget_bytes  # noqa: E731
+    fits = lambda m, o: estimate_train_bytes(cfg, m, amp, o[0], o[1], optimizer, device, doc_mask) <= budget_bytes  # noqa: E731
     if micro is not None:
         chosen = next((o for o in options if fits(micro, o)), options[-1])
         # rounded down like split_batch: never more tokens per step than asked for (the caller may round otherwise)
@@ -2260,6 +2393,7 @@ def plan_run(args, manifest, device, amp_dtype, token_cap=None):
     budget_bytes, budget_text = device_memory_budget(device)
     r = args.tokens_per_param
     max_epochs = args.max_epochs
+    doc_mask = getattr(args, "doc_mask", None) == "on"
 
     # --- training-token budget D ---
     # D is fixed by the data (or by an explicit token count). --steps alone decides
@@ -2304,6 +2438,7 @@ def plan_run(args, manifest, device, amp_dtype, token_cap=None):
         # the RoPE base follows the context unless given (10,000 up to ctx 2048, then ctx^2)
         cfg.rope_base = args.rope_base if args.rope_base else default_rope_base(cfg.ctx)
         cfg.tie_embeddings = getattr(args, "tie_embeddings", "on") != "off"
+        cfg.qk_norm = getattr(args, "qk_norm", None) != "off"  # new runs get QK-norm unless told otherwise
         cfg.validate()
         return cfg
 
@@ -2321,18 +2456,18 @@ def plan_run(args, manifest, device, amp_dtype, token_cap=None):
         if args.batch_size:
             micro, accum, ck, lc = choose_memory_plan(cfg, tps, budget_bytes, amp, opt_kind,
                                                       args.activation_checkpointing, args.loss_chunk_tokens,
-                                                      micro=args.batch_size, device=device)
+                                                      micro=args.batch_size, device=device, doc_mask=doc_mask)
             if args.steps:  # steps fixed: rounding up would train past the token budget (and the epoch cap)
                 accum = args.grad_accum or max(1, tps // (micro * cfg.ctx))
             else:  # steps = budget // tokens per step below, so the nearest accumulation stays within the budget
                 accum = args.grad_accum or max(1, round(tps / (micro * cfg.ctx)))
-            if estimate_train_bytes(cfg, micro, amp, ck, lc, opt_kind, device) > budget_bytes:
+            if estimate_train_bytes(cfg, micro, amp, ck, lc, opt_kind, device, doc_mask) > budget_bytes:
                 lines.append(f"WARNING: batch {micro} x ctx {cfg.ctx} may not fit ({budget_text}); an "
                              "out-of-memory error at step 1 switches on memory savings or halves the batch.")
             return micro, accum, ck, lc
         micro, accum, ck, lc = choose_memory_plan(cfg, tps, budget_bytes, amp, opt_kind,
                                                   args.activation_checkpointing, args.loss_chunk_tokens,
-                                                  device=device)
+                                                  device=device, doc_mask=doc_mask)
         return micro, (args.grad_accum or accum), ck, lc
 
     if explicit_shape:
@@ -2367,7 +2502,10 @@ def plan_run(args, manifest, device, amp_dtype, token_cap=None):
     # factor follows the batch the run will use (micro x accumulation x ctx: --batch-size and --grad-accum may fix it
     # far from the planner's target), and its power-of-two rounding leaves accumulation rounding alone
     lr_factor = 1.0 if args.lr else lr_batch_factor(n_total, tokens_per_step)
-    lr = args.lr or heuristic_lr(n_total) * lr_factor
+    # --lr-scale: the sweep knob on the heuristic rate (LR_TABLE itself changes only once a sweep has shown a factor
+    # that two sizes agree on; keep lr x weight_decay constant when it does)
+    lr_scale = float(getattr(args, "lr_scale", 1.0) or 1.0)
+    lr = args.lr or heuristic_lr(n_total) * lr_factor * lr_scale
     min_lr_ratio = resolve_min_lr_ratio(args.min_lr_ratio, args.schedule)
     warmup = args.warmup_steps if args.warmup_steps is not None else int(min(max(round(0.02 * steps), 50), 2000, max(1, steps // 10)))
     mix_alpha = getattr(args, "mix_alpha", None)
@@ -2382,13 +2520,16 @@ def plan_run(args, manifest, device, amp_dtype, token_cap=None):
         "decay_frac": args.decay_frac, "decay_shape": args.decay_shape, "weight_decay": args.weight_decay,
         "betas": [args.beta1, args.beta2], "grad_clip": args.grad_clip, "planned_train_tokens": train_tokens,
         "optimizer": args.optimizer or "adamw", "activation_checkpointing": ckpt, "loss_chunk_tokens": chunk,
+        "lr_scale": lr_scale, "doc_mask": doc_mask,
     }
+    resolve_ema(settings, getattr(args, "ema", None), resumed=False)
     lines += [
         f"unique training tokens U = {unique:,} ({', '.join(f'{k} {v:,}' for k, v in train_by_source.items())}); "
         f"vocabulary {vocab:,}; {budget_text}",
         f"token budget D = {planned:,} ({why}); shape: {shape_why}",
         f"model: d_model {cfg.d_model}, layers {cfg.n_layers}, heads {cfg.n_heads}/{cfg.n_kv_heads} kv "
-        f"(head {cfg.head_dim}), SwiGLU {cfg.ffn_hidden}, ctx {cfg.ctx}, RoPE base {cfg.rope_base:,.0f}"
+        f"(head {cfg.head_dim}), SwiGLU {cfg.ffn_hidden}{', QK-norm' if cfg.qk_norm else ''}, ctx {cfg.ctx}, "
+        f"RoPE base {cfg.rope_base:,.0f}"
         f"{'' if args.rope_base else ' (default for this ctx)'}; parameters {n_total:,} total, "
         f"{n_nonembed:,} excluding the ({'tied' if cfg.tie_embeddings else 'untied'}) embedding",
         f"ctx {cfg.ctx} ({'--ctx' if args.ctx else f'default for d_model {cfg.d_model}'}): attention "
@@ -2401,7 +2542,8 @@ def plan_run(args, manifest, device, amp_dtype, token_cap=None):
         f"learning rate {lr:.2e} peak ("
         + ("set" if args.lr else f"heuristic for {n_total / 1e6:,.1f}M parameters x batch factor {lr_factor:.2f}"
            + ("" if lr_factor == 1.0 else f" for {tokens_per_step:,} tokens/step against the table's "
-                                          f"{tokens_per_step_legacy(n_total):,}"))
+                                          f"{tokens_per_step_legacy(n_total):,}")
+           + ("" if lr_scale == 1.0 else f" x --lr-scale {lr_scale:g}"))
         + f"), min {lr * min_lr_ratio:.2e} ({min_lr_ratio:g} of peak"
         + ("" if args.min_lr_ratio is not None else
            f", default for {args.schedule}: {'decay to zero' if min_lr_ratio == 0 else 'one tenth'}") + "); "
@@ -2417,8 +2559,13 @@ def plan_run(args, manifest, device, amp_dtype, token_cap=None):
         "memory: " + ("activation checkpointing on (blocks recomputed in the backward pass)" if ckpt
                       else "activation checkpointing off") + "; "
         + (f"loss computed {chunk:,} tokens at a time" if chunk else "loss computed on the whole micro-batch")
-        + f" (estimated {estimate_train_bytes(cfg, micro, amp_dtype is not None, ckpt, chunk, args.optimizer or 'adamw', device) / 2 ** 30:.1f} GiB "
+        + f" (estimated {estimate_train_bytes(cfg, micro, amp_dtype is not None, ckpt, chunk, args.optimizer or 'adamw', device, doc_mask) / 2 ** 30:.1f} GiB "
         f"of {budget_text})",
+        "weights: " + (f"EMA with decay {settings['ema']:g} per step (updated every {EMA_EVERY} steps), scored beside "
+                       "the raw weights at each evaluation; the better of the two is saved as the best model"
+                       if settings["ema"] else "no EMA (--ema off)")
+        + ("; document mask on: attention stays within each document of a window (B x T x T bytes of mask)"
+           if doc_mask else ""),
     ]
     if args.steps and train_tokens > max_epochs * unique:
         lines.append(f"note: --steps {args.steps:,} trains {epochs:.2f} epochs, more than --max-epochs {max_epochs:g}.")
@@ -2601,7 +2748,7 @@ def plan_with_time_budget(args, manifest, device, amp_dtype):
         tokens = min(fit_tokens, st["planned_train_tokens"])
         n = count_params(c)[0]
         est = estimate_train_bytes(c, st["micro_batch"], amp_dtype is not None, st["activation_checkpointing"],
-                                   st["loss_chunk_tokens"], st["optimizer"], device)
+                                   st["loss_chunk_tokens"], st["optimizer"], device, st.get("doc_mask", False))
         notes.append(f"time budget {hours:g} h: {n / 1e6:,.1f}M parameters, {sec:.2f} s/step expected over hours "
                      f"({raw:.2f} measured in a short test" + (f", {measured:.2f} compiled" if compiled else "")
                      + f"; {st['tokens_per_step']:,} tokens/step) -> {fit_tokens:,} tokens fit in time; memory: "
@@ -2784,6 +2931,10 @@ def parse_args(argv=None):
     g.add_argument("--tie-embeddings", choices=("on", "off"), default="on",
                    help="share the input embedding with the output layer (default on, as Llama 3.2, Qwen2.5 and "
                         "Gemma do at every size); off trains a separate output matrix")
+    g.add_argument("--qk-norm", choices=("on", "off"),
+                   help="RMSNorm over each query and key head before RoPE (QK-norm, as in Gemma 3, Qwen3 and OLMo 2; "
+                        "keeps high learning rates stable): default on for new runs; a checkpoint keeps its own "
+                        "setting on --resume and --init-from")
     g.add_argument("--dropout", type=float)
     g = p.add_argument_group("budget")
     g.add_argument("--steps", type=int, help="optimizer steps (on --resume: new total)")
@@ -2799,6 +2950,9 @@ def parse_args(argv=None):
     g.add_argument("--grad-accum", type=int, help="micro-batches per optimizer step")
     g.add_argument("--tokens-per-step", type=int)
     g.add_argument("--lr", type=float, help="peak learning rate")
+    g.add_argument("--lr-scale", type=float, default=1.0,
+                   help="multiply the planner's heuristic peak learning rate by this (for LR sweeps; no effect with "
+                        "--lr; ignored on --resume)")
     g.add_argument("--min-lr-ratio", type=float,
                    help="learning rate at the end of the run as a share of the peak (default: 0 for wsd, 0.1 for "
                         "cosine); on --resume it may still be changed before the decay phase begins")
@@ -2824,6 +2978,14 @@ def parse_args(argv=None):
                         "update size); resumed runs keep their optimizer")
     g.add_argument("--z-loss", type=float, default=1e-4,
                    help="weight of the z-loss stability term (0 disables; resumed runs keep their setting)")
+    g.add_argument("--ema", metavar="DECAY|off",
+                   help="exponential moving average of the weights (fp32, on the CPU), scored beside the raw weights "
+                        "at each evaluation and saved as <name>_best.pt when it is the better of the two (default "
+                        "0.999 for new runs; a resumed run keeps its setting unless this is given: a decay starts an "
+                        "average from the current weights, off removes it)")
+    g.add_argument("--doc-mask", choices=("on", "off"),
+                   help="confine attention to each document of a training window (documents start with BOS): default "
+                        "off; it is the training objective, so fixed for a run and ignored on --resume")
     g = p.add_argument_group("evaluation and logging")
     g.add_argument("--eval-every", type=int, default=200, help="steps between validation + metrics line")
     g.add_argument("--eval-tokens", type=int,
@@ -2899,12 +3061,22 @@ def validate_args(args, parser):
                          ("weight_decay", 0.0, 1.0), ("beta1", 0.0, 0.9999), ("beta2", 0.0, 0.99999),
                          ("grad_clip", 0.0, 1e3), ("dropout", 0.0, 0.9), ("top_p", 0.0, 1.0),
                          ("tokens_per_param", 0.1, 1e6), ("max_epochs", 0.01, 1e4), ("temperature", 0.0, 10.0),
-                         ("mix_alpha", 0.0, 2.0)):
+                         ("mix_alpha", 0.0, 2.0), ("lr_scale", 0.01, 100.0)):
         value = getattr(args, name)
         if value is not None and not lo <= value <= hi:
             parser.error(f"--{name.replace('_', '-')} must be between {lo} and {hi}")
     if not 0 < args.watermark_gamma < 1:
         parser.error("--watermark-gamma must be between 0 and 1")
+    if args.ema is not None:  # "off" or a per-step decay; None = the default for the run (see resolve_ema)
+        if str(args.ema).lower() == "off":
+            args.ema = 0.0
+        else:
+            try:
+                args.ema = float(args.ema)
+            except ValueError:
+                parser.error("--ema must be a decay such as 0.999, or off")
+            if not 0.5 <= args.ema <= 0.99999:
+                parser.error("--ema must be a decay between 0.5 and 0.99999, or off")
     if args.time_budget_hours is not None and args.steps is not None:
         parser.error("give either --steps or --time-budget-hours (the budget chooses the number of steps)")
     if args.time_budget_hours is not None and not 0.01 <= args.time_budget_hours <= 24 * 90:
@@ -3049,14 +3221,19 @@ def cmd_export(args):
     tensors = {k: v for k, v in model.state_dict().items() if not (cfg.tie_embeddings and k == "lm_head.weight")}
     os.makedirs(out, exist_ok=True)
     write_safetensors(tensors, os.path.join(out, "model.safetensors"),
-                      {"format": "tinyGPT", "tie_embeddings": cfg.tie_embeddings})
+                      {"format": "tinyGPT", "tie_embeddings": cfg.tie_embeddings, "qk_norm": cfg.qk_norm})
     with open(os.path.join(out, "tokenizer.model"), "wb") as handle:
         handle.write(tok.proto)
     metrics = obj.get("metrics", {}) if isinstance(obj.get("metrics"), dict) else {}
     config = {"architecture": "tinyGPT decoder-only Transformer: interleaved-pair RoPE, RMSNorm, SwiGLU, "
-                              "grouped-query attention, tied input/output embeddings, no biases",
+                              "grouped-query attention"
+                              + (", QK-norm (RMSNorm with a shared gain on each query and key head, before RoPE)"
+                                 if cfg.qk_norm else "")
+                              + (", tied input/output embeddings" if cfg.tie_embeddings else ", untied output layer")
+                              + ", no biases",
               "model_config": dataclasses.asdict(cfg), "tokenizer": {**tok.meta(), "file": "tokenizer.model"},
               "source_checkpoint": _home_short(os.path.abspath(path)), "step": obj.get("step"),
+              "weights": obj.get("weights", "raw"),  # "ema": the averaged weights a best file may hold
               "metrics": {"best_val": metrics.get("best_val", obj.get("best_val")),
                           "best_step": metrics.get("best_step", obj.get("best_val_step"))},
               "exported": now_iso()}
@@ -3376,6 +3553,9 @@ def _train(args):
         # memory options do not change the mathematics, so a resumed run may switch them (e.g. on another machine)
         settings.setdefault("activation_checkpointing", False)
         settings.setdefault("loss_chunk_tokens", 0)
+        settings.setdefault("lr_scale", 1.0)  # runs planned before --lr-scale used the table rate as it stands
+        settings.setdefault("doc_mask", False)  # runs from before the mask attended across documents
+        resolve_ema(settings, args.ema, resumed=True)  # off unless the checkpoint or --ema says otherwise
         if args.activation_checkpointing != "auto":
             settings["activation_checkpointing"] = args.activation_checkpointing == "on"
         if args.loss_chunk_tokens is not None:
@@ -3406,6 +3586,12 @@ def _train(args):
                    if getattr(args, k) is not None]
         if getattr(args, "tie_embeddings", "on") == "off" and cfg.tie_embeddings:
             ignored.append("--tie-embeddings off")
+        if args.qk_norm is not None and (args.qk_norm == "on") != cfg.qk_norm:
+            ignored.append(f"--qk-norm {args.qk_norm}")
+        if args.lr_scale != 1.0:
+            ignored.append(f"--lr-scale {args.lr_scale:g}")
+        if args.doc_mask is not None and (args.doc_mask == "on") != bool(settings["doc_mask"]):
+            ignored.append(f"--doc-mask {args.doc_mask} (the objective is fixed for a run)")
         if ignored:
             print(f"Note: {', '.join(ignored)} ignored on --resume (the checkpoint's settings are kept).")
         if args.steps and args.steps != settings["steps"]:
@@ -3442,6 +3628,9 @@ def _train(args):
             plan_lines.append(f"model was trained at ctx {stored_ctx}; continuing at {cfg.ctx} (RoPE tables rebuilt "
                               "for the new length, weights unchanged)")
         cfg.dropout = args.dropout if args.dropout is not None else 0.0
+        if args.qk_norm is not None and (args.qk_norm == "on") != cfg.qk_norm:
+            plan_lines.append(f"--qk-norm {args.qk_norm} ignored: the architecture is the checkpoint's (QK-norm "
+                              f"{'on' if cfg.qk_norm else 'off'}); start a fresh run to change it")
         plan_lines.append(f"architecture taken from --init-from {args.init_from}; dropout {cfg.dropout} "
                           f"({'set' if args.dropout is not None else 'default 0 when continuing from weights'}, "
                           f"not the planned value above)")
@@ -3482,6 +3671,11 @@ def _train(args):
     settings["probes_sha"] = probes_sha
     settings["mix"] = mix_text
     settings["mix_alpha"] = mix_alpha
+    ema_decay = float(settings.get("ema") or 0.0)
+    if settings.get("doc_mask") and tok.bos_id < 0:
+        print("WARNING: --doc-mask needs a tokenizer with a BOS token (documents are delimited by it); this one has "
+              "none, so attention spans the whole window.")
+        settings["doc_mask"] = False
 
     # ---------------- model & optimizer ----------------
     torch.manual_seed(args.seed)  # planning and attention timing must not change the initial weights
@@ -3499,6 +3693,7 @@ def _train(args):
                              f"unexpected {unexpected[:3]}).")
     opt, opt_name, param_names, opt_note = build_optimizer(model, settings, device)
     model.grad_checkpoint = bool(settings.get("activation_checkpointing"))
+    model.doc_sep_id = tok.bos_id if settings.get("doc_mask") else None
     loss_chunk = int(settings.get("loss_chunk_tokens") or 0)
     scaler = torch.amp.GradScaler(device.type) if need_scaler else None
     schedule = LRSchedule(settings["schedule"], total_steps, settings["lr"], settings["min_lr"],
@@ -3613,6 +3808,22 @@ def _train(args):
         if start_step >= total_steps:
             raise SystemExit(f"--init-from checkpoint is at step {start_step:,}; set --steps above that.")
 
+    # The EMA of the weights (fp32 on the CPU, never trained, never in the optimizer): the saved average when the
+    # training checkpoint has one for exactly these tensors, else a fresh one starting from the current weights (a
+    # new run, --init-from, a resume from the best file, or --ema given on a run that had none).
+    ema, ema_note = None, "no EMA of the weights"
+    if ema_decay:
+        saved = resume_obj.get("ema") if resume_obj is not None else None
+        state = saved.get("state") if isinstance(saved, dict) else None
+        if state and set(state) == set(model.state_dict()):
+            ema = ema_init(state.items())
+            ema_note = f"EMA of the weights restored from the checkpoint (decay {ema_decay:g} per step)"
+        else:
+            ema = ema_init(model.state_dict().items())
+            ema_note = (f"EMA of the weights started from the step {start_step:,} weights (decay {ema_decay:g} per "
+                        "step)" if start_step else f"EMA of the weights (decay {ema_decay:g} per step)")
+        state = saved = None
+
     # Everything the checkpoints held has been copied into the model, optimizer, scaler, RNG and sampler: drop
     # them now (1.8 GB of RAM for the 216M run) instead of keeping them alive for the whole session.
     resumed = resume_obj is not None
@@ -3646,6 +3857,12 @@ def _train(args):
     print(f"parameters: {n_total:,} total, {n_nonembed:,} non-embedding")
     print("train: " + json.dumps({k: v for k, v in settings.items()}))
     print(f"schedule: {schedule.describe()}")
+    print(f"weights: {ema_note}"
+          + (f"; updated every {EMA_EVERY} steps with decay {ema_decay ** EMA_EVERY:.4f} per update, scored beside "
+             "the raw weights at each evaluation while the learning rate is above 5% of peak; the better of the two "
+             f"is saved as {os.path.basename(best_path)} (its 'weights' field says which)" if ema is not None else "")
+          + ("; document mask on: attention stays within each document of a window" if model.doc_sep_id is not None
+             else ""))
     for line in plan_lines:
         print(f"plan: {line}")
     train_tokens_total = total_steps * settings["tokens_per_step"]
@@ -3673,7 +3890,8 @@ def _train(args):
 
     sample_gen_seed = args.seed + 7
 
-    def payload(step, inference_only):
+    def payload(step, inference_only, weights="raw"):
+        """The checkpoint dict: weights "raw" (the trained weights) or "ema" (the average, for a best file)."""
         base = {
             "format": CHECKPOINT_FORMAT, "format_version": FORMAT_VERSION,
             "checkpoint_type": "inference" if inference_only else "training",
@@ -3688,8 +3906,14 @@ def _train(args):
             "train_seconds": train_seconds, "run_seconds": run_seconds(), "energy": meter.state(),
             "metrics": {"best_val": best_val, "best_step": best_step, "last_eval": last_eval,
                         "history": history},
+            "weights": weights,
         }
+        if weights == "ema":
+            base["model"] = ema_weights_for_checkpoint(ema, bf16=inference_only and args.best_bf16)
+            base["ema_decay"] = ema_decay
         if not inference_only:
+            if ema is not None:  # optional key: readers use .get("ema")
+                base["ema"] = {"decay": ema_decay, "every": EMA_EVERY, "state": ema}
             base.update({
                 "optimizer": optimizer_state_for_checkpoint(opt, device),
                 "optimizer_param_names": [n for g in param_names for n in g],
@@ -3774,8 +3998,8 @@ def _train(args):
     micro_floor = min(max(1, 2048 // cfg.ctx), micro)
     fallbacks = {}  # file atomic_save wrote instead of a locked checkpoint in this session (deleted once superseded)
 
-    def save(path, inference_only, at_step):
-        written = atomic_save(payload(at_step, inference_only), path)
+    def save(path, inference_only, at_step, weights="raw"):
+        written = atomic_save(payload(at_step, inference_only, weights), path)
         old = fallbacks.pop(path, None)
         if old and old != written:
             try:
@@ -3972,6 +4196,11 @@ def _train(args):
                 continue
             first_step = False
             oom_retries = 0
+            if ema is not None and step % EMA_EVERY == 0:
+                with held:  # the average is updated whole or not at all
+                    # ema <- d^k ema + (1 - d^k) w with k = EMA_EVERY: the per-step decay compounded over the steps
+                    # between updates (0.999^10 ~ 0.990, a horizon of about 1,000 steps)
+                    ema_update(ema, model, ema_decay ** EMA_EVERY)
             held.deliver()  # a Ctrl+C held during the update: the step is complete, so it is saved as done
             peak_mem = peak_memory_bytes(device, peak_mem)
 
@@ -4016,6 +4245,12 @@ def _train(args):
                 tok_s = interval_tokens / max(interval_train_time, 1e-9)
                 ev = evaluate_retrying()
                 ev["step"] = step
+                # the EMA weights are scored as well (one more evaluation) while the learning rate is above 5 % of
+                # the peak; in the tail of the decay the raw weights settle and the two agree, so that pass is saved
+                ev_ema = None
+                if ema is not None and lr >= 0.05 * float(settings["lr"]):
+                    with swapped_weights(model, ema):
+                        ev_ema = evaluate_retrying()
                 probe_acc, probe_by_category, probe_floor_acc = None, None, None
                 if probes:
                     probe_acc, probe_results = score_probes(model, tok, probes, device, amp_dtype)
@@ -4023,9 +4258,13 @@ def _train(args):
                     probe_by_category = {k: round(v["accuracy"], 4) for k, v in probe_summary(probe_results).items()}
                     ev["probes"] = probe_report(probe_results, probes_sha)  # kept in the checkpoint for view_pt
                 prev_best, prev_step = best_val, best_step
-                is_best = ev["loss"] < best_val
+                # the best model is whichever weights score lower, the raw ones or the average; the best file
+                # records which it holds ("weights": "raw" | "ema")
+                best_source = "ema" if ev_ema is not None and ev_ema["loss"] < ev["loss"] else "raw"
+                candidate = ev_ema["loss"] if best_source == "ema" else ev["loss"]
+                is_best = candidate < best_val
                 if is_best:
-                    best_val, best_step = ev["loss"], step
+                    best_val, best_step = candidate, step
                 last_eval = {k: v for k, v in ev.items()}
                 elapsed = time.perf_counter() - t_run
                 per_step = (time.perf_counter() - interval_wall) / max(step - interval_start_step, 1)
@@ -4042,7 +4281,9 @@ def _train(args):
                          "grad_norm": float(last_gnorm), "peak_mem_gib": round(peak_mem / 2 ** 30, 3),
                          "energy_wh": meter.snapshot(),
                          "co2e_g": round(meter.co2e_g(), 1), "cost_gbp": round(meter.cost_gbp() or 0.0, 4),
-                         "is_best": is_best, "time": now_iso()}
+                         "is_best": is_best, "best_weights": best_source if is_best else None,
+                         "val_ema": ev_ema["loss"] if ev_ema is not None else None,
+                         "bpb_ema": ev_ema["bpb"] if ev_ema is not None else None, "time": now_iso()}
                 history.append(entry)
                 # the interval is recorded: zero its sums now, so a Ctrl+C during the best save, the print or the
                 # sample does not fold these steps into the next row as well
@@ -4050,7 +4291,7 @@ def _train(args):
                 interval_micro, interval_tokens, interval_train_time = 0, 0, 0.0
                 if is_best:  # before printing or sampling, so Ctrl+C can never leave an announced best unsaved
                     try:
-                        save(best_path, True, step)
+                        save(best_path, True, step, best_source)
                     except BaseException:
                         # not written (Ctrl+C, full disk): record no best that no file holds
                         best_val, best_step, entry["is_best"] = prev_best, prev_step, False
@@ -4064,12 +4305,14 @@ def _train(args):
                 write_metrics(entry)
                 if is_best:
                     status_text = (f"NEW BEST (prev {prev_best:.3f} @{prev_step})" if prev_step is not None
-                                   else "NEW BEST (first evaluation)")
+                                   else "NEW BEST (first evaluation)") + (" (ema weights)" if best_source == "ema"
+                                                                           else "")
                 else:
                     status_text = f"best {best_val:.3f} @{best_step}"
                 print(f"step {step:>6}/{total_steps} | train {train_loss:.3f} | val {ev['loss']:.3f} @{step}"
                       + _per_source(ev)
                       + (f" | val(mix) {ev['loss_mix']:.3f}" if ev.get("loss_mix") is not None else "")
+                      + (f" | val(ema) {ev_ema['loss']:.3f}" if ev_ema is not None else "")
                       + f" | ppl {entry['ppl']:,.2f} | bpb {ev['bpb']:.3f} | lr {lr:.2e} | {tok_s:,.0f} tok/s | "
                       f"{meter.short()} | {elapsed_text()} | ETA {fmt_dur(eta)} | {status_text}")
                 last_print = time.perf_counter()
@@ -4172,7 +4415,8 @@ def _train(args):
             "decay_frac": settings["decay_frac"] if settings["schedule"] == "wsd" else None,
             "decay_shape": settings["decay_shape"] if settings["schedule"] == "wsd" else None,
             "weight_decay": settings["weight_decay"], "betas": "/".join(f"{b:g}" for b in settings["betas"]),
-            "grad_clip": settings["grad_clip"], "z_loss": z_loss, "dropout": cfg.dropout, "precision": amp_name,
+            "grad_clip": settings["grad_clip"], "z_loss": z_loss, "ema": f"{ema_decay:g}" if ema_decay else "off",
+            "lr_scale": f"{float(settings.get('lr_scale', 1.0)):g}", "dropout": cfg.dropout, "precision": amp_name,
             "dataset": os.path.basename(os.path.normpath(dataset_dir)),
             "best_val": f"{best_val:.4f}" if math.isfinite(best_val) else None, "best_step": best_step,
             "last_val": f"{last_eval['loss']:.4f}" if last_eval else None,
@@ -4211,7 +4455,7 @@ def energy_columns(meter, device, note=None):
 EXPERIMENT_COLUMNS = ["time", "event", "name", "status", "step", "total_steps", "params", "non_embedding_params",
                       "d_model", "layers", "heads", "kv_heads", "ctx", "vocab", "tokens_seen", "tokens_per_step",
                       "micro_batch", "grad_accum", "activation_checkpointing", "loss_chunk_tokens", "optimizer", "lr",
-                      "min_lr", "schedule", "warmup_steps", "decay_frac", "decay_shape", "weight_decay", "betas", "grad_clip", "z_loss", "dropout",
+                      "lr_scale", "min_lr", "schedule", "warmup_steps", "decay_frac", "decay_shape", "weight_decay", "betas", "grad_clip", "z_loss", "ema", "dropout",
                       "precision", "dataset", "best_val", "best_step", "last_val", "last_val_mix", "last_bpb", "last_ppl",
                       "benchmark_accuracy", "benchmark_floor", "benchmark_items", "tok_s", "peak_mem_gib", "device",
                       "train_hours",
@@ -4350,6 +4594,7 @@ def _args_with_shape(args, cfg):
     clone.d_model, clone.layers, clone.heads, clone.kv_heads = cfg.d_model, cfg.n_layers, cfg.n_heads, cfg.n_kv_heads
     clone.ctx, clone.ffn_hidden, clone.rope_base = cfg.ctx, cfg.ffn_hidden, cfg.rope_base
     clone.tie_embeddings = "on" if cfg.tie_embeddings else "off"  # the plan counts and labels the embedding as built
+    clone.qk_norm = "on" if getattr(cfg, "qk_norm", False) else "off"
     return clone
 
 

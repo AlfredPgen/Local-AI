@@ -169,7 +169,8 @@ class Checkpoint:
             return "character-level tiny_gpt (v1)" if "tok.weight" in self.weights else "generic PyTorch weights"
         gqa = f"GQA {self.cfg.n_heads}/{self.cfg.n_kv_heads}" if self.cfg.n_kv_heads < self.cfg.n_heads else "MHA"
         tied = "tied embeddings" if self.cfg.tie_embeddings else "untied embeddings"
-        return f"decoder-only Transformer: RoPE, RMSNorm, SwiGLU, {gqa}, {tied}"
+        qk = ", QK-norm" if getattr(self.cfg, "qk_norm", False) else ""
+        return f"decoder-only Transformer: RoPE, RMSNorm, SwiGLU, {gqa}{qk}, {tied}"
 
     def pieces(self):
         if self.tok is not None:
@@ -282,7 +283,11 @@ def print_summary(ck):
     o = ck.obj if isinstance(ck.obj, dict) else {}
     size = (sum(os.path.getsize(os.path.join(ck.path, f)) for f in os.listdir(ck.path))
             if os.path.isdir(ck.path) else os.path.getsize(ck.path))
-    print(f"{ck.path}: {size / 1e6:.2f} MB | format {family_label(ck.family)} | type {ck.kind}"
+    # a best file may hold the EMA of the weights instead of the trained ones (training keeps both and saves the
+    # better); its "weights" field says which, so the label follows it everywhere the loss is quoted
+    ema_note = (f" (EMA weights, decay {o.get('ema_decay'):g})" if o.get("weights") == "ema" and o.get("ema_decay")
+                else " (EMA weights)" if o.get("weights") == "ema" else "")
+    print(f"{ck.path}: {size / 1e6:.2f} MB | format {family_label(ck.family)} | type {ck.kind}{ema_note}"
           + (f" | created {o['created']}" if o.get("created") else ""))
     print(f"model: {ck.model_name}")
     for problem in ck.problems:
@@ -332,8 +337,8 @@ def print_summary(ck):
               + (f" | entropy {last['entropy']:.3f} nats | mean confidence {last['confidence']:.3f} | top-1 "
                  f"accuracy {last['top1']:.3f} | ECE {last['ece']:.3f}" if "entropy" in last else ""))
     if m.get("best_val") is not None and math.isfinite(float(m["best_val"])):
-        print(f"best validation{base_note}: loss {float(m['best_val']):.4f} at step {m.get('best_step')} | "
-              f"perplexity {math.exp(min(float(m['best_val']), 50)):,.2f}")
+        print(f"best{' (ema)' if ema_note else ''} validation{base_note}: loss {float(m['best_val']):.4f} at step "
+              f"{m.get('best_step')} | perplexity {math.exp(min(float(m['best_val']), 50)):,.2f}")
     if ck.family.startswith("legacy"):
         print("  note: v3 logs printed the latest validation value at every report step, so values between "
               "evaluations (every --eval-every steps, default 1000) were not fresh measurements.")
