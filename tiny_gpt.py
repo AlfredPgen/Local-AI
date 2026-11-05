@@ -5333,6 +5333,10 @@ def cmd_plan(args):
     manifest = data_prep.read_manifest(dataset_dir)
     device = select_device(args.device)
     amp_dtype, amp_name, _ = choose_precision(device, args.precision)
+    if args.resume or args.init_from:
+        # the plan never opens a checkpoint (so it cannot change one); a resumed run keeps its own settings
+        print(f"Note: --plan describes a new run on this dataset; {'--resume' if args.resume else '--init-from'} is "
+              "ignored here (a resumed run keeps its checkpoint's settings, printed in its run header).")
     cfg, settings, lines = plan_with_time_budget(args, manifest, device, amp_dtype)
     print(f"\nPlan for {dataset_dir} on {device_label(device)} ({amp_name}) at {now_iso()}")
     for line in lines:
