@@ -2587,7 +2587,7 @@ def _prepare(args, state=None):
     else:
         vocab = args.vocab_size or auto_vocab_size(train_chars_total)
         tok, tokenizer_info = _train_tokenizer(spool2, docs, split_of, sources, vocab, args, work)
-    if st["stage"] != "tokenizer":
+    if st["stage"] != "tokenizer" or not os.path.isfile(tok_path):  # the file is part of the dataset: always written
         with open(tok_path, "wb") as handle:
             handle.write(tok.proto)
         st["stage"], st["tokenizer_info"], st["tokenizer_encode_mode"] = "tokenizer", tokenizer_info, tok.encode_mode
@@ -3082,10 +3082,13 @@ def _spool_line_count(path):
     """(lines, ends_with_newline) of a spool, read through once (a check that a
     kept spool is complete before a build resumes from it)."""
     lines, last = 0, ""
-    with _open_spool(path, "r") as handle:
-        for line in handle:
-            lines += 1
-            last = line
+    try:
+        with _open_spool(path, "r") as handle:
+            for line in handle:
+                lines += 1
+                last = line
+    except (OSError, ValueError):  # a cut zstd stream ("Truncated compressed stream"): the spool is incomplete
+        return lines, False
     return lines, last.endswith("\n")
 
 

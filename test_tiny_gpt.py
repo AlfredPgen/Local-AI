@@ -345,6 +345,31 @@ class TestPipeline(unittest.TestCase):
                 open(os.path.join(broken, "docs.tsv"), encoding="utf-8") as f2:
             self.assertEqual(f1.read(), f2.read())
         self.assertFalse(os.path.exists(work), "work files removed after the resumed build")
+        # a failure in pass 3 (state 'tokenizer', tokenizer.model written); the file lost too: --resume still
+        # produces a complete dataset, with the tokenizer file (the manifest names it)
+        later = os.path.join(self.tmp, "resume_pass3")
+        real_split, calls = data_prep.split_long_text, []
+
+        def fail_in_pass3(text, max_chars):
+            calls.append(1)
+            if len(calls) == 3:
+                raise OSError("disk full in pass 3 (simulated)")
+            return real_split(text, max_chars)
+
+        data_prep.split_long_text = fail_in_pass3
+        try:
+            with redirect_stdout(io.StringIO()), self.assertRaises(OSError):
+                data_prep.prepare(["--out", later] + base)
+        finally:
+            data_prep.split_long_text = real_split
+        self.assertEqual(data_prep._load_state(os.path.join(later, "_work", data_prep.STATE_NAME))["stage"],
+                         "tokenizer")
+        os.remove(os.path.join(later, "tokenizer.model"))
+        with redirect_stdout(io.StringIO()):
+            data_prep.prepare(["--out", later, "--resume", "--threads", "2"])
+        self.assertTrue(os.path.isfile(os.path.join(later, "tokenizer.model")))
+        self.assertEqual(data_prep.read_manifest(later)["fingerprint"], a["fingerprint"])
+        data_prep.open_token_files(later, verify=True)
 
     def test_split_by_group_no_leakage(self):
         groups = {}
@@ -793,7 +818,7 @@ class TestPipeline(unittest.TestCase):
         self.assertEqual(m["sources"]["web"]["kept_docs"], 4)
         with open(os.path.join(out, "docs.tsv"), encoding="utf-8") as f:
             md_ids = sorted(line.split("\t")[1] for line in f if line.startswith("md\t"))
-        self.assertEqual(md_ids, [os.path.join("fold_a", "same.md"), os.path.join("fold_b", "same.md")])
+        self.assertEqual(md_ids, ["fold_a/same.md", "fold_b/same.md"], "ids use / on every system")
         tok = data_prep.load_tokenizer_from_any(self.ds)
         size, marked, line_break = tok.byte_tables()
         _, arrays = data_prep.open_token_files(self.ds)
@@ -1363,12 +1388,18 @@ class TestPipeline(unittest.TestCase):
         self.assertEqual(code, 0, out_o)
         self.assertIn("Out of memory at step 3; retrying the same step (1/2).", out_o)
         self.assertEqual(lines(out, 8), lines(out_o, 8), out_o)
-        # an infinite gradient element at step 4: the update is skipped, every weight stays, the run completes
-        code, out_n = self.patched_run("nangrad", 4, base + ["--name", "F2"])
+        # an infinite gradient element at step 4: the update is skipped, every weight stays, the run completes;
+        # the step-4 train value is the mean over steps 1-3 alone (the skipped step is in neither sum nor count)
+        code, out_n = self.patched_run("nangrad", 4, base + ["--name", "F2", "--eval-every", "4", "--log-every", "1"])
         self.assertEqual(code, 0, out_n)
         self.assertIn("step 4: non-finite gradient norm inf; update skipped (1/20)", out_n)
         self.assertIn("FAULT CHECK: 0 parameters changed", out_n)
         self.assertTrue(lines(out_n, 8), "the metrics line must still carry finite numbers")
+        progress = {int(m.group(1)): float(m.group(2)) for m in
+                    re.finditer(r"^step +(\d+)/8 \| +[\d.]+% \| train ([\d.]+)", out_n, re.M)}
+        self.assertEqual(sorted(k for k in progress if k < 4), [1, 2, 3], out_n)
+        train_at_4 = float([m for m in lines(out_n, 8) if m[0] == "4"][0][1])
+        self.assertAlmostEqual(train_at_4, sum(progress[k] for k in (1, 2, 3)) / 3, delta=0.0015, msg=out_n)
         self.assertEqual(torch.load(os.path.join(self.runs, "F2.pt"), map_location="cpu",
                                     weights_only=True)["step"], 8)
         # saves that fail: training goes on and the counter resets after a success ...
@@ -1681,6 +1712,13 @@ class TestFixes(unittest.TestCase):
                     back = [json.loads(line) for line in handle]
                 self.assertEqual(back, rows)
                 self.assertEqual(data_prep._spool_line_count(path), (200, True))
+                cut = path + ".cut"  # a spool cut short by a crash is reported incomplete, not as an exception
+                shutil.copy(path, cut)
+                with open(cut, "r+b") as handle:
+                    handle.truncate(os.path.getsize(cut) // 2)
+                lines, complete = data_prep._spool_line_count(cut)
+                self.assertFalse(complete)
+                self.assertLess(lines, 200)
                 if have:
                     self.assertLess(os.path.getsize(path), len(json.dumps(rows)) / 5, "zstd compresses the JSON")
             finally:
