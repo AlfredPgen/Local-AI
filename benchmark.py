@@ -920,15 +920,10 @@ def greedy_generate(model, tok, prompt, max_new_tokens, device, amp_dtype=None, 
     start, n_prompt = len(prefix), len(ids)
     head = tok.decode(ids[start:])
     text = ""
+    decoder = tiny_gpt.IncrementalDecoder(model, device, amp_dtype)  # KV cache: one token of work per step
     with torch.no_grad():
         for _ in range(max_new_tokens):
-            x = torch.tensor([ids[-model.ctx:]], device=device)
-            with torch.autocast(device.type, dtype=amp_dtype or torch.float32, enabled=amp_dtype is not None):
-                if isinstance(model, tiny_gpt.TinyGPT):
-                    logits = model.lm_head(model(x, return_hidden=True)[:, -1])[0]
-                else:
-                    logits = model(x)[0, -1]
-            nxt = int(logits.float().argmax())
+            nxt = int(decoder.next_logits(ids).argmax())
             if nxt == tok.eos_id:
                 break
             ids.append(nxt)

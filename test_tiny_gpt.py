@@ -1358,6 +1358,32 @@ class TestFixes(unittest.TestCase):
     def tearDownClass(cls):
         shutil.rmtree(cls.tmp, ignore_errors=True)
 
+    def test_kv_cache_matches_full_recompute(self):
+        """KV-cached decoding gives the logits of a full forward pass: a prompt, one token at a
+        time, several tokens after a cached prefix, a batch, and a restart past the context."""
+        model = self.small_model(seed=3, vocab=50)  # ctx 16
+        gen = torch.Generator().manual_seed(0)
+        seq = torch.randint(0, 50, (2, 16), generator=gen)
+        with torch.no_grad():
+            full = model(seq)
+            cache = model.new_cache()
+            parts = [model(seq[:, :5], cache=cache)]  # prompt
+            parts += [model(seq[:, i:i + 1], cache=cache) for i in range(5, 9)]  # one at a time
+            parts.append(model(seq[:, 9:16], cache=cache))  # several new tokens after a prefix
+            cached = torch.cat(parts, dim=1)
+            self.assertTrue(torch.allclose(full, cached, atol=1e-4), (full - cached).abs().max())
+            with self.assertRaises(ValueError):  # the cache never grows past the context
+                model(seq[:, :1], cache=cache)
+        ids = seq[0].tolist()[:3]
+        dec = tiny_gpt.IncrementalDecoder(model, torch.device("cpu"))
+        for _ in range(40):  # 43 tokens with ctx 16: the cache restarts twice
+            want = model(torch.tensor([ids[-16:]]))[0, -1] if len(ids) - dec.base <= 16 and dec.cache else None
+            got = dec.next_logits(ids)
+            if want is not None and dec.base == max(0, len(ids) - 16):
+                self.assertTrue(torch.allclose(want, got, atol=1e-4))
+            ids.append(int(got.argmax()))
+        self.assertEqual(len(ids), 43)
+
     def test_markdown_gzip_inputs(self):
         """data_prep reads a.md.gz like a.md (same id and title); a damaged .gz is skipped and counted."""
         import collections

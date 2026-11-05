@@ -407,10 +407,11 @@ class RotaryEmbedding(nn.Module):
         self.register_buffer("cos", angles.cos()[None, None], persistent=False)
         self.register_buffer("sin", angles.sin()[None, None], persistent=False)
 
-    def forward(self, q, k):
+    def forward(self, q, k, pos=0):
+        """pos: the absolute position of the first token in q and k (KV-cached decoding)."""
         t = q.size(-2)
-        cos = self.cos[:, :, :t].to(dtype=q.dtype)
-        sin = self.sin[:, :, :t].to(dtype=q.dtype)
+        cos = self.cos[:, :, pos:pos + t].to(dtype=q.dtype)
+        sin = self.sin[:, :, pos:pos + t].to(dtype=q.dtype)
         return q * cos + rotate_half(q) * sin, k * cos + rotate_half(k) * sin
 
 
@@ -441,15 +442,20 @@ class GroupedQueryAttention(nn.Module):
         self.v_proj = nn.Linear(dim, n_kv_heads * self.head_dim, bias=False)
         self.o_proj = nn.Linear(dim, dim, bias=False)
 
-    def _qkv(self, x, rope):
+    def _qkv(self, x, rope, pos=0):
         b, t, _ = x.shape
         q = self.q_proj(x).view(b, t, self.n_heads, self.head_dim).transpose(1, 2)
         k = self.k_proj(x).view(b, t, self.n_kv_heads, self.head_dim).transpose(1, 2)
         v = self.v_proj(x).view(b, t, self.n_kv_heads, self.head_dim).transpose(1, 2)
-        q, k = rope(q, k)
+        q, k = rope(q, k, pos)
         return q, k, v
 
-    def forward(self, x, rope):
+    def forward(self, x, rope, cache=None):
+        """cache: None (training, scoring), or this layer's dict for KV-cached decoding:
+        the keys and values of the tokens seen so far are kept in it, so each new token
+        costs one position of work instead of the whole sequence."""
+        if cache is not None:
+            return self._forward_cached(x, rope, cache)
         b, t, _ = x.shape
         q, k, v = self._qkv(x, rope)
         p = self.dropout if self.training else 0.0
@@ -460,6 +466,26 @@ class GroupedQueryAttention(nn.Module):
                 k = k.repeat_interleave(self.n_rep, dim=1)
                 v = v.repeat_interleave(self.n_rep, dim=1)
             y = F.scaled_dot_product_attention(q, k, v, dropout_p=p, is_causal=True)
+        return self.o_proj(y.transpose(1, 2).contiguous().view(b, t, -1))
+
+    def _forward_cached(self, x, rope, cache):
+        b, t, _ = x.shape
+        past = cache["k"].size(-2) if "k" in cache else 0
+        q, k, v = self._qkv(x, rope, past)
+        if past:
+            k = torch.cat([cache["k"], k], dim=-2)
+            v = torch.cat([cache["v"], v], dim=-2)
+        cache["k"], cache["v"] = k, v  # kept with the n_kv_heads heads (GQA), before repeating
+        if self.n_rep > 1:
+            k = k.repeat_interleave(self.n_rep, dim=1)
+            v = v.repeat_interleave(self.n_rep, dim=1)
+        if past == 0:  # the prompt: ordinary causal attention
+            y = F.scaled_dot_product_attention(q, k, v, is_causal=True)
+        elif t == 1:  # one new token sees everything before it
+            y = F.scaled_dot_product_attention(q, k, v)
+        else:  # several new tokens after a cached prefix
+            allowed = torch.ones(t, past + t, dtype=torch.bool, device=x.device).tril(past)
+            y = F.scaled_dot_product_attention(q, k, v, attn_mask=allowed)
         return self.o_proj(y.transpose(1, 2).contiguous().view(b, t, -1))
 
     @torch.no_grad()
@@ -482,8 +508,8 @@ class TransformerBlock(nn.Module):
         self.ffn = SwiGLU(cfg.d_model, cfg.ffn_hidden, cfg.dropout)
         self.resid_dropout = nn.Dropout(cfg.dropout)
 
-    def forward(self, x, rope):
-        x = x + self.resid_dropout(self.attn(self.attn_norm(x), rope))
+    def forward(self, x, rope, cache=None):
+        x = x + self.resid_dropout(self.attn(self.attn_norm(x), rope, cache))
         return x + self.ffn(self.ffn_norm(x))
 
 
@@ -522,14 +548,28 @@ class TinyGPT(nn.Module):
         for block in self.blocks:
             block.attn.impl = impl
 
-    def forward(self, tokens, return_hidden=False):
+    def new_cache(self):
+        """An empty KV cache (one dict per layer) for forward(..., cache=...)."""
+        return [{} for _ in self.blocks]
+
+    @staticmethod
+    def cache_length(cache):
+        return cache[0]["k"].size(-2) if cache and "k" in cache[0] else 0
+
+    def forward(self, tokens, return_hidden=False, cache=None):
         """Logits, or (return_hidden=True) the final normalised hidden states, from
-        which chunked_lm_loss computes the loss without all logits at once."""
+        which chunked_lm_loss computes the loss without all logits at once.
+        cache (from new_cache): KV-cached decoding; `tokens` are then only the new
+        tokens, after those already in the cache (at most ctx in total)."""
+        if cache is not None and self.cache_length(cache) + tokens.size(1) > self.ctx:
+            raise ValueError(f"KV cache full: {self.cache_length(cache)} + {tokens.size(1)} tokens > ctx {self.ctx}")
         x = self.embedding_dropout(self.token_embedding(tokens))
-        recompute = self.grad_checkpoint and self.training and torch.is_grad_enabled()
-        for block in self.blocks:
+        recompute = self.grad_checkpoint and self.training and torch.is_grad_enabled() and cache is None
+        for i, block in enumerate(self.blocks):
             if recompute:
                 x = torch.utils.checkpoint.checkpoint(block, x, self.rope, use_reentrant=False)
+            elif cache is not None:
+                x = block(x, self.rope, cache[i])
             else:
                 x = block(x, self.rope)
         x = self.norm(x)
@@ -1542,6 +1582,38 @@ def watermark_green(key, prev_token, vocab_size, gamma=0.25, _cache={}):
 
 
 @torch.no_grad()
+class IncrementalDecoder:
+    """Next-token logits for a growing token list, with a KV cache for TinyGPT models:
+    the prompt is processed once, then one token per step. When the text outgrows the
+    context window, the cache restarts from the last 7/8 of a window (the old way
+    recomputed the last full window at every step, so texts longer than the context
+    can differ slightly from it). Other models (wrappers, legacy) are recomputed in
+    full at every step, as before."""
+
+    def __init__(self, model, device, amp_dtype=None):
+        self.model, self.device, self.amp_dtype = model, device, amp_dtype
+        self.cached = isinstance(model, TinyGPT)
+        self.cache, self.base, self.n = None, 0, 0
+
+    @torch.no_grad()
+    def next_logits(self, ids):
+        """Logits (float, CPU) for the token after `ids`; ids must only ever grow by appending."""
+        model, ctx = self.model, self.model.ctx
+        with torch.autocast(self.device.type, dtype=self.amp_dtype or torch.float32,
+                            enabled=self.amp_dtype is not None):
+            if not self.cached:
+                return model(torch.tensor([ids[-ctx:]], device=self.device))[0, -1].float().cpu()
+            if self.cache is None or len(ids) - self.base > ctx or len(ids) < self.n:
+                keep = ctx if self.cache is None else ctx - max(1, ctx // 8)
+                self.base, self.cache = max(0, len(ids) - keep), model.new_cache()
+                new = ids[self.base:]
+            else:
+                new = ids[self.n:]
+            self.n = len(ids)
+            h = model(torch.tensor([new], device=self.device), return_hidden=True, cache=self.cache)
+            return model.lm_head(h[:, -1])[0].float().cpu()
+
+
 def generate(model, tok, prompt, max_new_tokens, device, amp_dtype=None, temperature=0.8, top_k=50,
              top_p=0.95, generator=None, watermark=None):
     """Sample a continuation. Sampling runs on CPU with its own generator, so
@@ -1553,13 +1625,9 @@ def generate(model, tok, prompt, max_new_tokens, device, amp_dtype=None, tempera
     prefix = [tok.bos_id] if tok.bos_id >= 0 else []
     ids = prefix + (tok.encode(prompt) if prompt else ([] if prefix else tok.encode("\n")))
     start = len(prefix)
+    decoder = IncrementalDecoder(model, device, amp_dtype)
     for _ in range(max_new_tokens):
-        x = torch.tensor([ids[-model.ctx:]], device=device)
-        with torch.autocast(device.type, dtype=amp_dtype or torch.float32, enabled=amp_dtype is not None):
-            if isinstance(model, TinyGPT):  # the output layer only at the last position, the one sampled from
-                logits = model.lm_head(model(x, return_hidden=True)[:, -1])[0].float().cpu()
-            else:
-                logits = model(x)[0, -1].float().cpu()
+        logits = decoder.next_logits(ids)
         if watermark:
             key, gamma, delta = watermark
             logits = logits + delta * watermark_green(key, ids[-1], logits.numel(), gamma).float()
