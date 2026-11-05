@@ -2356,7 +2356,7 @@ def validate_args(args, parser):
         parser.error("--warmup-steps must be >= 0")
     if args.warmup_steps is not None and args.steps is not None and args.warmup_steps >= args.steps:
         parser.error("--warmup-steps must be smaller than --steps")
-    if args.schedule == "wsd" and args.decay_frac == 0:
+    if args.schedule == "wsd" and args.decay_frac == 0 and not args.resume:  # on --resume the flag is ignored
         print("WARNING: --decay-frac 0 with wsd: the learning rate never decays (warmup-stable only)")
     if args.log_every < 0 or (args.sample_every is not None and args.sample_every < 0):
         parser.error("--log-every/--sample-every must be >= 0")
@@ -3202,6 +3202,7 @@ def _train(args):
                     else:
                         (loss / accum).backward()
                 with held:  # Ctrl+C waits until the update and its bookkeeping are complete
+                    applied = True  # False when the update is dropped for a non-finite gradient norm
                     if scaler is not None:
                         scaler.unscale_(opt)
                     gnorm = torch.nn.utils.clip_grad_norm_(model.parameters(), settings["grad_clip"] or float("inf"))
@@ -3228,6 +3229,7 @@ def _train(args):
                         opt.zero_grad(set_to_none=True)
                         interval_loss.copy_(step_start[3])
                         progress_loss.copy_(step_start[4])
+                        applied = False
                         nonfinite_run += 1
                         print(f"step {step}: non-finite gradient norm {float(gnorm)}; update skipped "
                               f"({nonfinite_run}/{MAX_OVERFLOW_SKIPS})")
@@ -3241,8 +3243,9 @@ def _train(args):
                         opt.step()
                         last_gnorm, nonfinite_run = gnorm, 0
                     opt.zero_grad(set_to_none=True)
-                    interval_micro += accum
-                    progress_micro += accum
+                    if applied:  # a skipped step's loss left the sums above, so it leaves their counts too
+                        interval_micro += accum
+                        progress_micro += accum
                     interval_tokens += settings["tokens_per_step"]
                     tokens_seen += settings["tokens_per_step"]
                     done_step = step
