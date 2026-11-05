@@ -89,9 +89,12 @@ def build_command():
         folders = set()
     weights = ",".join(f"{n}=3" for n in ("books", "articles") if n in folders)
     if prep.get("tokenizer_weights"):
-        # the recorded weights, minus sources whose folder is gone (data_prep refuses a weight it cannot apply)
+        # the recorded weights, minus sources this command no longer reads (data_prep refuses a weight it cannot
+        # apply): the text-root folders plus the named web sources added above
+        sources = folders | {name for name, flag in (("wiki", "--wiki-dir"), ("fineweb", "--parquet"),
+                                                     ("pes2o", "--jsonl")) if flag in cmd}
         recorded = [w.strip() for w in str(prep["tokenizer_weights"]).split(",") if w.strip()]
-        weights = ",".join(w for w in recorded if w.split("=")[0].strip().lower() in folders)
+        weights = ",".join(w for w in recorded if w.split("=")[0].strip().lower() in sources)
     return cmd + ["--include-keywords", KEYWORDS, "--keyword-min-distinct", "3"] + (
         ["--tokenizer-weights", weights] if weights else []) + [
         "--near-dup", "drop"] + (["--near-dup-max-docs", str(near_dup_max)] if near_dup_max else []) + (

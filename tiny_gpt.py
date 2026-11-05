@@ -1382,14 +1382,20 @@ def resolve_dataset(obj, override=None):
     candidates = [path] + ([] if os.path.isabs(path) else [os.path.join(HERE, path)])
     candidates.append(os.path.join(HERE, "datasets", name))
     rebuilt = None
-    for cand in candidates:
+    for i, cand in enumerate(candidates):
+        by_name = i == len(candidates) - 1
         if not os.path.isdir(cand):
             continue
         found = dataset_fingerprint(cand)
         if found is None:  # not a finished dataset
             continue
-        if not want or found == want:
+        if found == want or (not want and not by_name):
             return cand
+        if not want:
+            # an older checkpoint without a stored fingerprint is trusted only at its own path: a folder found by
+            # name alone cannot be checked, and a rebuild's validation split may hold this model's training text
+            raise SystemExit(f"The checkpoint records no dataset fingerprint, so datasets/{name} cannot be checked "
+                             "to be the one it was trained on: pass --dataset to use it.")
         rebuilt = rebuilt or cand
     if rebuilt:
         # names only, no folders: view_pt shows this message on dashboards that may be published

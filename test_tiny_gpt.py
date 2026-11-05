@@ -3879,6 +3879,13 @@ class TestOtherScripts(unittest.TestCase):
             cmd = run_pipeline.build_command()
             self.assertIn("--superbpe", cmd, "the manifest's SuperBPE wins over the constant")
             self.assertEqual(cmd[cmd.index("--tokenizer-weights") + 1], "books=3", "no articles folder here")
+            with open(os.path.join(dataset, "manifest.json"), "w", encoding="utf-8") as f:
+                json.dump({"prep_args": {**prep, "tokenizer_weights": "books=3,wiki=2,fineweb=0.5"}}, f)
+            weighted = run_pipeline.build_command()
+            self.assertEqual(weighted[weighted.index("--tokenizer-weights") + 1], "books=3,wiki=2",
+                             "a named source the command reads keeps its weight; one it does not read is dropped")
+            with open(os.path.join(dataset, "manifest.json"), "w", encoding="utf-8") as f:
+                json.dump({"prep_args": prep}, f)
             self.assertEqual(cmd[cmd.index("--wiki-max-docs") + 1], "1234")
             self.assertNotIn("--near-dup-max-docs", cmd, "the old default is not a choice to repeat")
             args = data_prep.parse_args(cmd[2:])
@@ -3960,6 +3967,11 @@ class TestOtherScripts(unittest.TestCase):
             self.assertIn("--dataset", str(ctx.exception.code))
             with self.assertRaises(SystemExit):
                 tiny_gpt.resolve_dataset({})
+            # an older checkpoint without a fingerprint: its own path is used, a same-named folder is not
+            self.assertEqual(tiny_gpt.resolve_dataset({"dataset": {"path": stored}}), stored)
+            with self.assertRaises(SystemExit) as ctx:
+                tiny_gpt.resolve_dataset({"dataset": {"path": r"C:\Users\someone\proj\datasets\bio_x"}})
+            self.assertIn("no dataset fingerprint", str(ctx.exception.code))
 
     # ---------------- compare_models (other-scripts-2) ----------------
     def test_compare_models_autocast_only_off_the_cpu(self):
@@ -4034,6 +4046,14 @@ class TestOtherScripts(unittest.TestCase):
         self.assertIs(view_pt.probe_report(ck, None, None, args), stored)
         ck.edit = {"chosen": {"kind": "neurons"}}
         self.assertIsNone(view_pt.probe_report(ck, None, None, args), "edited weights are scored, not looked up")
+        # the text summary still shows the original's last evaluation, labelled as such
+        sys.path.insert(0, os.path.join(HERE, "tools"))
+        import edit_weights as ew
+        path = self.save_checkpoint(self.model(varied=False), "E_edited.pt", edit={"chosen": {"kind": "neurons"}},
+                                    metrics=ew.edited_metrics({"last_eval": {"loss": 2.5, "step": 7}}))
+        with unittest.mock.patch.object(tiny_gpt, "tokenizer_from_checkpoint", return_value=None),                 redirect_stdout(io.StringIO()) as buf:
+            view_pt.print_summary(view_pt.Checkpoint(path))
+        self.assertIn("latest validation (original model, before the edit): loss 2.5", buf.getvalue())
 
     # ---------------- finetune (other-scripts-6, -7) ----------------
     def test_finetune_learning_rate_and_batched_tokenisation(self):

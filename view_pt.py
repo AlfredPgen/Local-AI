@@ -348,13 +348,14 @@ def print_summary(ck):
               f"{ft.get('epochs', '?')} epochs, lr {ft.get('lr', '?')}{held}")
         base_note = " (base model, before fine-tuning)"
     m = ck.metrics
-    # fine-tuned files keep the base model's last evaluation (newer ones as base_last_eval)
-    last = m.get("last_eval") or (m.get("base_last_eval") if ft else None)
+    # fine-tuned and edited files keep the base model's last evaluation (newer ones as base_last_eval)
+    last = m.get("last_eval") or (m.get("base_last_eval") if ft or ck.edit else None)
+    last_note = base_note or (" (original model, before the edit)" if ck.edit and not m.get("last_eval") else "")
     if last:
         per = last.get("per_source") or {}
         per_text = (" [" + ", ".join(f"{k} {v:.4f}" for k, v in per.items()) + "]") if len(per) > 1 else ""
         ppl = math.exp(min(last["loss"], 50)) if last.get("loss") is not None else None
-        print(f"latest validation{base_note}: loss {fmt(last.get('loss'))} measured at step {last.get('step')}"
+        print(f"latest validation{last_note}: loss {fmt(last.get('loss'))} measured at step {last.get('step')}"
               f"{per_text} | perplexity {fmt(ppl, ',.2f')}"
               + (f" | entropy {last['entropy']:.3f} nats | mean confidence {last['confidence']:.3f} | top-1 "
                  f"accuracy {last['top1']:.3f} | ECE {last['ece']:.3f}" if "entropy" in last else ""))
