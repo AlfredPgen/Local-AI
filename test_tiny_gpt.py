@@ -477,7 +477,7 @@ class TestPipeline(unittest.TestCase):
 
     # ---------------- training, resume, generation, logs ----------------
     def test_train_resume_generate_log_and_viewer(self):
-        code, out = run(self.common + ["--name", "A", "--steps", "24"])
+        code, out = run(self.common + ["--name", "A", "--steps", "24", "--ema", "on"])  # the EMA is opt-in
         self.assertEqual(code, 0, out)
         code, out_b = run(self.common + ["--name", "B", "--steps", "24", "--stop-after-steps", "16", "--no-probes"])
         self.assertEqual(code, 0, out_b)
@@ -552,10 +552,13 @@ class TestPipeline(unittest.TestCase):
         self.assertIn("optimizer", train_ck)
         self.assertEqual(best_ck["checkpoint_type"], "inference")
         self.assertNotIn("optimizer", best_ck)
-        # new runs: QK-norm on, an EMA of the weights kept in the training state, the best file says which it holds
+        # new runs: QK-norm on; with --ema an EMA of the weights kept in the training state with its update count
+        # (24 steps, an update every 10: 2), the best file says which it holds; without --ema no average
         self.assertTrue(train_ck["model_config"]["qk_norm"])
-        self.assertEqual((train_ck["ema"]["decay"], train_ck["weights"]), (0.999, "raw"))
+        self.assertEqual((train_ck["ema"]["decay"], train_ck["weights"], train_ck["ema"]["updates"]),
+                         (0.999, "raw", 2))
         self.assertEqual(set(train_ck["ema"]["state"]), set(train_ck["model"]))
+        self.assertNotIn("ema", torch.load(os.path.join(self.runs, "B.pt"), map_location="cpu", weights_only=True))
         self.assertIn(best_ck["weights"], ("raw", "ema"))
         self.assertNotIn("ema", best_ck, "the inference-only file carries one set of weights")
         self.assertEqual(train_ck["model"]["lm_head.weight"].data_ptr(),
@@ -3173,7 +3176,9 @@ class TestFixes(unittest.TestCase):
                          (1024, 10_000.0, True, 16, 4))
         self.assertEqual(st["tokens_per_step"], 262_144)
         self.assertEqual(st["lr"], tiny_gpt.heuristic_lr(n), "batch factor exactly 1 at the current shape")
-        self.assertAlmostEqual(st["lr"], 4.76e-4, delta=1e-6)
+        # the running run's recorded 4.76e-4 (old table) doubled by LR_TABLE_FACTOR; --resume keeps the recorded one
+        self.assertAlmostEqual(st["lr"], 2 * 4.76e-4, delta=1e-6)
+        self.assertEqual(st["weight_decay"], 0.05, "lr x wd unchanged: the decay timescale below stays 21,020 steps")
         self.assertEqual(st["min_lr"], 0.0, "wsd decays to zero by default")
         text = "\n".join(lines)
         self.assertIn("batch factor 1.00", text)
@@ -3408,9 +3413,10 @@ class TestFixes(unittest.TestCase):
         self.assertFalse(off.qk_norm)
 
     def test_quality_flags_in_the_plan(self):
-        """--qk-norm (default on), --lr-scale (multiplies the heuristic rate, printed, recorded; no effect with --lr;
-        LR_TABLE untouched), --ema (default 0.999, off removes it; resolve_ema keeps a resumed run as it was) and
-        --doc-mask (default off) in plan_run and parse_args."""
+        """--qk-norm (default on), --lr-scale (multiplies the heuristic rate, printed, recorded; no effect with --lr),
+        LR_TABLE at twice the published rates with weight decay halved (lr x wd constant; the 2026-11-05 sweep),
+        --ema (default off, on = 0.999; resolve_ema keeps a resumed run as it was) and --doc-mask (default off) in
+        plan_run and parse_args."""
         manifest = {"tokenizer": {"vocab_size": 700},
                     "sources": {"md": {"train": {"tokens": 5_000_000}, "doc_tokens_percentiles": {"50": 300}}}}
 
@@ -3423,10 +3429,14 @@ class TestFixes(unittest.TestCase):
         cfg, st, lines = plan([])
         text = "\n".join(lines)
         self.assertTrue(cfg.qk_norm)
-        self.assertEqual((st["lr_scale"], st["ema"], st["doc_mask"]), (1.0, 0.999, False))
+        self.assertEqual((st["lr_scale"], st["ema"], st["doc_mask"], st["weight_decay"]), (1.0, 0.0, False, 0.05))
         self.assertIn(", QK-norm, ctx 256", text)
-        self.assertIn("weights: EMA with decay 0.999 per step", text)
+        self.assertIn("no EMA (opt-in: --ema 0.999)", text)
         self.assertNotIn("--lr-scale", text)
+        for flag in ("on", "0.999"):
+            _, st_e, lines_e = plan(["--ema", flag])
+            self.assertEqual(st_e["ema"], 0.999)
+            self.assertIn("weights: EMA with decay 0.999 per step", "\n".join(lines_e))
         cfg2, st2, lines2 = plan(["--lr-scale", "2", "--qk-norm", "off", "--ema", "off", "--doc-mask", "on"])
         text2 = "\n".join(lines2)
         self.assertAlmostEqual(st2["lr"], 2 * st["lr"])
@@ -3440,9 +3450,17 @@ class TestFixes(unittest.TestCase):
                          "--lr fixes the rate, so the recorded scale is the one the run carries")
         self.assertIn("learning rate 1.00e-03 peak (set)", "\n".join(lines3))
         self.assertIn("--lr-scale 2 has no effect", "\n".join(lines3))
-        self.assertEqual(tiny_gpt.LR_TABLE, [(1e6, 2.0e-3), (1e7, 1.2e-3), (1e8, 6.0e-4), (1e9, 3.0e-4)],
-                         "the table changes only after the sweep")
+        published = [(1e6, 2.0e-3), (1e7, 1.2e-3), (1e8, 6.0e-4), (1e9, 3.0e-4)]
+        self.assertEqual(tiny_gpt.LR_TABLE_FACTOR, 2.0, "the factor both sweep sizes agreed on")
+        self.assertEqual(tiny_gpt.LR_TABLE, [(n, tiny_gpt.LR_TABLE_FACTOR * lr) for n, lr in published],
+                         "the published rates times one constant: the slope is unchanged")
+        for n in (3e6, 2e7, 2.16e8, 5e8):
+            self.assertAlmostEqual(tiny_gpt.heuristic_lr(n) * tiny_gpt.WEIGHT_DECAY_DEFAULT,
+                                   tiny_gpt.heuristic_lr(n) / tiny_gpt.LR_TABLE_FACTOR * 0.1, places=15,
+                                   msg="lr x weight decay as at the published rates with weight decay 0.1")
+        self.assertEqual(tiny_gpt.parse_args(["--name", "x"]).weight_decay, 0.05)
         self.assertEqual(tiny_gpt.parse_args(["--name", "x", "--ema", "off"]).ema, 0.0)
+        self.assertEqual(tiny_gpt.parse_args(["--name", "x", "--ema", "on"]).ema, 0.999)
         self.assertIsNone(tiny_gpt.parse_args(["--name", "x"]).ema)
         for bad in (["--lr-scale", "0"], ["--ema", "1.5"], ["--ema", "maybe"], ["--qk-norm", "maybe"],
                     ["--doc-mask", "1"]):
@@ -3460,7 +3478,8 @@ class TestFixes(unittest.TestCase):
         self.assertEqual(tiny_gpt.resolve_ema({"ema": 0.999}, None, resumed=True), 0.999)
         self.assertEqual(tiny_gpt.resolve_ema({}, 0.99, resumed=True), 0.99)
         self.assertEqual(tiny_gpt.resolve_ema({"ema": 0.999}, 0.0, resumed=True), 0.0)
-        self.assertEqual(tiny_gpt.resolve_ema({}, None, resumed=False), 0.999)
+        self.assertEqual(tiny_gpt.resolve_ema({}, None, resumed=False), 0.0, "new runs: no average unless asked")
+        self.assertEqual(tiny_gpt.resolve_ema({}, 0.999, resumed=False), 0.999)
         self.assertEqual(tiny_gpt.resolve_ema({}, 0.0, resumed=False), 0.0)
         self.assertIn("lr_scale", tiny_gpt.EXPERIMENT_COLUMNS)
         self.assertIn("ema", tiny_gpt.EXPERIMENT_COLUMNS)
@@ -3526,6 +3545,44 @@ class TestFixes(unittest.TestCase):
         self.assertIs(tiny_gpt.ema_weights_for_checkpoint(ema), ema)
         self.assertEqual(tiny_gpt.EMA_EVERY, 10)
         self.assertAlmostEqual(tiny_gpt.EMA_DECAY_DEFAULT ** tiny_gpt.EMA_EVERY, 0.990, places=3)
+
+    def test_ema_is_debiased_from_its_first_update(self):
+        """ema_decay_at: the recursion with b_n = d (1 - d^(n-1)) / (1 - d^n) gives exactly the zero-started
+        average divided by its weight sum, sum_i (1 - d) d^(n-i) w_i / (1 - d^n), so the starting copy (the
+        initial weights) carries no weight after the first update; n None keeps the plain decay (an average from
+        a checkpoint without the count) and b_n reaches d once d^n is negligible."""
+        d = 0.999 ** tiny_gpt.EMA_EVERY
+        self.assertEqual(tiny_gpt.ema_decay_at(d, 1), 0.0)
+        self.assertAlmostEqual(tiny_gpt.ema_decay_at(d, 2), d / (1 + d), places=15)
+        self.assertEqual(tiny_gpt.ema_decay_at(d, None), d)
+        self.assertAlmostEqual(tiny_gpt.ema_decay_at(d, 5000), d, places=15)
+        torch.manual_seed(0)
+        snapshots = [torch.randn(4, dtype=torch.float64) for _ in range(40)]
+        start = torch.full((4,), 1e6, dtype=torch.float64)  # the placeholder: must vanish at the first update
+        avg = start.clone()
+        for n, w in enumerate(snapshots, 1):
+            b = tiny_gpt.ema_decay_at(d, n)
+            avg = b * avg + (1 - b) * w
+            weights = torch.tensor([(1 - d) * d ** (n - i) for i in range(1, n + 1)], dtype=torch.float64)
+            want = (weights[:, None] * torch.stack(snapshots[:n])).sum(0) / (1 - d ** n)
+            torch.testing.assert_close(avg, want, rtol=1e-12, atol=1e-9)
+        # through ema_update on a model: the first update copies the weights, the second averages the two
+        model = self.small_model(seed=3)
+        ema = tiny_gpt.ema_init(model.state_dict().items())
+        with torch.no_grad():
+            for p in model.parameters():
+                p.add_(1.0)
+        first = {k: v.detach().clone() for k, v in model.state_dict().items()}
+        tiny_gpt.ema_update(ema, model, tiny_gpt.ema_decay_at(d, 1))
+        for k, v in first.items():
+            torch.testing.assert_close(ema[k], v.float())
+        with torch.no_grad():
+            for p in model.parameters():
+                p.add_(1.0)
+        tiny_gpt.ema_update(ema, model, tiny_gpt.ema_decay_at(d, 2))
+        b2 = d / (1 + d)
+        for k, v in model.state_dict().items():
+            torch.testing.assert_close(ema[k], (b2 * first[k] + (1 - b2) * v).float())
 
     def test_document_mask_blocks_and_single_document_logits(self):
         """The document mask (quality-6): a by-hand block-diagonal causal mask on a two-document window; a

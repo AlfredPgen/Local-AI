@@ -1054,7 +1054,9 @@ LOSS_CHUNK_TOKENS = 4096  # tokens per piece when the loss is computed in pieces
 LB_LOSS_DEFAULT = 0.01
 ROUTER_Z_LOSS_DEFAULT = 1e-3
 BIAS_RATE_DEFAULT = 1e-3
-EMA_DECAY_DEFAULT = 0.999  # per-step decay of the weight average new runs keep (--ema)
+# per-step decay of the weight average (--ema 0.999, or --ema on). Opt-in: the 2026-11-05 A/B (d 384, 500 steps)
+# found no gain from it, and new runs train without one unless --ema is given
+EMA_DECAY_DEFAULT = 0.999
 EMA_EVERY = 10  # steps between EMA updates; the per-step decay is compounded over them (0.999^10 ~ 0.990)
 # FP16 updates the GradScaler may skip in a row (overflowing gradients) before the run counts as diverged; a fresh
 # run's scale (65,536) settles within a handful of skips, so 20 in a row means no update is getting through
@@ -1419,16 +1421,19 @@ def cpu_state_dict(model):
 
 def resolve_ema(settings, requested, resumed):
     """The EMA decay this session trains with (0.0 = off), written into the settings.
-    A new run averages with EMA_DECAY_DEFAULT unless --ema says otherwise. A resumed
-    run keeps what its checkpoint says, and a checkpoint from before the key existed
-    says off: a run never gains an average silently. --ema on a resume overrides (a
-    decay starts the average from the current weights, off removes it)."""
+    A new run keeps no average unless --ema asks for one (--ema 0.999 or --ema on):
+    the 2026-11-05 A/B at d 384 (500 steps) found no gain (the raw weights won every
+    evaluation), so the average is an opt-in for long runs, where its stable-phase
+    gain is still to be measured. A resumed run keeps what its checkpoint says, and
+    a checkpoint from before the key existed says off: a run never gains an average
+    silently. --ema on a resume overrides (a decay starts the average from the
+    current weights, off removes it)."""
     if resumed:
         settings.setdefault("ema", 0.0)
         if requested is not None:
             settings["ema"] = float(requested)
     else:
-        settings["ema"] = EMA_DECAY_DEFAULT if requested is None else float(requested)
+        settings["ema"] = 0.0 if requested is None else float(requested)
     return float(settings["ema"] or 0.0)
 
 
@@ -1444,6 +1449,26 @@ def ema_init(items):
             seen[ident] = v.to(device="cpu", dtype=torch.float32 if v.is_floating_point() else v.dtype, copy=True)
         out[key] = seen[ident]
     return out
+
+
+def ema_decay_at(decay, n):
+    """The decay of the n-th update (n = 1, 2, ...) of an average that starts at
+    zero and is divided by its weight sum, as Adam debiases its moments (Kingma and
+    Ba 2015): with m_n = d m_(n-1) + (1 - d) w_n and m_0 = 0, the debiased average
+    a_n = m_n / (1 - d^n) obeys a_n = b_n a_(n-1) + (1 - b_n) w_n with
+    b_n = d (1 - d^(n-1)) / (1 - d^n). So b_1 = 0 (the first update copies the
+    weights, whatever the average held before), b_2 = d / (1 + d) (two snapshots
+    nearly equal), and b_n -> d once d^n is small (after ~460 updates at d = 0.990).
+    Without it the average started as a copy of the initial weights still held
+    d^n of them: 74 % after 30 updates (step 300), which made the EMA score 1.1
+    bits per byte worse than the raw weights in the 2026-11-05 A/B. n None: the
+    plain decay d (an average restored from a checkpoint written before the update
+    count was saved, which continues exactly as it did)."""
+    if n is None:
+        return decay
+    if n <= 1:
+        return 0.0
+    return decay * (1.0 - decay ** (n - 1)) / (1.0 - decay ** n)
 
 
 @torch.no_grad()
@@ -2382,16 +2407,34 @@ def generate(model, tok, prompt, max_new_tokens, device, amp_dtype=None, tempera
 # ---------------------------------------------------------------------------
 # Planner
 # ---------------------------------------------------------------------------
-LR_TABLE = [(1e6, 2.0e-3), (1e7, 1.2e-3), (1e8, 6.0e-4), (1e9, 3.0e-4)]
+# Twice the published rates (see heuristic_lr); the factor 2 comes from the 2026-11-05 sweep
+LR_TABLE_FACTOR = 2.0
+LR_TABLE = [(1e6, 4.0e-3), (1e7, 2.4e-3), (1e8, 1.2e-3), (1e9, 6.0e-4)]
+# lr x weight decay is the shrink per step of decoupled weight decay (p <- p (1 - lr wd), AdamW and Muon alike)
+# and 1 / (lr wd) its timescale (Wang and Aitchison 2024); the published 0.1 belongs to the published rates, so
+# with the table at LR_TABLE_FACTOR x those rates the default is 0.1 / LR_TABLE_FACTOR
+WEIGHT_DECAY_DEFAULT = 0.1 / LR_TABLE_FACTOR
 
 
 def heuristic_lr(n_params):
-    """Log-log interpolation of peak AdamW learning rates used for published
-    decoder models (GPT-3 125M 6e-4, Pythia-70M 1e-3, 160M 6e-4, Pythia-410M
-    3e-4, GPT-3 760M 2.5e-4), extended downward for small models. The table
-    assumes the 0.5-2M tokens per step those runs used; lr_batch_factor moves
-    the rate when the planner's batch differs from the old 16 sqrt(N) rule.
-    A starting point, not an optimum."""
+    """Log-log interpolation of peak learning rates: LR_TABLE_FACTOR x the AdamW
+    rates used for published decoder models (GPT-3 125M 6e-4, Pythia-70M 1e-3,
+    160M 6e-4, Pythia-410M 3e-4, GPT-3 760M 2.5e-4), extended downward for small
+    models; the slope is the published one. The table assumes the 0.5-2M tokens
+    per step those runs used; lr_batch_factor moves the rate when the planner's
+    batch differs from the old 16 sqrt(N) rule. A starting point, not an optimum.
+
+    The factor 2: a sweep on 2026-11-05 (Muon, QK-norm, 65,536 tokens per step,
+    seed 1, WSD with 20 % decay to 0; bits per byte on the balanced validation
+    set after the decay). d 384 (20.5M parameters, 500 steps): published rates x1
+    1.5735, x2 1.5138 (with weight decay 0.05), x4 1.4950 (0.025). d 512 (36.6M,
+    400 steps): x2 1.5804, x4 1.5337. Both sizes put the short-run optimum at or
+    above x4; a 500-step optimum over-states the rate of a run 60x longer by about
+    1.7x (DeepSeek LLM's C^-0.125 compute term), 4 / 1.7 = 2.35, so the measured
+    arm below that, 2, is applied. x1 was not run at d 512 (time cap) and AdamW
+    alone was not swept; the first long run with this table is checked against an
+    old-table run at 2,000 steps. Runs planned before it keep their recorded rate
+    (--resume never re-plans the rate)."""
     x = math.log10(max(n_params, 1))
     pts = [(math.log10(n), math.log10(lr)) for n, lr in LR_TABLE]
     if x <= pts[0][0]:
@@ -2673,7 +2716,12 @@ def estimate_train_bytes(cfg, micro_batch, amp=True, checkpointing=False, loss_c
     gathered inputs and the expert outputs (2 k d b), the fp32 scores, logits and
     probabilities (3 E x 4) and the int64 ids and sort order (2 k x 8); weights,
     gradients, the half-precision copies and the optimizer state count every
-    expert (the TOTAL parameter count), the experts in the Muon body."""
+    expert (the TOTAL parameter count), the experts in the Muon body. Checked on
+    the RTX 3070 (2026-11-05, allocated peak / estimate): d 768 E 8 k 2 with
+    checkpointing at micro 4, 5.02 / 5.3 GiB; dense at the same shape 4.37 / 4.1
+    (micro 4) and 2.74 / 2.6 (with checkpointing); the 216M shape at micro 2
+    without checkpointing 4.88 / 5.0. All inside the 0.7-1.3 band, so the terms
+    stand as they are."""
     n_total, n_nonembed = count_params(cfg)[:2]
     t = micro_batch * cfg.ctx
     b = 2 if amp else 4
@@ -2784,6 +2832,8 @@ def plan_run(args, manifest, device, amp_dtype, token_cap=None, fixed_cfg=None):
     budget_bytes, budget_text = device_memory_budget(device)
     r = args.tokens_per_param
     max_epochs = args.max_epochs
+    # the document mask stays opt-in at every context: at ctx 512 it changed bits per byte by -0.0016 (noise) for
+    # ~8 % more forward+backward time (2026-11-05 A/B); ctx >= 2048 is unmeasured, so no planner default yet
     doc_mask = getattr(args, "doc_mask", None) == "on"
 
     # --- training-token budget D ---
@@ -2832,7 +2882,9 @@ def plan_run(args, manifest, device, amp_dtype, token_cap=None, fixed_cfg=None):
         # the RoPE base follows the context unless given (10,000 up to ctx 2048, then ctx^2)
         cfg.rope_base = args.rope_base if args.rope_base else default_rope_base(cfg.ctx)
         cfg.tie_embeddings = getattr(args, "tie_embeddings", "on") != "off"
-        cfg.qk_norm = getattr(args, "qk_norm", None) != "off"  # new runs get QK-norm unless told otherwise
+        # new runs get QK-norm unless told otherwise: -0.106 bits per byte against the same run without it at the
+        # same rate (d 384, 500 steps, 2026-11-05 A/B), at no step time that the clock noise could resolve
+        cfg.qk_norm = getattr(args, "qk_norm", None) != "off"
         # mixture of experts only when asked (--experts N); dense stays the default
         cfg.n_experts = n_experts
         cfg.experts_per_token = int(getattr(args, "experts_per_token", 2) or 2)
@@ -2909,8 +2961,8 @@ def plan_run(args, manifest, device, amp_dtype, token_cap=None, fixed_cfg=None):
     # factor follows the batch the run will use (micro x accumulation x ctx: --batch-size and --grad-accum may fix it
     # far from the planner's target), and its power-of-two rounding leaves accumulation rounding alone
     lr_factor = 1.0 if args.lr else lr_batch_factor(n_active, tokens_per_step)
-    # --lr-scale: the sweep knob on the heuristic rate (LR_TABLE itself changes only once a sweep has shown a factor
-    # that two sizes agree on; keep lr x weight_decay constant when it does)
+    # --lr-scale: the sweep knob on the heuristic rate (LR_TABLE moves only by a factor that two sizes agree on, with
+    # lr x weight_decay kept constant: see heuristic_lr and WEIGHT_DECAY_DEFAULT)
     lr_scale = float(getattr(args, "lr_scale", 1.0) or 1.0)
     if args.lr and lr_scale != 1.0:  # recorded as the factor the run's rate actually carries
         lines.append(f"--lr-scale {lr_scale:g} has no effect: --lr sets the peak learning rate (recorded as 1)")
@@ -2986,7 +3038,8 @@ def plan_run(args, manifest, device, amp_dtype, token_cap=None, fixed_cfg=None):
         f"of {budget_text})",
         "weights: " + (f"EMA with decay {settings['ema']:g} per step (updated every {EMA_EVERY} steps), scored beside "
                        "the raw weights at each evaluation; the better of the two is saved as the best model"
-                       if settings["ema"] else "no EMA (--ema off)")
+                       if settings["ema"] else "no EMA (--ema off)" if getattr(args, "ema", None) is not None
+                       else "no EMA (opt-in: --ema 0.999)")
         + ("; document mask on: attention stays within each document of a window (B x T x T bytes of mask)"
            if doc_mask else ""),
     ]
@@ -3447,7 +3500,10 @@ def parse_args(argv=None):
     g.add_argument("--schedule", choices=("wsd", "cosine"), default="wsd")
     g.add_argument("--decay-frac", type=float, default=0.2, help="WSD: share of steps in the final decay")
     g.add_argument("--decay-shape", choices=("1-sqrt", "cosine", "linear"), default="1-sqrt")
-    g.add_argument("--weight-decay", type=float, default=0.1)
+    g.add_argument("--weight-decay", type=float, default=WEIGHT_DECAY_DEFAULT,
+                   help="decoupled weight decay on the matrices (default %g: lr x weight decay as at the published "
+                        "rates, the table rate being %g times those); resumed runs keep their setting"
+                        % (WEIGHT_DECAY_DEFAULT, LR_TABLE_FACTOR))
     g.add_argument("--beta1", type=float, default=0.9)
     g.add_argument("--beta2", type=float, default=0.95)
     g.add_argument("--grad-clip", type=float, default=1.0, help="clip the gradient norm to this (0 = off)")
@@ -3465,11 +3521,12 @@ def parse_args(argv=None):
                         "update size); resumed runs keep their optimizer")
     g.add_argument("--z-loss", type=float, default=1e-4,
                    help="weight of the z-loss stability term (0 disables; resumed runs keep their setting)")
-    g.add_argument("--ema", metavar="DECAY|off",
-                   help="exponential moving average of the weights (fp32, on the CPU), scored beside the raw weights "
-                        "at each evaluation and saved as <name>_best.pt when it is the better of the two (default "
-                        "0.999 for new runs; a resumed run keeps its setting unless this is given: a decay starts an "
-                        "average from the current weights, off removes it)")
+    g.add_argument("--ema", metavar="DECAY|on|off",
+                   help="exponential moving average of the weights (fp32, on the CPU, debiased so it never holds the "
+                        "initial weights), scored beside the raw weights at each evaluation and saved as "
+                        "<name>_best.pt when it is the better of the two (default off; on = %g per step; a resumed "
+                        "run keeps its setting unless this is given: a decay starts an average from the current "
+                        "weights, off removes it)" % EMA_DECAY_DEFAULT)
     g.add_argument("--doc-mask", choices=("on", "off"),
                    help="confine attention to each document of a training window (documents start with BOS): default "
                         "off; it is the training objective, so fixed for a run and ignored on --resume")
@@ -3561,14 +3618,16 @@ def validate_args(args, parser):
         parser.error("--experts-per-token must not exceed --experts")
     if not 0 < args.watermark_gamma < 1:
         parser.error("--watermark-gamma must be between 0 and 1")
-    if args.ema is not None:  # "off" or a per-step decay; None = the default for the run (see resolve_ema)
+    if args.ema is not None:  # "off", "on" or a per-step decay; None = the default for the run (see resolve_ema)
         if str(args.ema).lower() == "off":
             args.ema = 0.0
+        elif str(args.ema).lower() == "on":
+            args.ema = EMA_DECAY_DEFAULT
         else:
             try:
                 args.ema = float(args.ema)
             except ValueError:
-                parser.error("--ema must be a decay such as 0.999, or off")
+                parser.error("--ema must be a decay such as 0.999, on or off")
             if not 0.5 <= args.ema <= 0.99999:
                 parser.error("--ema must be a decay between 0.5 and 0.99999, or off")
     if args.time_budget_hours is not None and args.steps is not None:
@@ -4341,15 +4400,18 @@ def _train(args):
     # The EMA of the weights (fp32 on the CPU, never trained, never in the optimizer): the saved average when the
     # training checkpoint has one for exactly these tensors, else a fresh one starting from the current weights (a
     # new run, --init-from, a resume from the best file, or --ema given on a run that had none).
-    ema, ema_note = None, "no EMA of the weights"
+    # ema_updates counts the updates the average has absorbed (ema_decay_at debiases with it); an average restored
+    # from a checkpoint written before the count was saved has None and continues with the plain decay, as it did
+    ema, ema_note, ema_updates = None, "no EMA of the weights", 0
     if ema_decay:
         saved = resume_obj.get("ema") if resume_obj is not None else None
         state = saved.get("state") if isinstance(saved, dict) else None
         if state and set(state) == set(model.state_dict()):
             ema = ema_init(state.items())
+            ema_updates = saved.get("updates")
             ema_note = f"EMA of the weights restored from the checkpoint (decay {ema_decay:g} per step)"
         else:
-            ema = ema_init(model.state_dict().items())
+            ema = ema_init(model.state_dict().items())  # a placeholder: the first update replaces it (debiased)
             ema_note = (f"EMA of the weights started from the step {start_step:,} weights (decay {ema_decay:g} per "
                         "step)" if start_step else f"EMA of the weights (decay {ema_decay:g} per step)")
         state = saved = None
@@ -4450,7 +4512,7 @@ def _train(args):
             base["ema_decay"] = ema_decay
         if not inference_only:
             if ema is not None:  # optional key: readers use .get("ema")
-                base["ema"] = {"decay": ema_decay, "every": EMA_EVERY, "state": ema}
+                base["ema"] = {"decay": ema_decay, "every": EMA_EVERY, "state": ema, "updates": ema_updates}
             base.update({
                 "optimizer": optimizer_state_for_checkpoint(opt, device),
                 "optimizer_param_names": [n for g in param_names for n in g],
@@ -4771,9 +4833,11 @@ def _train(args):
             oom_retries = 0
             if ema is not None and step % EMA_EVERY == 0:
                 with held:  # the average is updated whole or not at all
-                    # ema <- d^k ema + (1 - d^k) w with k = EMA_EVERY: the per-step decay compounded over the steps
-                    # between updates (0.999^10 ~ 0.990, a horizon of about 1,000 steps)
-                    ema_update(ema, model, ema_decay ** EMA_EVERY)
+                    # ema <- b ema + (1 - b) w with b = d^k debiased (ema_decay_at), k = EMA_EVERY: the per-step
+                    # decay compounded over the steps between updates (0.999^10 ~ 0.990, a horizon of ~1,000 steps)
+                    if ema_updates is not None:
+                        ema_updates += 1
+                    ema_update(ema, model, ema_decay_at(ema_decay ** EMA_EVERY, ema_updates))
             held.deliver()  # a Ctrl+C held during the update: the step is complete, so it is saved as done
             peak_mem = peak_memory_bytes(device, peak_mem)
 
@@ -4821,7 +4885,8 @@ def _train(args):
                 # the EMA weights are scored as well (one more evaluation) while the learning rate is above 5 % of
                 # the peak; in the tail of the decay the raw weights settle and the two agree, so that pass is saved
                 ev_ema = None
-                if ema is not None and lr >= 0.05 * float(settings["lr"]):
+                # ema_updates 0: no update has replaced the starting copy yet, so there is nothing to score
+                if ema is not None and ema_updates != 0 and lr >= 0.05 * float(settings["lr"]):
                     with swapped_weights(model, ema, hold=held):  # the weight copies are whole or not at all
                         ev_ema = evaluate_retrying()
                     held.deliver()  # a Ctrl+C held during a copy: the raw weights are back in place
