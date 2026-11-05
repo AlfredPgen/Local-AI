@@ -2363,9 +2363,10 @@ def plan_run(args, manifest, device, amp_dtype, token_cap=None):
     epochs = train_tokens / max(unique, 1)
     dropout = args.dropout if args.dropout is not None else (0.0 if epochs <= 4 else 0.1)
     cfg.dropout = dropout
-    # the LR table was calibrated at the old batch rule; a doubled or halved batch moves the rate by sqrt(2)
-    tps_target = target_tps(cfg)
-    lr_factor = 1.0 if args.lr else lr_batch_factor(n_total, tps_target)
+    # the LR table was calibrated at the old batch rule; a doubled or halved batch moves the rate by sqrt(2). The
+    # factor follows the batch the run will use (micro x accumulation x ctx: --batch-size and --grad-accum may fix it
+    # far from the planner's target), and its power-of-two rounding leaves accumulation rounding alone
+    lr_factor = 1.0 if args.lr else lr_batch_factor(n_total, tokens_per_step)
     lr = args.lr or heuristic_lr(n_total) * lr_factor
     min_lr_ratio = resolve_min_lr_ratio(args.min_lr_ratio, args.schedule)
     warmup = args.warmup_steps if args.warmup_steps is not None else int(min(max(round(0.02 * steps), 50), 2000, max(1, steps // 10)))
@@ -2399,7 +2400,7 @@ def plan_run(args, manifest, device, amp_dtype, token_cap=None):
         f"unique data {unique / n_total:,.1f} tokens per parameter; {epochs:,.2f} epochs",
         f"learning rate {lr:.2e} peak ("
         + ("set" if args.lr else f"heuristic for {n_total / 1e6:,.1f}M parameters x batch factor {lr_factor:.2f}"
-           + ("" if lr_factor == 1.0 else f" for {tps_target:,} tokens/step against the table's "
+           + ("" if lr_factor == 1.0 else f" for {tokens_per_step:,} tokens/step against the table's "
                                           f"{tokens_per_step_legacy(n_total):,}"))
         + f"), min {lr * min_lr_ratio:.2e} ({min_lr_ratio:g} of peak"
         + ("" if args.min_lr_ratio is not None else
@@ -3403,6 +3404,8 @@ def _train(args):
                                                         "epochs", "train_tokens", "time_budget_hours",
                                                         "tokens_per_step")
                    if getattr(args, k) is not None]
+        if getattr(args, "tie_embeddings", "on") == "off" and cfg.tie_embeddings:
+            ignored.append("--tie-embeddings off")
         if ignored:
             print(f"Note: {', '.join(ignored)} ignored on --resume (the checkpoint's settings are kept).")
         if args.steps and args.steps != settings["steps"]:
@@ -4346,6 +4349,7 @@ def _args_with_shape(args, cfg):
     clone = argparse.Namespace(**vars(args))
     clone.d_model, clone.layers, clone.heads, clone.kv_heads = cfg.d_model, cfg.n_layers, cfg.n_heads, cfg.n_kv_heads
     clone.ctx, clone.ffn_hidden, clone.rope_base = cfg.ctx, cfg.ffn_hidden, cfg.rope_base
+    clone.tie_embeddings = "on" if cfg.tie_embeddings else "off"  # the plan counts and labels the embedding as built
     return clone
 
 

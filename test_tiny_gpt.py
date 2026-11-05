@@ -1204,12 +1204,13 @@ class TestPipeline(unittest.TestCase):
         code, out_o = run(["tiny_gpt.py", "--name", "T", "--out-dir", self.runs, "--log-file", log, "--device", "cpu",
                            "--resume", "--steps", "20", "--eval-every", "8", "--eval-tokens", "2048",
                            "--sample-tokens", "8", "--no-probes", "--activation-checkpointing", "off",
-                           "--loss-chunk-tokens", "0", "--min-lr-ratio", "0.05"])
+                           "--loss-chunk-tokens", "0", "--min-lr-ratio", "0.05", "--tie-embeddings", "off"])
         self.assertEqual(code, 0, out_o)
         ck = torch.load(os.path.join(self.runs, "T.pt"), map_location="cpu", weights_only=True)
         self.assertEqual((ck["step"], ck["train_config"]["activation_checkpointing"]), (20, False))
         # step 16 of the new 20 is still in the stable phase, so the end point of the decay may change
         self.assertIn("from the decay phase on", out_o)
+        self.assertIn("--tie-embeddings off ignored on --resume", out_o)
         self.assertAlmostEqual(ck["train_config"]["min_lr"], 0.05 * ck["train_config"]["lr"])
         self.assertEqual(ck["train_config"]["mix_alpha"], 1.0)
         # fine-tuning in micro-batches of 1 with recomputation: the same held-out loss as whole batches of 4
@@ -3060,6 +3061,12 @@ class TestFixes(unittest.TestCase):
         _, st_b, lines_b = plan(["--tokens-per-step", "524288"])
         self.assertAlmostEqual(st_b["lr"], 1.4 * tiny_gpt.heuristic_lr(n))
         self.assertIn("batch factor 1.40 for 524,288 tokens/step against the table's 262,144", "\n".join(lines_b))
+        # --batch-size and --grad-accum fix the batch far from the planner's target: the factor follows the batch the
+        # run will use (8 x 1024 x 1 = 8,192 tokens/step), not the --steps-derived target
+        _, st_s, lines_s = plan(["--batch-size", "8", "--grad-accum", "1", "--steps", "6"])
+        self.assertEqual(st_s["tokens_per_step"], 8_192)
+        self.assertAlmostEqual(st_s["lr"], 0.7 * tiny_gpt.heuristic_lr(n))
+        self.assertIn("batch factor 0.70 for 8,192 tokens/step against the table's 262,144", "\n".join(lines_s))
         # --mix-alpha flattens the mix in the plan and warns about sources repeated past --max-epochs
         _, st_a, lines_a = plan(["--mix-alpha", "0.8"])
         text_a = "\n".join(lines_a)
@@ -3191,6 +3198,9 @@ class TestFixes(unittest.TestCase):
             cfg_u, _, lines = tiny_gpt.plan_run(args, manifest, torch.device("cpu"), None)
         self.assertFalse(cfg_u.tie_embeddings)
         self.assertIn("excluding the (untied) embedding", "\n".join(lines))
+        # --init-from plans with the checkpoint's shape, the tying included
+        self.assertEqual(tiny_gpt._args_with_shape(args, untied_cfg).tie_embeddings, "off")
+        self.assertEqual(tiny_gpt._args_with_shape(args, model.cfg).tie_embeddings, "on")
 
 
 class TestRxiv(unittest.TestCase):
