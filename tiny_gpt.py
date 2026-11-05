@@ -39,6 +39,7 @@ falls back to eager when the graph fails.
 
 import argparse
 import atexit
+import contextlib
 import dataclasses
 import datetime
 import gc
@@ -619,12 +620,13 @@ class GroupedQueryAttention(nn.Module):
         b, t, _ = x.shape
         q, k, v = self._qkv(x, rope)
         p = self.dropout if self.training else 0.0
-        if self.impl == "gqa_native" and self.n_rep > 1:
-            if mask is None:
-                y = F.scaled_dot_product_attention(q, k, v, dropout_p=p, is_causal=True, enable_gqa=True)
-            else:
-                y = F.scaled_dot_product_attention(q, k, v, attn_mask=mask, dropout_p=p, enable_gqa=True)
+        if self.impl == "gqa_native" and self.n_rep > 1 and mask is None:
+            y = F.scaled_dot_product_attention(q, k, v, dropout_p=p, is_causal=True, enable_gqa=True)
         else:
+            # a document mask always takes this path: SDPA's enable_gqa runs only on the flash and math kernels,
+            # and flash takes no mask, so enable_gqa with a mask would fall to the math kernel (every head's full
+            # T x T scores kept, many times slower); with the K/V heads repeated the masked call can use the
+            # memory-efficient kernel
             if self.n_rep > 1:
                 k = k.repeat_interleave(self.n_rep, dim=1)
                 v = v.repeat_interleave(self.n_rep, dim=1)
@@ -1116,18 +1118,24 @@ class swapped_weights:
     """with swapped_weights(model, weights): the model carries `weights` (a state_dict
     such as the EMA) inside the block and its own weights again afterwards, copied in
     place (load_state_dict), so the parameter tensors the optimizer and a compiled
-    graph hold stay the same objects. The raw weights wait on the CPU meanwhile."""
+    graph hold stay the same objects. The raw weights wait on the CPU meanwhile.
+    `hold` (a DeferInterrupt) keeps Ctrl+C out of the two copies: an interrupt halfway
+    through one would leave a model that is part raw and part average, and the pause
+    that follows would save it as the run's weights; the caller delivers it afterwards."""
 
-    def __init__(self, model, weights):
+    def __init__(self, model, weights, hold=None):
         self.model, self.weights, self.raw = model, weights, None
+        self.hold = hold if hold is not None else contextlib.nullcontext()
 
     def __enter__(self):
-        self.raw = cpu_state_dict(self.model)
-        self.model.load_state_dict(self.weights)
+        with self.hold:
+            self.raw = cpu_state_dict(self.model)
+            self.model.load_state_dict(self.weights)
         return self.model
 
     def __exit__(self, *exc):
-        self.model.load_state_dict(self.raw)
+        with self.hold:
+            self.model.load_state_dict(self.raw)
         self.raw = None
         return False
 
@@ -2505,6 +2513,9 @@ def plan_run(args, manifest, device, amp_dtype, token_cap=None):
     # --lr-scale: the sweep knob on the heuristic rate (LR_TABLE itself changes only once a sweep has shown a factor
     # that two sizes agree on; keep lr x weight_decay constant when it does)
     lr_scale = float(getattr(args, "lr_scale", 1.0) or 1.0)
+    if args.lr and lr_scale != 1.0:  # recorded as the factor the run's rate actually carries
+        lines.append(f"--lr-scale {lr_scale:g} has no effect: --lr sets the peak learning rate (recorded as 1)")
+        lr_scale = 1.0
     lr = args.lr or heuristic_lr(n_total) * lr_factor * lr_scale
     min_lr_ratio = resolve_min_lr_ratio(args.min_lr_ratio, args.schedule)
     warmup = args.warmup_steps if args.warmup_steps is not None else int(min(max(round(0.02 * steps), 50), 2000, max(1, steps // 10)))
@@ -3897,7 +3908,8 @@ def _train(args):
             "checkpoint_type": "inference" if inference_only else "training",
             "created": now_iso(), "run_id": run_id, "torch_version": str(torch.__version__),
             "model_config": dataclasses.asdict(cfg),
-            "model": weights_for_checkpoint(model, device, bf16=inference_only and args.best_bf16),
+            "model": (weights_for_checkpoint(model, device, bf16=inference_only and args.best_bf16) if weights == "raw"
+                      else ema_weights_for_checkpoint(ema, bf16=inference_only and args.best_bf16)),
             "tokenizer": {"proto": tok.proto, **tok.meta()},
             "dataset": {"path": dataset_dir, "fingerprint": manifest["fingerprint"],
                         "train_tokens": {n: len(a) for n, a in arrays["train"].items()},
@@ -3909,7 +3921,6 @@ def _train(args):
             "weights": weights,
         }
         if weights == "ema":
-            base["model"] = ema_weights_for_checkpoint(ema, bf16=inference_only and args.best_bf16)
             base["ema_decay"] = ema_decay
         if not inference_only:
             if ema is not None:  # optional key: readers use .get("ema")
@@ -4249,8 +4260,9 @@ def _train(args):
                 # the peak; in the tail of the decay the raw weights settle and the two agree, so that pass is saved
                 ev_ema = None
                 if ema is not None and lr >= 0.05 * float(settings["lr"]):
-                    with swapped_weights(model, ema):
+                    with swapped_weights(model, ema, hold=held):  # the weight copies are whole or not at all
                         ev_ema = evaluate_retrying()
+                    held.deliver()  # a Ctrl+C held during a copy: the raw weights are back in place
                 probe_acc, probe_by_category, probe_floor_acc = None, None, None
                 if probes:
                     probe_acc, probe_results = score_probes(model, tok, probes, device, amp_dtype)

@@ -3301,8 +3301,10 @@ class TestFixes(unittest.TestCase):
         self.assertIn("document mask on", text2)
         self.assertNotIn("QK-norm", text2)
         _, st3, lines3 = plan(["--lr", "1e-3", "--lr-scale", "2", "--ema", "0.99"])
-        self.assertEqual((st3["lr"], st3["ema"]), (1e-3, 0.99))
+        self.assertEqual((st3["lr"], st3["ema"], st3["lr_scale"]), (1e-3, 0.99, 1.0),
+                         "--lr fixes the rate, so the recorded scale is the one the run carries")
         self.assertIn("learning rate 1.00e-03 peak (set)", "\n".join(lines3))
+        self.assertIn("--lr-scale 2 has no effect", "\n".join(lines3))
         self.assertEqual(tiny_gpt.LR_TABLE, [(1e6, 2.0e-3), (1e7, 1.2e-3), (1e8, 6.0e-4), (1e9, 3.0e-4)],
                          "the table changes only after the sweep")
         self.assertEqual(tiny_gpt.parse_args(["--name", "x", "--ema", "off"]).ema, 0.0)
@@ -3363,6 +3365,26 @@ class TestFixes(unittest.TestCase):
             torch.testing.assert_close(model(x), raw_out)
             self.assertIs(model.lm_head.weight, model.token_embedding.weight)
         self.assertFalse(torch.allclose(inside, raw_out))
+
+        class Hold:  # stands in for DeferInterrupt: both weight copies run inside it
+            def __init__(self):
+                self.entered, self.inside = 0, False
+
+            def __enter__(self):
+                self.entered += 1
+                self.inside = True
+
+            def __exit__(self, *exc):
+                self.inside = False
+                return False
+
+        hold = Hold()
+        with torch.no_grad(), tiny_gpt.swapped_weights(model, ema, hold=hold):
+            self.assertEqual((hold.entered, hold.inside), (1, False), "held while copying, not while evaluating")
+            torch.testing.assert_close(model.norm.weight, ema["norm.weight"])
+        self.assertEqual(hold.entered, 2)
+        with torch.no_grad():
+            torch.testing.assert_close(model(x), raw_out)
         half = tiny_gpt.ema_weights_for_checkpoint(ema, bf16=True)
         self.assertEqual(half["norm.weight"].dtype, torch.bfloat16)
         self.assertIs(half["lm_head.weight"], half["token_embedding.weight"])
