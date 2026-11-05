@@ -52,7 +52,7 @@ answerer. **e**, tools to inspect, compare, export and use checkpoints.](figures
 | youtube_transcripts.py | On-topic lecture transcripts from YouTube channels |
 | download_wikipedia.py | English Wikipedia in the format data_prep.py reads |
 | gpu_check.py | GPU readings, a load test and a training benchmark; refuses to run while the GPU is busy |
-| test_tiny_gpt.py | 125 automated tests that run on the CPU (the six slow integration tests only with `TINYGPT_SLOW_TESTS=1`) |
+| test_tiny_gpt.py | 133 automated tests, 125 of them in the fast CPU set (the six slow integration tests only with `TINYGPT_SLOW_TESTS=1`, two GPU checks only with `TINYGPT_GPU_TESTS=1`) |
 | keywords.txt | 22,650 topic terms in 80 categories for the keyword filter |
 | probes_biology.tsv | The fact benchmark: 336 questions in 16 categories, with near-miss wrong answers |
 | calibrate_probes.py | Sets the benchmark's difficulty labels from how open reference models score it |
@@ -194,7 +194,7 @@ Every script was reviewed for bugs, stale code and speed. What you will notice:
 - **Data preparation for a 3-5x larger build:** near-duplicate search on a memory-mapped file, compressed work
   files, a `--resume` after the slow passes, leaked validation documents moved to training, display maths and
   headings never removed as boilerplate, and the tokenizer sampled in windows from every source.
-- **Tests:** 125, in a fast set of about 4-5 minutes; the integration tests run with `TINYGPT_SLOW_TESTS=1`.
+- **Tests:** 133, 125 of them in a fast set of about 4-5 minutes; the integration tests run with `TINYGPT_SLOW_TESTS=1`.
 
 ## What changed from 1 to 8 October 2026
 
@@ -2589,7 +2589,7 @@ a 5–50M model: S (a few percent), M (noticeable) or L (large). **Effort:** S i
 - **No installs.** Every package in requirements.txt is already installed. On a new machine:
   `python -m pip install -r requirements.txt`, with PyTorch installed first from pytorch.org for the right CUDA
   version.
-- **Tests.** `python -m unittest test_tiny_gpt` runs the fast set (117 of the 125 tests) on the CPU in about 4-5
+- **Tests.** `python -m unittest test_tiny_gpt` runs the fast set (125 of the 133 tests) on the CPU in about 4-5
   minutes; with `TINYGPT_SLOW_TESTS=1` the six integration tests run too (about 15-20 minutes in all).
 
 ## A name for the model

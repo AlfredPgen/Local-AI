@@ -174,7 +174,7 @@ python -m unittest test_tiny_gpt                              # the fast set
 $env:TINYGPT_SLOW_TESTS = "1"; python -m unittest test_tiny_gpt   # everything (PowerShell)
 ```
 
-125 tests on the CPU. The fast set (117) takes about 4-5 minutes; the six integration tests, which launch real
+133 tests. The fast set (125, on the CPU) takes about 4-5 minutes; the six integration tests, which launch real
 training runs as child processes, run only with `TINYGPT_SLOW_TESTS=1` (the full suite then takes about 15-20
 minutes). Two GPU checks also need `TINYGPT_GPU_TESTS=1` and are never run while a training run uses the GPU. They
 cover data preparation (filters, duplicates, splits, identical results for any number of workers), converters, the
