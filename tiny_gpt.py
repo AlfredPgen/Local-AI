@@ -1581,7 +1581,6 @@ def watermark_green(key, prev_token, vocab_size, gamma=0.25, _cache={}):
     return _cache[k]
 
 
-@torch.no_grad()
 class IncrementalDecoder:
     """Next-token logits for a growing token list, with a KV cache for TinyGPT models:
     the prompt is processed once, then one token per step. When the text outgrows the
@@ -1614,6 +1613,7 @@ class IncrementalDecoder:
             return model.lm_head(h[:, -1])[0].float().cpu()
 
 
+@torch.no_grad()
 def generate(model, tok, prompt, max_new_tokens, device, amp_dtype=None, temperature=0.8, top_k=50,
              top_p=0.95, generator=None, watermark=None):
     """Sample a continuation. Sampling runs on CPU with its own generator, so
