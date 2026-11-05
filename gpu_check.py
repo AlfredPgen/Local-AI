@@ -28,6 +28,7 @@ import torch.nn.functional as F
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
+import tiny_gpt  # noqa: E402
 
 QUERY = ["pstate", "clocks.sm", "clocks.mem", "clocks.max.sm", "clocks.max.mem", "power.draw",
          "enforced.power.limit", "power.default_limit", "temperature.gpu", "utilization.gpu",
@@ -133,9 +134,14 @@ def print_sample(label, s):
 
 
 def load_test(seconds):
-    if not torch.cuda.is_available():
-        print("CUDA not available; skipping the load test.")
-        return
+    """Half-precision 4096x4096 matrix multiplications on the automatic device (CUDA or
+    MPS) for `seconds`, reporting TFLOP/s; the driver's clocks and power are sampled
+    alongside only where nvidia-smi exists. A kernel benchmark: nothing here feeds
+    the training planner."""
+    device = tiny_gpt.select_device("auto")
+    if device.type == "cpu":
+        print("No CUDA or MPS device; skipping the load test.")
+        return None
     samples, stop = [], threading.Event()
 
     def sampler():
@@ -145,26 +151,29 @@ def load_test(seconds):
                 samples.append(s)
             stop.wait(1.0)
 
-    thread = threading.Thread(target=sampler, daemon=True)
-    dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
-    a = torch.randn(4096, 4096, device="cuda", dtype=dtype)
-    b = torch.randn(4096, 4096, device="cuda", dtype=dtype)
+    thread = threading.Thread(target=sampler, daemon=True) if shutil.which("nvidia-smi") else None
+    bf16 = torch.cuda.is_bf16_supported() if device.type == "cuda" else tiny_gpt._mps_bf16_ok()
+    dtype = torch.bfloat16 if bf16 else torch.float16
+    a = torch.randn(4096, 4096, device=device, dtype=dtype)
+    b = torch.randn(4096, 4096, device=device, dtype=dtype)
     for _ in range(5):
         a @ b
-    torch.cuda.synchronize()
-    thread.start()
+    tiny_gpt.synchronize(device)
+    if thread is not None:
+        thread.start()
     rates, t_end = [], time.time() + seconds
     while time.time() < t_end:
         t0 = time.perf_counter()
         for _ in range(20):
             a @ b
-        torch.cuda.synchronize()
+        tiny_gpt.synchronize(device)
         rates.append(20 * 2 * 4096 ** 3 / (time.perf_counter() - t0) / 1e12)
     stop.set()
-    thread.join()
+    if thread is not None:
+        thread.join()
     busy = [s for s in samples if num(s["utilization.gpu"]) >= 50] or samples
-    print(f"\nLoad test: {seconds} s of {str(dtype).split('.')[-1]} 4096x4096 matmuls: median "
-          f"{statistics.median(rates):.2f} TFLOP/s (min {min(rates):.2f}, max {max(rates):.2f})")
+    print(f"\nLoad test on {tiny_gpt.device_label(device)}: {seconds} s of {str(dtype).split('.')[-1]} 4096x4096 "
+          f"matmuls: median {statistics.median(rates):.2f} TFLOP/s (min {min(rates):.2f}, max {max(rates):.2f})")
     if busy:
         clocks = [num(s["clocks.sm"]) for s in busy]
         power = [num(s["power.draw"]) for s in busy]
@@ -177,7 +186,9 @@ def load_test(seconds):
 
 
 def train_bench(args):
-    import tiny_gpt
+    """Training steps of a small model on synthetic tokens: a kernel micro-benchmark
+    of attention variants and dropout on this device (tok/s, memory). Nothing here
+    is fed to the planner, which measures the real shape itself."""
     device = tiny_gpt.select_device(args.device)
     # training steps: FP16 is timed with the loss scaling a real run would use (and refused where it has none)
     amp_dtype, amp_name, need_scaler = tiny_gpt.choose_precision(device, args.precision)
@@ -193,7 +204,8 @@ def train_bench(args):
     for impl in impls:
         for dropout in sorted({0.0, args.dropout}):
             variants.append((impl, dropout))
-    print(f"\nTraining-step benchmark on {tiny_gpt.device_label(device)} | {amp_name} | vocab {args.vocab} | "
+    print(f"\nTraining-step kernel micro-benchmark (synthetic tokens; not used by the planner) on "
+          f"{tiny_gpt.device_label(device)} | {amp_name} | vocab {args.vocab} | "
           f"ctx {args.ctx} | batch {args.batch} | d_model {args.d_model} | layers {args.layers} | heads "
           f"{args.heads}/{args.kv_heads} | {args.warmup} warm-up steps excluded, {args.steps} timed")
     results = []
@@ -202,8 +214,7 @@ def train_bench(args):
         torch.manual_seed(0)
         model = tiny_gpt.TinyGPT(cfg).to(device)
         model.set_attention_impl(impl)
-        kwargs = {"fused": True} if device.type == "cuda" else {}
-        opt = torch.optim.AdamW(model.parameters(), lr=1e-4, **kwargs)
+        opt, _ = tiny_gpt.make_adamw(model.parameters(), device, lr=1e-4)
         scaler = torch.amp.GradScaler(device.type) if need_scaler else None
         x = torch.randint(0, args.vocab, (args.batch, args.ctx + 1), device=device)
         if device.type == "cuda":
@@ -246,10 +257,7 @@ def train_bench(args):
         print(f"  attention {impl:10s} dropout {dropout:<4} : {dt * 1000:8.1f} ms/step | {tok_s:>10,.0f} tok/s | "
               f"{memory_label} {peak:.2f} GiB")
         model = opt = None  # free them before the next variant (step() reads them)
-        if device.type == "cuda":
-            torch.cuda.empty_cache()
-        elif device.type == "mps":
-            torch.mps.empty_cache()
+        tiny_gpt.free_device_memory(device)
     if len(results) > 1:
         slow = max(results, key=lambda r: r[2])
         fast = min(results, key=lambda r: r[2])
@@ -281,21 +289,25 @@ def main():
         sys.stdout.reconfigure(encoding="utf-8")
     except (AttributeError, OSError):
         pass
-    print(f"python {platform.python_version()} | torch {torch.__version__} | CUDA {torch.version.cuda} | "
-          f"{platform.platform()}")
+    auto_device = tiny_gpt.select_device("auto")
+    print(f"python {platform.python_version()} | torch {torch.__version__} | backend "
+          f"{tiny_gpt.backend_label(auto_device)} | {platform.platform()}")
     if torch.cuda.is_available():
         props = torch.cuda.get_device_properties(0)
         print(f"GPU: {props.name}, {props.total_memory / 2 ** 30:.1f} GiB, {props.multi_processor_count} SMs, "
               f"BF16 {'yes' if torch.cuda.is_bf16_supported() else 'no'}")
-    elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-        print("GPU: Apple MPS (no nvidia-smi telemetry on macOS; use Activity Monitor or `sudo powermetrics`).")
+    elif auto_device.type == "mps":
+        print(f"GPU: {tiny_gpt.device_label(auto_device)} (no nvidia-smi telemetry on macOS; use Activity Monitor "
+              "or `sudo powermetrics`).")
     power = windows_power()
     snapshot = nvidia_smi()
     if snapshot:
         print_sample("now", snapshot)
-    busy = bool(snapshot) and (num(snapshot["utilization.gpu"]) > 30 or num(snapshot["memory.used"]) > 2500)
-    warning = ("\nThe GPU is busy (another job is running). Two CUDA jobs on a throttled laptop GPU can trip the "
-               "Windows 2-second GPU watchdog (driver reset, both jobs killed). Stop the other job or pass --force.")
+    # a live training lock counts on every device; the nvidia-smi reading only where there is one
+    busy = (bool(snapshot) and (num(snapshot["utilization.gpu"]) > 30 or num(snapshot["memory.used"]) > 2500)
+            or tiny_gpt.gpu_busy())
+    warning = ("\n" + tiny_gpt.GPU_BUSY_MESSAGE + " (Two CUDA jobs on a throttled laptop GPU can also trip the "
+               "Windows 2-second GPU watchdog: driver reset, both jobs killed.) Or pass --force.")
     loaded = None
     if args.load:
         if busy and not args.force:
@@ -306,7 +318,7 @@ def main():
     for note in diagnose(loaded or snapshot, loaded is not None, power):
         print(f" - {note}")
     if args.train_bench:
-        uses_gpu = args.device == "cuda" or (args.device == "auto" and torch.cuda.is_available())
+        uses_gpu = args.device in ("cuda", "mps") or (args.device == "auto" and auto_device.type != "cpu")
         if busy and uses_gpu and not args.force:  # a CPU benchmark cannot collide with a GPU job
             print(warning)
             return

@@ -2651,11 +2651,322 @@ class TestFixes(unittest.TestCase):
             self.assertEqual(run_pipeline.step_plan(1, "R"), 1)
             with unittest.mock.patch.object(sys, "argv", ["run_pipeline.py", "resume", "--name", "R"]):
                 self.assertEqual(run_pipeline.main(), 1)
-        import calibrate_probes
+
+    def test_gpu_busy_sees_training_locks_on_every_device(self):
+        """One gpu_busy for every script: a <name>.train.lock whose process is alive counts on any device (the only
+        signal on a Mac, where there is no nvidia-smi); this process's own lock does not; where nvidia-smi exists,
+        more than 2500 MiB used or 20 % utilization counts too. The other scripts share it and its message."""
+        folder = os.path.join(self.tmp, "busy")
+        os.makedirs(folder)
+        lock = os.path.join(folder, "other.train.lock")
+        no_smi = unittest.mock.patch.object(tiny_gpt.subprocess, "run", side_effect=OSError("no nvidia-smi"))
+        with no_smi:
+            self.assertFalse(tiny_gpt.gpu_busy(folder))
+            with open(lock, "w", encoding="utf-8") as f:
+                json.dump({"pid": os.getppid(), "started": None}, f)  # a live process (the test runner's parent)
+            self.assertTrue(tiny_gpt.gpu_busy(folder))
+            self.assertTrue(tiny_gpt.gpu_busy(os.path.join(self.tmp, "no_such_folder"), folder))
+            with open(lock, "w", encoding="utf-8") as f:
+                json.dump({"pid": os.getpid(), "started": None}, f)  # this process's own lock
+            self.assertFalse(tiny_gpt.gpu_busy(folder))
+            os.remove(lock)
         for text, busy in (("3000, 0\n", True), ("100, 25\n", True), ("100, 5\n", False)):
             fake = subprocess.CompletedProcess([], 0, stdout=text)
-            with unittest.mock.patch.object(calibrate_probes.subprocess, "run", return_value=fake):
-                self.assertEqual(calibrate_probes.gpu_busy(), busy, text)
+            with unittest.mock.patch.object(tiny_gpt.subprocess, "run", return_value=fake):
+                self.assertEqual(tiny_gpt.gpu_busy(folder), busy, text)
+        import calibrate_probes
+        import finetune
+        import run_pipeline
+        self.assertIs(calibrate_probes.gpu_busy, tiny_gpt.gpu_busy)
+        with unittest.mock.patch.object(tiny_gpt, "gpu_busy", return_value=True) as shared:
+            self.assertTrue(run_pipeline.gpu_busy())
+            shared.assert_called_with(run_pipeline.HERE)
+            self.assertTrue(finetune.gpu_busy(folder))
+            self.assertEqual(shared.call_args[0], (finetune.HERE, folder))
+        self.assertEqual(run_pipeline.GPU_BUSY, tiny_gpt.GPU_BUSY_MESSAGE)
+        self.assertIn("unified memory", tiny_gpt.GPU_BUSY_MESSAGE)
+        # finetune refuses every accelerator while another job runs, never the CPU, and --force overrides
+        import argparse
+        with unittest.mock.patch.object(finetune, "gpu_busy", return_value=True):
+            for dev in ("cuda", "mps"):
+                with self.assertRaises(SystemExit):
+                    finetune.check_gpu_free(torch.device(dev), argparse.Namespace(force=False, out_dir=folder))
+            finetune.check_gpu_free(torch.device("cpu"), argparse.Namespace(force=False, out_dir=folder))
+            finetune.check_gpu_free(torch.device("mps"), argparse.Namespace(force=True, out_dir=folder))
+
+    def test_mps_device_precision_and_budget_selection(self):
+        """select_device, choose_precision and device_memory_budget on an emulated Mac and on the CPU: MPS is taken
+        in auto mode when CUDA is absent, BF16 when its probe passes (else FP32), FP16 only with loss scaling, and
+        the planner's budget is 75 % of Metal's recommended working set (CUDA's 0.8 less the memory-mapped token
+        files and the OS that share unified memory)."""
+        mps, cpu = torch.device("mps"), torch.device("cpu")
+        with unittest.mock.patch.object(torch.cuda, "is_available", return_value=False), \
+                unittest.mock.patch.object(torch.backends.mps, "is_available", return_value=True):
+            self.assertEqual(tiny_gpt.select_device("auto").type, "mps")
+            self.assertEqual(tiny_gpt.select_device("mps").type, "mps")
+            self.assertEqual(tiny_gpt.select_device("cpu").type, "cpu")
+            with self.assertRaises(SystemExit):
+                tiny_gpt.select_device("cuda")
+        with unittest.mock.patch.object(torch.cuda, "is_available", return_value=False), \
+                unittest.mock.patch.object(torch.backends.mps, "is_available", return_value=False):
+            self.assertEqual(tiny_gpt.select_device("auto").type, "cpu")
+            with self.assertRaises(SystemExit):
+                tiny_gpt.select_device("mps")
+        with unittest.mock.patch.object(tiny_gpt, "_mps_bf16_ok", return_value=True):
+            self.assertEqual(tiny_gpt.choose_precision(mps, "auto"), (torch.bfloat16, "BF16 autocast", False))
+        with unittest.mock.patch.object(tiny_gpt, "_mps_bf16_ok", return_value=False):
+            self.assertEqual(tiny_gpt.choose_precision(mps, "auto"), (None, "FP32", False))
+        with unittest.mock.patch.object(tiny_gpt, "_mps_scaler_ok", return_value=False):
+            with self.assertRaises(SystemExit):
+                tiny_gpt.choose_precision(mps, "fp16")
+            self.assertEqual(tiny_gpt.choose_precision(mps, "fp16", training=False),
+                             (torch.float16, "FP16 autocast", False))
+        with unittest.mock.patch.object(tiny_gpt, "_mps_scaler_ok", return_value=True):
+            self.assertEqual(tiny_gpt.choose_precision(mps, "fp16"),
+                             (torch.float16, "FP16 autocast + loss scaling", True))
+        self.assertEqual(tiny_gpt.choose_precision(cpu, "auto"), (None, "FP32", False))
+        with self.assertRaises(SystemExit):
+            tiny_gpt.choose_precision(cpu, "fp16")
+        rec = 72 * 2 ** 30  # Metal's recommended working set on a 96 GB Mac Studio
+        with unittest.mock.patch.object(torch.mps, "recommended_max_memory", return_value=rec):
+            budget, text = tiny_gpt.device_memory_budget(mps)
+        self.assertEqual(budget, int(rec * 0.75))
+        self.assertIn("72.0 GiB recommended working set", text)
+        self.assertIn("budget 75 % = 54.0 GiB", text)
+        with unittest.mock.patch.object(torch.mps, "recommended_max_memory", side_effect=RuntimeError("no MPS")):
+            budget_f, _ = tiny_gpt.device_memory_budget(mps)  # falls back to the free RAM
+        self.assertGreater(budget_f, 0)
+        cpu_budget, cpu_text = tiny_gpt.device_memory_budget(cpu)
+        self.assertGreater(cpu_budget, 0)
+        self.assertIn("free RAM", cpu_text)
+        self.assertEqual(tiny_gpt.parse_args(["--name", "x", "--best-bf16"]).best_bf16, True)
+        self.assertEqual(tiny_gpt.parse_args(["--name", "x"]).best_bf16, False)
+
+    def test_mps_labels_environment_notes_and_memory_cap(self):
+        """device_label names the chip, cores, recommended memory and macOS (falling back to 'Apple MPS'); the run
+        header prints the backend, the MPS allocator variables and the fallback warning; the hard memory cap is set
+        once per process, on MPS only, and never raises."""
+        mps, cpu = torch.device("mps"), torch.device("cpu")
+        with unittest.mock.patch.object(torch.backends.mps, "get_name", return_value="Apple M5 Ultra", create=True), \
+                unittest.mock.patch.object(torch.backends.mps, "get_core_count", return_value=80, create=True), \
+                unittest.mock.patch.object(torch.mps, "recommended_max_memory", return_value=72 * 2 ** 30), \
+                unittest.mock.patch.object(tiny_gpt.platform, "mac_ver", return_value=("26.1", ("", "", ""), "arm64")):
+            self.assertEqual(tiny_gpt.device_label(mps),
+                             "Apple M5 Ultra (80 GPU cores, 72 GiB recommended, macOS 26.1)")
+        with unittest.mock.patch.object(torch.backends.mps, "get_name", side_effect=RuntimeError("no MPS"),
+                                        create=True):
+            self.assertEqual(tiny_gpt.device_label(mps), "Apple MPS")
+        self.assertEqual(tiny_gpt.backend_label(mps), "mps")
+        self.assertEqual(tiny_gpt.backend_label(cpu), "cpu")
+        self.assertEqual(tiny_gpt.backend_label(torch.device("cuda")), f"cuda {torch.version.cuda}")
+        self.assertEqual(tiny_gpt.mps_env_notes({}), [])
+        notes = tiny_gpt.mps_env_notes({"PYTORCH_MPS_HIGH_WATERMARK_RATIO": "1.2", "PYTORCH_ENABLE_MPS_FALLBACK": "1"})
+        self.assertEqual(len(notes), 2)
+        self.assertIn("PYTORCH_MPS_HIGH_WATERMARK_RATIO=1.2", notes[0])
+        self.assertIn("10-100x slower", notes[1])
+        with unittest.mock.patch.object(tiny_gpt, "_MPS_CAPPED", False), \
+                unittest.mock.patch.object(torch.mps, "set_per_process_memory_fraction") as cap:
+            self.assertFalse(tiny_gpt.cap_device_memory(cpu))
+            self.assertTrue(tiny_gpt.cap_device_memory(mps))
+            self.assertFalse(tiny_gpt.cap_device_memory(mps), "once per process")
+            cap.assert_called_once_with(1.0)
+        with unittest.mock.patch.object(tiny_gpt, "_MPS_CAPPED", False), \
+                unittest.mock.patch.object(torch.mps, "set_per_process_memory_fraction",
+                                           side_effect=RuntimeError("no MPS")):
+            self.assertFalse(tiny_gpt.cap_device_memory(mps))
+
+    def test_device_rng_helpers_and_fork(self):
+        """device_rng_state / set_device_rng_state round-trip the MPS generator (None on the CPU, whose state
+        torch.get_rng_state holds, and when the backend cannot report one); fork_device_rng leaves the CPU stream as
+        it was and asks fork_rng for the device's own generator on MPS."""
+        mps, cpu = torch.device("mps"), torch.device("cpu")
+        self.assertIsNone(tiny_gpt.device_rng_state(cpu))
+        tiny_gpt.set_device_rng_state(cpu, None)  # a no-op, never an error
+        fake, stored = torch.arange(8, dtype=torch.uint8), {}
+        with unittest.mock.patch.object(torch.mps, "get_rng_state", return_value=fake), \
+                unittest.mock.patch.object(torch.mps, "set_rng_state", side_effect=lambda s: stored.update(s=s)):
+            state = tiny_gpt.device_rng_state(mps)
+            self.assertTrue(torch.equal(state, fake))
+            tiny_gpt.set_device_rng_state(mps, state)
+        self.assertTrue(torch.equal(stored["s"], fake))
+        with unittest.mock.patch.object(torch.mps, "get_rng_state", side_effect=RuntimeError("no MPS")):
+            self.assertIsNone(tiny_gpt.device_rng_state(mps))
+        if not torch.cuda.is_available():
+            self.assertIn(tiny_gpt.device_rng_state(torch.device("cuda")), ([], None))
+        torch.manual_seed(5)
+        before = torch.get_rng_state()
+        with tiny_gpt.fork_device_rng(cpu):
+            torch.randn(100)
+        self.assertTrue(torch.equal(torch.get_rng_state(), before))
+        with unittest.mock.patch.object(torch.random, "fork_rng") as fork:
+            tiny_gpt.fork_device_rng(mps)
+        fork.assert_called_once_with(devices=[0], device_type="mps")
+
+    def test_make_adamw_falls_back_cleanly(self):
+        """make_adamw asks for the fused kernel on CUDA and MPS and falls back to plain AdamW where the PyTorch
+        refuses it; the CPU stays plain, so build_optimizer's CPU arithmetic (the tests' step comparisons) is
+        unchanged."""
+        p = [torch.nn.Parameter(torch.zeros(3))]
+        opt, label = tiny_gpt.make_adamw([{"params": p}], torch.device("cpu"), lr=1e-3)
+        self.assertEqual(label, "AdamW")
+        self.assertFalse(opt.defaults.get("fused"))
+        asked, real = [], torch.optim.AdamW
+
+        def refuse(groups, **kw):
+            asked.append(kw.get("fused"))
+            if kw.get("fused"):
+                raise RuntimeError("fused AdamW not supported here")
+            return real(groups, **kw)
+
+        with unittest.mock.patch.object(torch.optim, "AdamW", side_effect=refuse):
+            _, label_m = tiny_gpt.make_adamw([{"params": p}], torch.device("mps"), lr=1e-3)
+        self.assertEqual((label_m, asked), ("AdamW", [True, None]))
+        cfg = tiny_gpt.ModelConfig(vocab_size=50, ctx=8, d_model=16, n_layers=1, n_heads=2, n_kv_heads=1)
+        settings = {"optimizer": "adamw", "lr": 1e-3, "weight_decay": 0.1, "betas": [0.9, 0.95]}
+        self.assertEqual(tiny_gpt.build_optimizer(tiny_gpt.TinyGPT(cfg), settings, torch.device("cpu"))[1], "AdamW")
+
+    def test_attention_memory_probe_drives_the_mps_estimate(self):
+        """attention_keeps_scores is a measurement (cached per device type; CUDA and CPU: False); when it is true
+        the estimate charges n_heads x ctx x 6 bytes per token and layer (one layer with checkpointing), and at
+        ctx >= 2048 activation checkpointing becomes the first memory option."""
+        mps, cpu = torch.device("mps"), torch.device("cpu")
+        cfg = tiny_gpt.ModelConfig(vocab_size=16384, ctx=2048, d_model=1024, n_layers=18, n_heads=16, n_kv_heads=4)
+        self.assertFalse(tiny_gpt.attention_keeps_scores(cpu))
+        with unittest.mock.patch.dict(tiny_gpt._ATTN_SCORES_CACHE, clear=True), \
+                unittest.mock.patch.object(tiny_gpt, "_attention_growth_bytes", return_value=16 * 2 ** 20) as probe:
+            self.assertTrue(tiny_gpt.attention_keeps_scores(mps))
+            self.assertTrue(tiny_gpt.attention_keeps_scores(mps))
+            self.assertEqual(probe.call_count, 1, "measured once per device type")
+            plain = tiny_gpt.estimate_train_bytes(cfg, 2, True)
+            self.assertEqual(tiny_gpt.estimate_train_bytes(cfg, 2, True, device=mps) - plain,
+                             2 * 2048 * 18 * 16 * 2048 * 6)
+            self.assertEqual(tiny_gpt.estimate_train_bytes(cfg, 2, True, checkpointing=True, device=mps)
+                             - tiny_gpt.estimate_train_bytes(cfg, 2, True, checkpointing=True),
+                             2 * 2048 * 16 * 2048 * 6, "with checkpointing only the recomputed block keeps scores")
+            self.assertEqual(tiny_gpt.estimate_train_bytes(cfg, 2, True, device=cpu), plain)
+            budget = 64 * 2 ** 30
+            self.assertTrue(tiny_gpt.choose_memory_plan(cfg, 262_144, budget, True, "muon", device=mps)[2])
+            self.assertFalse(tiny_gpt.choose_memory_plan(cfg, 262_144, budget, True, "muon", device=cpu)[2])
+            short = tiny_gpt.ModelConfig(**{**dataclasses.asdict(cfg), "ctx": 1024})
+            self.assertFalse(tiny_gpt.choose_memory_plan(short, 262_144, budget, True, "muon", device=mps)[2])
+            self.assertFalse(tiny_gpt.choose_memory_plan(cfg, 262_144, budget, True, "muon", "off", device=mps)[2],
+                             "never an option the command line turned off")
+        with unittest.mock.patch.dict(tiny_gpt._ATTN_SCORES_CACHE, clear=True), \
+                unittest.mock.patch.object(tiny_gpt, "_attention_growth_bytes", return_value=2 ** 20):
+            self.assertFalse(tiny_gpt.attention_keeps_scores(mps), "a fused kernel keeps about 1 MiB")
+        with unittest.mock.patch.dict(tiny_gpt._ATTN_SCORES_CACHE, clear=True), \
+                unittest.mock.patch.object(tiny_gpt, "_attention_growth_bytes", side_effect=RuntimeError("x")):
+            self.assertFalse(tiny_gpt.attention_keeps_scores(mps))
+
+    def test_time_budget_ladder_retries_memory_options_on_oom(self):
+        """An out-of-memory error in the ladder's speed test measures the same shape again with activation
+        checkpointing on (unless the command line turned it off), then with the micro-batch halved down to 1,
+        before the shape counts as not fitting; the plan then carries the option that fit."""
+        manifest = {"tokenizer": {"vocab_size": 16384},
+                    "sources": {"md": {"train": {"tokens": 1_000_000_000}, "doc_tokens_percentiles": {"90": 1000}}}}
+        ladder = tiny_gpt.shape_ladder(16384)
+        bound = 3600 * 0.92 / (tiny_gpt.SLOW_FACTOR["cpu"] * 20 * 1e-13)
+        want = max((c for c in ladder if tiny_gpt.count_params(c)[0] ** 2 <= bound), key=lambda c: c.d_model)
+        below = max(c.d_model for c in ladder if c.d_model < want.d_model)
+        seen = []
+
+        def measure(fails):
+            def fake(cfg, micro, accum, device, amp_dtype, attn_pref="auto", warmup=2, timed=3,
+                     checkpointing=False, loss_chunk=0, settings=None):
+                seen.append((cfg.d_model, micro, checkpointing))
+                if cfg.d_model == want.d_model and fails(micro, checkpointing):
+                    raise RuntimeError("MPS backend out of memory (simulated)")
+                return micro * accum * cfg.ctx * tiny_gpt.count_params(cfg)[0] * 1e-13, 2 ** 30
+            return fake
+
+        def plan(argv, fails):
+            del seen[:]
+            args = tiny_gpt.parse_args(["--name", "x", "--time-budget-hours", "1", "--compile", "off"] + argv)
+            with unittest.mock.patch.object(tiny_gpt, "device_memory_budget", return_value=(64 * 2 ** 30, "64 GiB")), \
+                    unittest.mock.patch.object(tiny_gpt, "measure_seconds_per_step", side_effect=measure(fails)), \
+                    unittest.mock.patch.object(tiny_gpt, "sustained_speed", return_value=(None, "no table")), \
+                    unittest.mock.patch.object(tiny_gpt, "have_triton", return_value=False):
+                return tiny_gpt.plan_with_time_budget(args, manifest, torch.device("cpu"), None)
+
+        cfg, settings, lines = plan([], lambda micro, ck: not ck)
+        self.assertEqual(cfg.d_model, want.d_model)
+        self.assertTrue(settings["activation_checkpointing"])
+        self.assertTrue(any("measured again with activation checkpointing on" in ln for ln in lines), lines)
+        self.assertEqual([ck for d, _, ck in seen if d == want.d_model], [False, True])
+        cfg2, settings2, lines2 = plan(["--activation-checkpointing", "off"], lambda micro, ck: micro > 1)
+        self.assertEqual((cfg2.d_model, settings2["micro_batch"], settings2["activation_checkpointing"]),
+                         (want.d_model, 1, False))
+        self.assertTrue(any("measured again with 1" in ln for ln in lines2), lines2)
+        micros = [m for d, m, _ in seen if d == want.d_model]
+        self.assertEqual(micros, sorted(micros, reverse=True))
+        self.assertTrue(all(a == 2 * b for a, b in zip(micros, micros[1:])), micros)
+        cfg3, _, lines3 = plan([], lambda micro, ck: True)
+        self.assertEqual(cfg3.d_model, below)
+        self.assertTrue(any("does not fit in memory even at micro-batch 1" in ln for ln in lines3), lines3)
+
+    def test_energy_is_blank_where_the_gpu_is_not_measured(self):
+        """On an accelerator without nvidia-smi (MPS) the experiments table leaves energy, CO2e and cost blank and
+        says why, and the meter's description says how to measure the chip's power; CPU runs (an estimate by
+        design) and measured GPUs keep their figures."""
+        mps, cpu = torch.device("mps"), torch.device("cpu")
+        meter = tiny_gpt.EnergyMeter(mps, 35.0, 125.0, period=3600)
+        try:
+            self.assertFalse(meter.gpu_measured)
+            self.assertIn("sudo powermetrics", meter.describe())
+            cols = tiny_gpt.energy_columns(meter, mps)
+            self.assertEqual((cols["energy_kwh"], cols["co2e_kg"], cols["cost_gbp"]), ("", "", ""))
+            self.assertEqual(cols["notes"], "energy not measured (no nvidia-smi)")
+            self.assertEqual(tiny_gpt.energy_columns(meter, mps, "RuntimeError: x")["notes"],
+                             "RuntimeError: x; energy not measured (no nvidia-smi)")
+        finally:
+            meter.stop()
+        meter_cpu = tiny_gpt.EnergyMeter(cpu, 35.0, 125.0, period=3600)
+        try:
+            self.assertNotIn("powermetrics", meter_cpu.describe())
+            cols = tiny_gpt.energy_columns(meter_cpu, cpu, None)
+            self.assertIsNone(cols["notes"])
+            self.assertGreaterEqual(float(cols["energy_kwh"]), 0.0)
+            meter_cpu.gpu_measured = True  # as on a measured GPU
+            self.assertEqual(tiny_gpt.energy_columns(meter_cpu, mps, "n")["notes"], "n")
+        finally:
+            meter_cpu.stop()
+
+    def test_checkpoint_weights_bf16_best_and_mps_path(self):
+        """weights_for_checkpoint keeps tied weights as one tensor; --best-bf16 stores half-size weights that both
+        load paths read back into a float32 model; on MPS the device tensors themselves are handed to torch.save
+        (no bulk CPU copy), on CUDA/CPU a CPU copy as before."""
+        cfg = tiny_gpt.ModelConfig(vocab_size=50, ctx=8, d_model=16, n_layers=1, n_heads=2, n_kv_heads=1)
+        torch.manual_seed(0)
+        model = tiny_gpt.TinyGPT(cfg)
+        cpu, mps = torch.device("cpu"), torch.device("mps")
+        full = tiny_gpt.weights_for_checkpoint(model, cpu)
+        self.assertIs(full["lm_head.weight"], full["token_embedding.weight"])
+        self.assertEqual(full["token_embedding.weight"].dtype, torch.float32)
+        self.assertNotEqual(full["token_embedding.weight"].data_ptr(), model.token_embedding.weight.data_ptr())
+        on_device = tiny_gpt.weights_for_checkpoint(model, mps)  # the model's own tensors, nothing copied
+        self.assertEqual(on_device["token_embedding.weight"].data_ptr(), model.token_embedding.weight.data_ptr())
+        self.assertIs(on_device["lm_head.weight"], on_device["token_embedding.weight"])
+        half = tiny_gpt.weights_for_checkpoint(model, cpu, bf16=True)
+        self.assertIs(half["lm_head.weight"], half["token_embedding.weight"])
+        self.assertTrue(all(v.dtype == torch.bfloat16 for v in half.values() if v.is_floating_point()))
+        self.assertEqual(set(half), set(full))
+        want = model.token_embedding.weight.detach().to(torch.bfloat16).float()
+        copied = tiny_gpt.TinyGPT(cfg)
+        copied.load_state_dict(half, strict=False)
+        self.assertEqual(copied.token_embedding.weight.dtype, torch.float32)
+        self.assertTrue(torch.equal(copied.token_embedding.weight, want))
+        assigned = tiny_gpt._model_assigned({"model": half}, cfg, cpu)
+        self.assertIsNotNone(assigned)
+        self.assertEqual(assigned.token_embedding.weight.dtype, torch.float32)
+        self.assertTrue(torch.equal(assigned.token_embedding.weight, want))
+        opt = torch.optim.AdamW(model.parameters(), lr=1e-3)
+        model(torch.zeros((1, 4), dtype=torch.long)).sum().backward()
+        opt.step()
+        state = opt.state_dict()
+        self.assertEqual(tiny_gpt.optimizer_state_for_checkpoint(opt, mps)["state"].keys(), state["state"].keys())
+        cpu_state = tiny_gpt.optimizer_state_for_checkpoint(opt, cpu)
+        self.assertTrue(all(v.device.type == "cpu" for s in cpu_state["state"].values() for v in s.values()
+                            if isinstance(v, torch.Tensor)))
 
 
 class TestRxiv(unittest.TestCase):

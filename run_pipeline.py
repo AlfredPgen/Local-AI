@@ -27,6 +27,8 @@ import subprocess
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+import tiny_gpt  # noqa: E402
 
 # ---------------- settings: edit these ----------------
 DATA = os.path.join(os.path.expanduser("~"), "ai_training_data")  # the folder with all training text
@@ -77,13 +79,10 @@ def dataset_ready():
 
 
 def gpu_busy():
-    """True if another job holds GPU memory (a training run uses several GB)."""
-    try:
-        out = subprocess.run(["nvidia-smi", "--query-gpu=memory.used", "--format=csv,noheader,nounits"],
-                             capture_output=True, text=True, timeout=30).stdout
-        return float(out.strip().splitlines()[0]) > 2500
-    except (OSError, ValueError, IndexError, subprocess.SubprocessError):
-        return False
+    """tiny_gpt.gpu_busy for this folder's runs: a live training lock on any device, or
+    GPU memory/utilization where nvidia-smi exists (kept here so the other scripts and
+    the tests can refer to run_pipeline.gpu_busy)."""
+    return tiny_gpt.gpu_busy(HERE)
 
 
 def step_build():
@@ -95,8 +94,7 @@ def step_build():
     return run(build_command())
 
 
-GPU_BUSY = ("The GPU is busy (another training run?). Two GPU jobs at once can crash the graphics driver; "
-            "wait for the other job or stop it first.")
+GPU_BUSY = tiny_gpt.GPU_BUSY_MESSAGE
 
 
 def step_plan(hours, name):

@@ -2,7 +2,7 @@ r"""Set the fact benchmark's difficulty labels from how reference language model
 
     python calibrate_probes.py                    # score, write difficulty labels, write a report
     python calibrate_probes.py --report-only      # score and report; leave the probe file unchanged
-    python calibrate_probes.py --device cuda      # only when no training run is using the GPU
+    python calibrate_probes.py --device cuda      # only when no training run is using the GPU (or --device mps)
 
 Reference models are small open models with the Llama design, the same as tinyGPT's
 (RoPE, RMSNorm, SwiGLU, grouped-query attention). They are downloaded once from Hugging
@@ -26,7 +26,6 @@ import hashlib
 import inspect
 import json
 import os
-import subprocess
 import sys
 
 import numpy as np
@@ -190,16 +189,8 @@ def sanity_loss(model, tok, device):
 
 
 # ---------------------------------------------------------------------------
-def gpu_busy():
-    """True if another job holds GPU memory (a training run uses several GB, even
-    while it saves a checkpoint and the utilization drops) or keeps the GPU busy."""
-    try:
-        out = subprocess.run(["nvidia-smi", "--query-gpu=memory.used,utilization.gpu", "--format=csv,noheader,nounits"],
-                             capture_output=True, text=True, timeout=15).stdout
-        rows = [[float(v) for v in line.split(",")] for line in out.strip().splitlines()]
-        return any(used > 2500 or util >= 20 for used, util in rows)
-    except Exception:  # noqa: BLE001
-        return False
+# another training job on this machine: a live training lock (any device) or an occupied NVIDIA GPU
+gpu_busy = tiny_gpt.gpu_busy
 
 
 def model_code():
@@ -267,7 +258,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--probes", default=tiny_gpt.DEFAULT_PROBES)
     ap.add_argument("--models", nargs="+", default=DEFAULT_MODELS, help="Hugging Face repos with the Llama design")
-    ap.add_argument("--device", choices=("cpu", "cuda"), default="cpu")
+    ap.add_argument("--device", choices=("cpu", "cuda", "mps"), default="cpu")
     ap.add_argument("--threads", type=int, default=4, help="CPU threads (leave some for other work)")
     ap.add_argument("--batch", type=int, default=16, help="sequences scored together")
     ap.add_argument("--floor", action="store_true", help="also score shuffled questions (4x slower)")
@@ -277,10 +268,9 @@ def main():
     args = ap.parse_args()
     lower_priority()
     torch.set_num_threads(args.threads)
-    if args.device == "cuda" and gpu_busy() and not args.force:
-        raise SystemExit("The GPU looks busy (a training run?). Two GPU jobs at once crashed the driver before; "
-                         "use --device cpu, or wait.")
-    device = torch.device(args.device)
+    if args.device != "cpu" and gpu_busy() and not args.force:
+        raise SystemExit(tiny_gpt.GPU_BUSY_MESSAGE + " (Or use --device cpu, or pass --force.)")
+    device = tiny_gpt.select_device(args.device)
     probes = tiny_gpt.read_probes(args.probes)
     base = os.path.splitext(args.probes)[0]
     print(f"{len(probes)} items from {args.probes}; {len(args.models)} reference models on {device}")
@@ -324,7 +314,8 @@ def main():
                 free = float("inf")
             if n_params * 4 > 0.7 * free:
                 print(f"{repo}: SKIPPED on the CPU - needs {n_params * 4 / 2 ** 30:.1f} GiB in float32, "
-                      f"{free / 2 ** 30:.1f} GiB free. Rerun later, or with --device cuda when no training is running.")
+                      f"{free / 2 ** 30:.1f} GiB free. Rerun later, or with --device cuda (or mps) when no training "
+                      "is running.")
                 del model
                 continue
             model.float()
@@ -354,8 +345,7 @@ def main():
                 "benchmark_accuracy": f"{acc:.3f}", "benchmark_floor": f"{floor:.3f}" if floor is not None else None,
                 "benchmark_items": len(probes), "notes": f"{os.path.basename(args.probes)}; calibrate_probes.py"})
         del model
-        if device.type == "cuda":
-            torch.cuda.empty_cache()
+        tiny_gpt.free_device_memory(device)
     if len(per_model) < 2:
         raise SystemExit("Fewer than 2 reference models scored; difficulty labels not changed.")
 

@@ -96,7 +96,7 @@ def main(argv=None):
                       "bytes": np.array(nbytes), "probe": np.array([r["correct"] for r in results], float),
                       "probe_acc": acc}
         del model
-        torch.cuda.empty_cache() if device.type == "cuda" else None
+        tg.free_device_memory(device)
     o, e = res["original"], res["edited"]
 
     loop_diff = paired_ci(o["rates"], e["rates"])

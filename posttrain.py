@@ -325,8 +325,7 @@ def evaluate(checkpoints, args):
               + (f" | fact benchmark {fact_acc:.3f} (floor {fact_floor:.3f})" if facts else "")
               + f" | {time.time() - t0:,.0f} s", flush=True)
         del model
-        if device.type == "cuda":
-            torch.cuda.empty_cache()
+        tiny_gpt.free_device_memory(device)
     cats = sorted({c for r in rows for c in r[3]})
     lines = ["# Post-training report", "",
              f"{datetime.datetime.now().astimezone().isoformat(timespec='seconds')} on {tiny_gpt.device_label(device)} "
@@ -355,11 +354,20 @@ def evaluate(checkpoints, args):
 # run
 # ---------------------------------------------------------------------------
 def gpu_busy():
+    """Another training job on this machine, on any device (tiny_gpt.gpu_busy)."""
     try:
-        import run_pipeline
-        return run_pipeline.gpu_busy()
+        import tiny_gpt
+        return tiny_gpt.gpu_busy()
     except Exception:  # noqa: BLE001
         return False
+
+
+def _busy_message(extra=""):
+    try:
+        import tiny_gpt
+        return tiny_gpt.GPU_BUSY_MESSAGE + extra
+    except Exception:  # noqa: BLE001
+        return "The GPU is busy (another training run?); wait for the other job or stop it first." + extra
 
 
 def run(args):
@@ -368,8 +376,7 @@ def run(args):
         if not os.path.isfile(os.path.join(args.data_dir, f)):
             raise SystemExit(f"{os.path.join(args.data_dir, f)} is missing: run `python posttrain.py data` first.")
     if args.device != "cpu" and gpu_busy():
-        raise SystemExit("The GPU is busy (another training run?). Two GPU jobs at once can crash the graphics "
-                         "driver; wait for the other job or stop it first.")
+        raise SystemExit(_busy_message())
     # --force: the GPU was checked above; this process's own cached memory from SFT must not count as busy for DPO
     common = ["--out-dir", args.out_dir, "--device", args.device, "--force"] \
         + (["--overwrite"] if args.overwrite else []) + (["--trust-checkpoint"] if args.trust_checkpoint else [])
@@ -429,8 +436,7 @@ def main(argv=None):
         run(args)
     else:
         if args.device != "cpu" and not args.force and gpu_busy():
-            raise SystemExit("The GPU is busy (another training run?). Two GPU jobs at once can crash the graphics "
-                             "driver; use --device cpu, wait for the other job, or pass --force.")
+            raise SystemExit(_busy_message(" (Or use --device cpu, or pass --force.)"))
         evaluate(args.checkpoints, args)
 
 

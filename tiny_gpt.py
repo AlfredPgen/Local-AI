@@ -29,9 +29,12 @@ Output: <name>.pt (training checkpoint), <name>_best.pt (inference-only, best
 validation loss), <name>_metrics.jsonl, and log.txt (everything printed to the
 terminal, including errors, is appended to it).
 
-Portability: CUDA (BF16/FP16 autocast, fused AdamW), Apple MPS (BF16 when
-supported) and CPU all work in eager mode. torch.compile is used only where
-Triton exists (--compile auto); Windows never needs it.
+Portability: CUDA (BF16/FP16 autocast, fused AdamW), Apple MPS (BF16 autocast
+and fused AdamW when this PyTorch supports them; the run caps itself at Metal's
+recommended working set) and CPU all work in eager mode. torch.compile is used
+in auto mode where Triton exists (CUDA; on Windows via the triton-windows
+package, about 1.45x faster); on MPS it is tried only with --compile on and
+falls back to eager when the graph fails.
 """
 
 import argparse
@@ -39,6 +42,7 @@ import atexit
 import dataclasses
 import datetime
 import gc
+import glob
 import hashlib
 import json
 import math
@@ -193,8 +197,130 @@ def device_label(device):
         props = torch.cuda.get_device_properties(device)
         return f"{props.name} ({props.total_memory / 2 ** 30:.1f} GiB, sm_{props.major}{props.minor})"
     if device.type == "mps":
-        return "Apple MPS"
+        try:  # the chip, its GPU core count and Metal's recommended working set (torch >= 2.4)
+            return (f"{torch.backends.mps.get_name()} ({torch.backends.mps.get_core_count()} GPU cores, "
+                    f"{torch.mps.recommended_max_memory() / 2 ** 30:.0f} GiB recommended, "
+                    f"macOS {platform.mac_ver()[0] or '?'})")
+        except Exception:  # noqa: BLE001 - an older PyTorch without these calls
+            return "Apple MPS"
     return f"CPU ({os.cpu_count()} threads)"
+
+
+def backend_label(device):
+    """'cuda 12.6', 'mps' or 'cpu' for the run header (torch.version.cuda is None off CUDA)."""
+    return f"cuda {torch.version.cuda}" if device.type == "cuda" else device.type
+
+
+_MPS_CAPPED = False
+
+
+def cap_device_memory(device):
+    """On MPS, cap this process at Metal's recommended working set (fraction 1.0 of
+    it; PyTorch's default high-watermark ratio 1.7 lets allocations go beyond it,
+    and unified memory then pages to the SSD for hours instead of failing). With
+    the cap an over-budget plan raises the "MPS backend out of memory" RuntimeError
+    that the first-step handler and the planner catch. Done once per process;
+    nothing on CUDA (its allocator fails at the card's memory) or the CPU."""
+    global _MPS_CAPPED
+    if device.type != "mps" or _MPS_CAPPED:
+        return False
+    _MPS_CAPPED = True
+    fn = getattr(torch.mps, "set_per_process_memory_fraction", None)
+    if fn is None:
+        return False
+    try:
+        fn(1.0)
+        return True
+    except (RuntimeError, TypeError, ValueError):
+        return False
+
+
+def device_rng_state(device):
+    """The device's random generator state(s), on the CPU: the list of every CUDA
+    device's state, the MPS generator's state, None on the CPU (torch.get_rng_state
+    holds that one) or when the backend cannot report it."""
+    try:
+        if device.type == "cuda":
+            return [s.cpu() for s in torch.cuda.get_rng_state_all()]
+        if device.type == "mps":
+            return torch.mps.get_rng_state().cpu()
+    except (RuntimeError, AttributeError):
+        return None
+    return None
+
+
+def set_device_rng_state(device, state):
+    """Undo of device_rng_state: nothing for None (another device, or an older checkpoint)."""
+    if state is None:
+        return
+    if device.type == "cuda":
+        torch.cuda.set_rng_state_all([s.cpu() for s in state])
+    elif device.type == "mps":
+        torch.mps.set_rng_state(state.cpu())
+
+
+def fork_device_rng(device):
+    """torch.random.fork_rng over the CPU generator and this device's (CUDA or MPS),
+    so the dropout masks of a speed probe or compile warm-up do not consume the
+    run's random stream. On the CPU only its own generator is forked."""
+    if device.type in ("cuda", "mps"):
+        return torch.random.fork_rng(devices=[device.index or 0], device_type=device.type)
+    return torch.random.fork_rng(devices=[])
+
+
+def mps_env_notes(environ=None):
+    """Lines for the run header about the MPS allocator environment variables that
+    change memory behaviour or speed (printed only on MPS)."""
+    env = os.environ if environ is None else environ
+    notes = []
+    for key in ("PYTORCH_MPS_HIGH_WATERMARK_RATIO", "PYTORCH_MPS_LOW_WATERMARK_RATIO"):
+        if env.get(key):
+            notes.append(f"{key}={env[key]} (allocator watermark; the default high ratio is 1.7, low 1.4; the run "
+                         "caps itself at the recommended working set with set_per_process_memory_fraction(1.0))")
+    if env.get("PYTORCH_ENABLE_MPS_FALLBACK") == "1":
+        notes.append("WARNING: PYTORCH_ENABLE_MPS_FALLBACK=1: operations MPS has no kernel for run on the CPU; expect "
+                     "10-100x slower steps (set it only to diagnose a missing operation)")
+    return notes
+
+
+GPU_BUSY_MESSAGE = ("The GPU is busy (another training run?): two training jobs share one GPU / unified memory, so "
+                    "the second run slows both or swaps (and two CUDA jobs on a throttled laptop GPU can reset the "
+                    "driver). Wait for the other job or stop it first.")
+
+
+def gpu_busy(*out_dirs):
+    """True when another training job is running, on any device: a <name>.train.lock
+    whose process is alive in one of `out_dirs` (default: this script's folder), or,
+    where nvidia-smi exists, more than 2500 MiB of GPU memory in use or a utilization
+    of 20 % or more (a training run holds gigabytes even while it saves). Without
+    nvidia-smi (macOS) the lock files are the only signal, so every trainer in this
+    project takes one."""
+    for folder in out_dirs or (HERE,):
+        try:
+            if any(data_prep._lock_owner_alive(lock) for lock in glob.glob(os.path.join(folder, "*.train.lock"))):
+                return True
+        except OSError:
+            pass
+    try:
+        out = subprocess.run(["nvidia-smi", "--query-gpu=memory.used,utilization.gpu",
+                              "--format=csv,noheader,nounits"], capture_output=True, text=True, timeout=15).stdout
+        rows = [[float(v) for v in line.split(",")] for line in out.strip().splitlines()]
+        return any(used > 2500 or util >= 20 for used, util in rows)
+    except (OSError, ValueError, IndexError, subprocess.SubprocessError):
+        return False
+
+
+def make_adamw(groups, device, **kwargs):
+    """(AdamW optimizer, label): the fused kernel where there is one (CUDA, MPS: one
+    launch per step instead of about ten per parameter tensor), plain AdamW where
+    this PyTorch refuses it. The CPU deliberately stays plain, so step-for-step
+    comparisons on the CPU (the tests) keep their exact arithmetic."""
+    if device.type in ("cuda", "mps"):
+        try:
+            return torch.optim.AdamW(groups, fused=True, **kwargs), "fused AdamW"
+        except (TypeError, RuntimeError, ValueError):
+            pass
+    return torch.optim.AdamW(groups, **kwargs), "AdamW"
 
 
 def free_device_memory(device):
@@ -867,6 +993,34 @@ def cpu_state_dict(model):
     return out
 
 
+def weights_for_checkpoint(model, device, bf16=False):
+    """The model's weights as a checkpoint stores them. On CUDA and the CPU a CPU
+    copy (cpu_state_dict, tied storage shared); on MPS the device tensors themselves:
+    torch.save moves one storage at a time to the CPU and writes shared storage once,
+    so unified memory never holds a second full copy of the state (26-39 GB at 3B).
+    bf16=True (--best-bf16, inference-only copies): half-size bfloat16 weights, cast
+    on the device, tied weights still one tensor."""
+    if not bf16 and device.type != "mps":
+        return cpu_state_dict(model)
+    out, seen = {}, {}
+    for key, value in model.state_dict().items():
+        ident = (value.data_ptr(), tuple(value.shape), value.dtype)
+        if ident not in seen:
+            v = value.detach()
+            if bf16 and v.is_floating_point():
+                v = v.to(torch.bfloat16)
+            seen[ident] = v
+        out[key] = seen[ident]
+    return out
+
+
+def optimizer_state_for_checkpoint(opt, device):
+    """The optimizer's state dict as a checkpoint stores it: on MPS the device tensors
+    (see weights_for_checkpoint), elsewhere a CPU copy."""
+    state = opt.state_dict()
+    return state if device.type == "mps" else to_cpu(state)
+
+
 def to_cpu(obj):
     if isinstance(obj, torch.Tensor):
         return obj.detach().cpu()
@@ -1001,15 +1155,7 @@ def build_optimizer(model, settings, device):
     no_decay = [(n, p) for n, p in named if p.dim() < 2]
     groups = [{"params": [p for _, p in decay], "weight_decay": settings["weight_decay"]},
               {"params": [p for _, p in no_decay], "weight_decay": 0.0}]
-    opt_kwargs = dict(lr=settings["lr"], betas=tuple(settings["betas"]))
-    adamw, name = None, "AdamW"
-    if device.type == "cuda":
-        try:
-            adamw, name = torch.optim.AdamW(groups, fused=True, **opt_kwargs), "fused AdamW"
-        except (TypeError, RuntimeError, ValueError):
-            adamw = None
-    if adamw is None:
-        adamw = torch.optim.AdamW(groups, **opt_kwargs)
+    adamw, name = make_adamw(groups, device, lr=settings["lr"], betas=tuple(settings["betas"]))
     names = [[n for n, _ in decay], [n for n, _ in no_decay]]
     if not use_muon:
         return adamw, name, names, f"weight decay on {len(decay)} matrices, not on {len(no_decay)} norm gains"
@@ -1177,7 +1323,7 @@ class EnergyMeter:
         self.pending = {int(k): float(v) for k, v in (state.get("pending_wh") or {}).items()}  # half-hour -> Wh
         self._samples = 0
         self.cpu_watts, self.grid, self.period = float(cpu_watts), float(grid_g_per_kwh), period
-        self.gpu_index, self.gpu_measured = None, False
+        self.gpu_index, self.gpu_measured, self.device_type = None, False, device.type
         self._lock, self._sampling, self._stop = threading.Lock(), threading.Lock(), threading.Event()
         if device.type == "cuda":
             visible = [v.strip() for v in os.environ.get("CUDA_VISIBLE_DEVICES", "").split(",") if v.strip()]
@@ -1302,6 +1448,9 @@ class EnergyMeter:
     def describe(self):
         gpu = (f"GPU {self.gpu_index} measured with nvidia-smi every {self.period:g} s" if self.gpu_measured
                else "GPU not measured on this device")
+        if not self.gpu_measured and self.device_type == "mps":
+            gpu += (" (the chip draws most of the power; measure once with sudo powermetrics --samplers "
+                    "cpu_power,gpu_power -i 1000 -n 10 and pass --cpu-watts <package W> for an estimate)")
         host = (f"CPU estimated as {self.cpu_watts:g} W x this run's share of CPU time (--cpu-watts), memory as "
                 f"{RAM_W_PER_GB} W/GB" if self._proc is not None else "CPU and memory not estimated (no psutil)")
         cost = (f"; cost at {self.tariff.name} unit rates incl. VAT (--tariff, --region; standing charge not counted)"
@@ -1772,9 +1921,22 @@ def device_memory_budget(device):
     except ImportError:
         avail = 8 * 2 ** 30
     if device.type == "mps":
-        rec = getattr(torch.mps, "recommended_max_memory", None)
-        budget = rec() if rec else avail
-        return int(min(budget, avail) * 0.6), f"{min(budget, avail) / 2 ** 30:.1f} GiB usable unified memory"
+        # Metal's recommended working set (about 75 % of the unified memory on Apple silicon), and 75 % of that as
+        # the planner's budget rather than CUDA's 80 %: the same memory also holds the memory-mapped token files
+        # (8 GB now, 25-40 GB for the next dataset) and the OS. cap_device_memory makes it a hard cap, so an
+        # overshoot fails fast instead of paging to the SSD. Raise to 0.8 once a Mac run's peak_mem_gib confirms
+        # the estimate.
+        rec = None
+        fn = getattr(torch.mps, "recommended_max_memory", None)
+        if fn is not None:
+            try:
+                rec = int(fn())
+            except RuntimeError:
+                rec = None
+        if not rec:
+            rec = avail
+        return int(rec * 0.75), (f"{rec / 2 ** 30:.1f} GiB recommended working set (Metal), budget 75 % = "
+                                 f"{rec * 0.75 / 2 ** 30:.1f} GiB")
     return int(avail * 0.4), f"{avail / 2 ** 30:.1f} GiB free RAM"
 
 
@@ -1802,7 +1964,49 @@ def peak_memory_bytes(device, running=0):
         return running
 
 
-def estimate_train_bytes(cfg, micro_batch, amp=True, checkpointing=False, loss_chunk=0, optimizer="adamw"):
+_ATTN_SCORES_CACHE = {}
+
+
+def _attention_growth_bytes(device):
+    """Bytes the autograd graph of one causal SDPA call keeps on `device` for the
+    backward pass: q, k, v of shape (1, 4, 1024, 64) in bfloat16 with gradients,
+    measured as the device's allocated memory after the forward minus before it
+    (the saved tensors are freed again by the backward, so it is measured here)."""
+    allocated = torch.mps.current_allocated_memory if device.type == "mps" else torch.cuda.memory_allocated
+    q, k, v = (torch.randn(1, 4, 1024, 64, device=device, dtype=torch.bfloat16, requires_grad=True)
+               for _ in range(3))
+    synchronize(device)
+    before = int(allocated())
+    y = F.scaled_dot_product_attention(q, k, v, is_causal=True)
+    synchronize(device)
+    growth = int(allocated()) - before
+    y.square().mean().backward()  # the path training takes must work as well
+    return growth
+
+
+def attention_keeps_scores(device):
+    """Whether training attention on this device keeps the (B, H, T, T) score and
+    softmax tensors for the backward pass (the composite "math" path) instead of a
+    fused kernel that recomputes them (flash attention on CUDA, where it keeps only
+    the output and a logsumexp per row). Decided by a measurement, not by the device
+    type: on MPS the fused kernel is used only without gradients, so the probe sees
+    the saved (1, 4, 1024, 1024) softmax (8 MiB in bf16, 16 MiB in fp32) against the
+    1 MiB of output and logsumexp a fused kernel keeps; the threshold is 4 MiB. CUDA
+    and CPU: False (their planner estimates are calibrated as they are). Cached per
+    device type."""
+    if device.type != "mps":
+        return False
+    if device.type not in _ATTN_SCORES_CACHE:
+        try:
+            _ATTN_SCORES_CACHE[device.type] = _attention_growth_bytes(device) > 4 * 2 ** 20
+        except Exception:  # noqa: BLE001 - a backend that cannot run the probe: assume the cheaper kernel
+            _ATTN_SCORES_CACHE[device.type] = False
+        free_device_memory(device)
+    return _ATTN_SCORES_CACHE[device.type]
+
+
+def estimate_train_bytes(cfg, micro_batch, amp=True, checkpointing=False, loss_chunk=0, optimizer="adamw",
+                         device=None):
     """Training memory: FP32 weights and gradients (4 + 4 bytes per parameter),
     the half-precision weight copies autocast keeps during a step (2), optimizer
     state (AdamW 8; Muon 4 for the block matrices), activations kept for the
@@ -1812,12 +2016,18 @@ def estimate_train_bytes(cfg, micro_batch, amp=True, checkpointing=False, loss_c
     logit terms are calibrated to the CUDA allocator's RESERVED peak (measured
     estimate/peak 0.98-1.21 eager, 1.05-1.3 compiled, on the 216M run's shapes);
     the 0.8 budget factor is the margin and the first-step out-of-memory handler
-    the safety net, so no further factor is applied here."""
+    the safety net, so no further factor is applied here. With `device` given and
+    attention_keeps_scores(device) true (MPS), each layer also keeps its causal
+    scores: n_heads x ctx x 6 bytes per token (the bf16 cast copy, 2, and the fp32
+    softmax output, 4); with checkpointing the `+ t * per_token_layer` term already
+    charges them for the one block being recomputed."""
     n_total, n_nonembed = count_params(cfg)
     t = micro_batch * cfg.ctx
     b = 2 if amp else 4
     kv = cfg.n_kv_heads * cfg.head_dim
     per_token_layer = 4 * cfg.d_model + b * (7 * cfg.d_model + 4 * kv + 4 * cfg.ffn_hidden) + 3 * cfg.n_heads
+    if device is not None and attention_keeps_scores(device):
+        per_token_layer += cfg.n_heads * cfg.ctx * 6
     if checkpointing:
         activations = t * cfg.n_layers * 4 * cfg.d_model + t * per_token_layer  # the residual stream is FP32
     else:
@@ -1840,7 +2050,7 @@ def memory_options(checkpointing="auto", loss_chunk=None):
 
 
 def choose_memory_plan(cfg, tokens_per_step, budget_bytes, amp, optimizer="adamw", checkpointing="auto",
-                       loss_chunk=None, micro=None):
+                       loss_chunk=None, micro=None, device=None):
     """(micro-batch, accumulation, activation checkpointing, loss chunk tokens):
     the cheapest memory option that reaches a micro-batch of about 2k tokens
     (min(target, 2048 // ctx) sequences: 2 at ctx 1024, 1 at ctx >= 2048), else
@@ -1848,10 +2058,15 @@ def choose_memory_plan(cfg, tokens_per_step, budget_bytes, amp, optimizer="adamw
     saturate the GEMMs of a >= 1024-wide model (micro 2 vs 4: -7 % compiled),
     so a 4-sequence micro-batch is never worth the +21-32 % recompute of
     activation checkpointing. With `micro` given (an explicit --batch-size),
-    the cheapest option that fits that batch."""
+    the cheapest option that fits that batch. On a device whose attention keeps
+    the (B, H, T, T) scores (attention_keeps_scores: MPS) activation checkpointing
+    comes first at ctx >= 2048, where the quadratic score memory outweighs its
+    recompute."""
     target = max(1, tokens_per_step // cfg.ctx)
     options = memory_options(checkpointing, loss_chunk)
-    fits = lambda m, o: estimate_train_bytes(cfg, m, amp, o[0], o[1], optimizer) <= budget_bytes  # noqa: E731
+    if device is not None and cfg.ctx >= 2048 and attention_keeps_scores(device):
+        options.sort(key=lambda o: (not o[0], o[1] != 0))
+    fits = lambda m, o: estimate_train_bytes(cfg, m, amp, o[0], o[1], optimizer, device) <= budget_bytes  # noqa: E731
     if micro is not None:
         chosen = next((o for o in options if fits(micro, o)), options[-1])
         # rounded down like split_batch: never more tokens per step than asked for (the caller may round otherwise)
@@ -1967,17 +2182,18 @@ def plan_run(args, manifest, device, amp_dtype, token_cap=None):
         if args.batch_size:
             micro, accum, ck, lc = choose_memory_plan(cfg, tps, budget_bytes, amp, opt_kind,
                                                       args.activation_checkpointing, args.loss_chunk_tokens,
-                                                      micro=args.batch_size)
+                                                      micro=args.batch_size, device=device)
             if args.steps:  # steps fixed: rounding up would train past the token budget (and the epoch cap)
                 accum = args.grad_accum or max(1, tps // (micro * cfg.ctx))
             else:  # steps = budget // tokens per step below, so the nearest accumulation stays within the budget
                 accum = args.grad_accum or max(1, round(tps / (micro * cfg.ctx)))
-            if estimate_train_bytes(cfg, micro, amp, ck, lc, opt_kind) > budget_bytes:
+            if estimate_train_bytes(cfg, micro, amp, ck, lc, opt_kind, device) > budget_bytes:
                 lines.append(f"WARNING: batch {micro} x ctx {cfg.ctx} may not fit ({budget_text}); an "
                              "out-of-memory error at step 1 switches on memory savings or halves the batch.")
             return micro, accum, ck, lc
         micro, accum, ck, lc = choose_memory_plan(cfg, tps, budget_bytes, amp, opt_kind,
-                                                  args.activation_checkpointing, args.loss_chunk_tokens)
+                                                  args.activation_checkpointing, args.loss_chunk_tokens,
+                                                  device=device)
         return micro, (args.grad_accum or accum), ck, lc
 
     if explicit_shape:
@@ -2035,7 +2251,7 @@ def plan_run(args, manifest, device, amp_dtype, token_cap=None):
         "memory: " + ("activation checkpointing on (blocks recomputed in the backward pass)" if ckpt
                       else "activation checkpointing off") + "; "
         + (f"loss computed {chunk:,} tokens at a time" if chunk else "loss computed on the whole micro-batch")
-        + f" (estimated {estimate_train_bytes(cfg, micro, amp_dtype is not None, ckpt, chunk, args.optimizer or 'adamw') / 2 ** 30:.1f} GiB "
+        + f" (estimated {estimate_train_bytes(cfg, micro, amp_dtype is not None, ckpt, chunk, args.optimizer or 'adamw', device) / 2 ** 30:.1f} GiB "
         f"of {budget_text})",
     ]
     if args.steps and train_tokens > max_epochs * unique:
@@ -2053,7 +2269,7 @@ def measure_seconds_per_step(cfg, micro, accum, device, amp_dtype, attn_pref="au
     memory options and the planned optimizer (`settings`: optimizer, lr,
     weight_decay, betas; AdamW when None). Runs inside fork_rng so the caller's
     random state (model initialisation) is untouched."""
-    with torch.random.fork_rng(devices=[device] if device.type == "cuda" else []):
+    with fork_device_rng(device):
         torch.manual_seed(0)
         return _measure(cfg, micro, accum, device, amp_dtype, attn_pref, warmup, timed, checkpointing, loss_chunk,
                         settings)
@@ -2061,6 +2277,7 @@ def measure_seconds_per_step(cfg, micro, accum, device, amp_dtype, attn_pref="au
 
 def _measure(cfg, micro, accum, device, amp_dtype, attn_pref, warmup, timed, checkpointing=False, loss_chunk=0,
              settings=None):
+    cap_device_memory(device)  # MPS: an over-budget probe fails with out-of-memory instead of swapping
     probe_cfg = ModelConfig(**dataclasses.asdict(cfg))
     model = TinyGPT(probe_cfg).to(device)
     model.set_attention_impl(choose_attention(device, probe_cfg, amp_dtype, attn_pref)[0])
@@ -2102,8 +2319,7 @@ def _measure(cfg, micro, accum, device, amp_dtype, attn_pref, warmup, timed, che
         return (t1 - t0) / timed * accum + (t2 - t1), peak_memory_bytes(device)
     finally:
         model = opt = x = None  # freed before empty_cache (not del: micro_step shares these names)
-        if device.type == "cuda":
-            torch.cuda.empty_cache()
+        free_device_memory(device)
 
 
 def flops_per_token(cfg, checkpointing=False):
@@ -2204,7 +2420,7 @@ def plan_with_time_budget(args, manifest, device, amp_dtype):
         tokens = min(fit_tokens, st["planned_train_tokens"])
         n = count_params(c)[0]
         est = estimate_train_bytes(c, st["micro_batch"], amp_dtype is not None, st["activation_checkpointing"],
-                                   st["loss_chunk_tokens"], st["optimizer"])
+                                   st["loss_chunk_tokens"], st["optimizer"], device)
         notes.append(f"time budget {hours:g} h: {n / 1e6:,.1f}M parameters, {sec:.2f} s/step expected over hours "
                      f"({raw:.2f} measured in a short test" + (f", {measured:.2f} compiled" if compiled else "")
                      + f"; {st['tokens_per_step']:,} tokens/step) -> {fit_tokens:,} tokens fit in time; memory: "
@@ -2212,12 +2428,15 @@ def plan_with_time_budget(args, manifest, device, amp_dtype):
                      f"(ratio {peak / max(est, 1):.2f})")
         return n * r <= tokens, tokens, peak
 
-    def is_oom(exc):  # torch.cuda.OutOfMemoryError is a RuntimeError
+    def is_oom(exc):  # torch.cuda.OutOfMemoryError and the MPS "out of memory" error are RuntimeErrors
         if "out of memory" not in str(exc).lower():
             return False
-        if device.type == "cuda":
-            torch.cuda.empty_cache()
+        free_device_memory(device)
         return True
+
+    def halved(a, micro):
+        return argparse.Namespace(**{**vars(a), "batch_size": micro // 2,
+                                     "grad_accum": a.grad_accum * 2 if a.grad_accum else None})
 
     explicit = any(v is not None for v in (args.d_model, args.layers, args.heads, args.kv_heads))
     if explicit:
@@ -2235,9 +2454,7 @@ def plan_with_time_budget(args, manifest, device, amp_dtype):
                                      "micro-batch 1; choose a smaller --d-model/--layers/--ctx.")
                 notes.append(f"time budget: micro-batch {micro} ran out of memory in the speed test; using "
                              f"{micro // 2}")
-                chosen_args = argparse.Namespace(**{**vars(chosen_args), "batch_size": micro // 2,
-                                                    "grad_accum": chosen_args.grad_accum * 2
-                                                    if chosen_args.grad_accum else None})
+                chosen_args = halved(chosen_args, micro)
     else:
         ladder = shape_ladder(int(manifest["tokenizer"]["vocab_size"]))
         top = max(i for i, c in enumerate(ladder) if c.d_model <= cfg.d_model)
@@ -2249,16 +2466,36 @@ def plan_with_time_budget(args, manifest, device, amp_dtype):
 
         results = {}
 
-        def ok(i):
-            if i not in results:
+        def measured(a):
+            """(reaches the target, tokens, peak, args measured): trial(a), and when the speed test runs out of
+            memory the same shape again with activation checkpointing on (unless the command line turned it off),
+            then with the micro-batch halved down to 1, before the shape counts as not fitting. Without the
+            retries an out-of-memory error would silently pick a smaller MODEL where a memory option would do."""
+            while True:
                 try:
-                    results[i] = trial(shape_args(i))
+                    return trial(a) + (a,)
                 except SystemExit:
-                    results[i] = (False, 0, 0)
+                    return False, 0, 0, a
                 except RuntimeError as exc:
                     if not is_oom(exc):
                         raise
-                    results[i] = (False, 0, 0)
+                    st = plan_run(a, manifest, device, amp_dtype)[1]
+                    if not st["activation_checkpointing"] and a.activation_checkpointing != "off":
+                        notes.append(f"time budget: d_model {a.d_model} ran out of memory in the speed test; "
+                                     "measured again with activation checkpointing on")
+                        a = argparse.Namespace(**{**vars(a), "activation_checkpointing": "on"})
+                    elif st["micro_batch"] > 1:
+                        notes.append(f"time budget: d_model {a.d_model} ran out of memory in the speed test at "
+                                     f"micro-batch {st['micro_batch']}; measured again with {st['micro_batch'] // 2}")
+                        a = halved(a, st["micro_batch"])
+                    else:
+                        notes.append(f"time budget: d_model {a.d_model} does not fit in memory even at micro-batch "
+                                     "1 with activation checkpointing; a smaller shape is used")
+                        return False, 0, 0, a
+
+        def ok(i):
+            if i not in results:
+                results[i] = measured(shape_args(i))
             return results[i][0]
 
         if ok(top):
@@ -2276,8 +2513,7 @@ def plan_with_time_budget(args, manifest, device, amp_dtype):
                 ok(0)
                 notes.append("time budget: even the smallest shape cannot reach the tokens-per-parameter target "
                              "in time; it trains on what fits")
-        _, tokens, peak = results[best]
-        chosen_args = shape_args(best)
+        _, tokens, peak, chosen_args = results[best]  # with the memory options the retries settled on
     cfg, settings, lines = plan_run(chosen_args, manifest, device, amp_dtype, token_cap=tokens)
     lines[1] = lines[1].replace("command-line values, ladder defaults for the rest",
                                 "largest ladder shape that satisfies the data AND the time budget"
@@ -2418,6 +2654,9 @@ def parse_args(argv=None):
     g.add_argument("--save-every", type=int, default=1000, help="steps between training-state saves")
     g.add_argument("--save-minutes", type=float, default=30.0,
                    help="also save the training state after this many minutes (0 = off), so a shutdown loses little")
+    g.add_argument("--best-bf16", action="store_true",
+                   help="store the inference-only <name>_best.pt weights in bfloat16 (half the file; the training "
+                        "state stays float32): for models of about 1B parameters and more")
     g.add_argument("--stop-after-steps", type=int,
                    help="end this session cleanly after N more steps (checkpoint saved; continue with --resume)")
     g.add_argument("--probes", default=DEFAULT_PROBES, help="cloze fact probes TSV scored at each evaluation")
@@ -2854,12 +3093,17 @@ def acquire_run_lock(args):
     return lock
 
 
+def release_run_lock(lock):
+    """Remove a lock acquire_run_lock returned (only if it is still this process's)."""
+    data_prep._release_lock(lock)
+
+
 def cmd_train(args):
     lock = acquire_run_lock(args)
     try:
         return _train(args)
     finally:
-        data_prep._release_lock(lock)
+        release_run_lock(lock)
 
 
 def _train(args):
@@ -2874,6 +3118,7 @@ def _train(args):
         torch.backends.cuda.matmul.allow_tf32 = True
         torch.backends.cudnn.allow_tf32 = True
         torch.set_float32_matmul_precision("high")
+    cap_device_memory(device)  # MPS: fail fast with out-of-memory instead of paging to the SSD
     amp_dtype, amp_name, need_scaler = choose_precision(device, args.precision)
 
     # ---------------- resume / init / fresh ----------------
@@ -3083,11 +3328,12 @@ def _train(args):
             rng = resume_obj.get("rng", {})
             if rng.get("torch") is not None:
                 torch.set_rng_state(rng["torch"].cpu())
-            if device.type == "cuda" and rng.get("cuda"):
+            saved_state = rng.get(device.type) if device.type in ("cuda", "mps") else None
+            if saved_state is not None and (device.type != "cuda" or len(saved_state)):
                 try:
-                    torch.cuda.set_rng_state_all([s.cpu() for s in rng["cuda"]])
+                    set_device_rng_state(device, saved_state)
                 except (RuntimeError, TypeError) as exc:
-                    print(f"CUDA RNG state not restored ({exc}); only dropout masks differ.")
+                    print(f"{device.type.upper()} RNG state not restored ({exc}); only dropout masks differ.")
             batcher.load_state_dict(resume_obj.get("batcher"))
             interval_state = resume_obj.get("interval")
             if os.path.exists(best_path):
@@ -3142,11 +3388,14 @@ def _train(args):
     # ---------------- run header ----------------
     print(f"\n{'=' * 100}\nRUN {run_id} started {now_iso()} | {resume_note}")
     print(f"command: {' '.join(sys.argv)}")
-    print(f"python {platform.python_version()} | torch {torch.__version__} | CUDA {torch.version.cuda} | "
+    print(f"python {platform.python_version()} | torch {torch.__version__} | backend {backend_label(device)} | "
           f"{platform.platform()} | tiny_gpt.py sha256 {file_sha256(__file__)[:12]}")
     print(f"device: {device_label(device)} | precision: {amp_name} | attention: SDPA {attn_impl} ({attn_why}) | "
           f"optimizer: {opt_name} ({opt_note}) | "
           f"compile: {'on' if train_model is not model else 'off (eager)'}")
+    if device.type == "mps":
+        for note in mps_env_notes():
+            print(f"environment: {note}")
     print(f"dataset: {dataset_dir} | fingerprint {manifest['fingerprint'][:12]} | tokenizer "
           f"{tok.vocab_size:,} pieces ({tok.encode_mode}) | train "
           + ", ".join(f"{n} {len(a):,}" for n, a in arrays["train"].items())
@@ -3190,7 +3439,8 @@ def _train(args):
             "format": CHECKPOINT_FORMAT, "format_version": FORMAT_VERSION,
             "checkpoint_type": "inference" if inference_only else "training",
             "created": now_iso(), "run_id": run_id, "torch_version": str(torch.__version__),
-            "model_config": dataclasses.asdict(cfg), "model": cpu_state_dict(model),
+            "model_config": dataclasses.asdict(cfg),
+            "model": weights_for_checkpoint(model, device, bf16=inference_only and args.best_bf16),
             "tokenizer": {"proto": tok.proto, **tok.meta()},
             "dataset": {"path": dataset_dir, "fingerprint": manifest["fingerprint"],
                         "train_tokens": {n: len(a) for n, a in arrays["train"].items()},
@@ -3202,10 +3452,13 @@ def _train(args):
         }
         if not inference_only:
             base.update({
-                "optimizer": to_cpu(opt.state_dict()), "optimizer_param_names": [n for g in param_names for n in g],
+                "optimizer": optimizer_state_for_checkpoint(opt, device),
+                "optimizer_param_names": [n for g in param_names for n in g],
                 "scaler": scaler.state_dict() if scaler else None,
+                # "cuda" keeps its name and shape (older readers); "mps" is the Mac's generator (None elsewhere)
                 "rng": {"torch": torch.get_rng_state(),
-                        "cuda": [s.cpu() for s in torch.cuda.get_rng_state_all()] if device.type == "cuda" else None},
+                        "cuda": device_rng_state(device) if device.type == "cuda" else None,
+                        "mps": device_rng_state(device) if device.type == "mps" else None},
                 "batcher": batcher.state_dict(),
                 "interval": {"loss_sum": float(interval_loss), "micro": interval_micro},
             })
@@ -3299,7 +3552,8 @@ def _train(args):
         return (batcher.gen.get_state(),
                 torch.get_rng_state() if cfg.dropout > 0 else None,
                 torch.cuda.get_rng_state_all() if cfg.dropout > 0 and device.type == "cuda" else None,
-                interval_loss.clone(), progress_loss.clone())
+                interval_loss.clone(), progress_loss.clone(),
+                device_rng_state(device) if cfg.dropout > 0 and device.type == "mps" else None)
 
     def rewind(snap):
         """Undo an unfinished step, so it is replayed exactly (same windows, dropout masks and loss sums)."""
@@ -3308,6 +3562,8 @@ def _train(args):
             torch.set_rng_state(snap[1])
         if snap[2] is not None:
             torch.cuda.set_rng_state_all(snap[2])
+        if snap[5] is not None:
+            set_device_rng_state(device, snap[5])
         interval_loss.copy_(snap[3])
         progress_loss.copy_(snap[4])
 
@@ -3691,9 +3947,7 @@ def _train(args):
             "tok_s": f"{last_hist['tok_s']:.0f}" if last_hist.get("tok_s") else None,
             "peak_mem_gib": f"{peak_mem / 2 ** 30:.2f}" if peak_mem else None, "device": device.type,
             "train_hours": f"{train_seconds / 3600:.2f}", "run_hours": f"{run_seconds() / 3600:.2f}",
-            "energy_kwh": f"{meter.kwh():.3f}",
-            "co2e_kg": f"{meter.co2e_g() / 1000:.4f}", "cost_gbp": f"{meter.cost_gbp() or 0.0:.2f}",
-            "checkpoint": ckpt_path, "notes": fail_note})
+            **energy_columns(meter, device, fail_note), "checkpoint": ckpt_path})
         print(f"RUN {run_id} {status} at {now_iso()} | step {step:,}/{total_steps:,} | best val "
               f"{best_val:.4f} @{best_step} | last val "
               + (f"{last_eval['loss']:.4f} @{last_eval['step']}" if last_eval else "none")
@@ -3701,6 +3955,19 @@ def _train(args):
               f"{fmt_hms(run_seconds())} in total, {fmt_hms(train_seconds)} of it training, {meter.short()} "
               f"(GPU {meter.wh['gpu'] / 1000:.2f}, CPU {meter.wh['cpu'] / 1000:.2f}, memory "
               f"{meter.wh['ram'] / 1000:.3f} kWh)")
+
+
+def energy_columns(meter, device, note=None):
+    """The experiments-table energy, carbon and cost of a run, and its notes: real
+    figures only when the GPU was measured or the run was on the CPU (whose power
+    is estimated). On an unmeasured GPU (MPS: no nvidia-smi) the three columns are
+    left blank and the notes say so, instead of a CPU-only figure posing as the
+    run's energy."""
+    if meter.gpu_measured or device.type == "cpu":
+        return {"energy_kwh": f"{meter.kwh():.3f}", "co2e_kg": f"{meter.co2e_g() / 1000:.4f}",
+                "cost_gbp": f"{meter.cost_gbp() or 0.0:.2f}", "notes": note}
+    return {"energy_kwh": "", "co2e_kg": "", "cost_gbp": "",
+            "notes": "; ".join(n for n in (note, "energy not measured (no nvidia-smi)") if n)}
 
 
 EXPERIMENT_COLUMNS = ["time", "event", "name", "status", "step", "total_steps", "params", "non_embedding_params",
@@ -3861,6 +4128,9 @@ def maybe_compile(model, mode, device, return_hidden=False, amp_dtype=None, micr
     # auto: compile on CUDA whenever Triton is importable, Windows included (the triton-windows package; measured
     # 1.45x faster training on an RTX 3070 laptop for 36.6M and 70M models). The first steps then take ~10-30 s longer.
     if mode == "auto" and not (device.type == "cuda" and triton_ok):
+        if device.type == "mps":
+            print("torch.compile not tried in auto mode on MPS (prototype backend); test once with --compile on and "
+                  "compare tok/s.")
         return model
     if not triton_ok and device.type == "cuda":
         print("torch.compile skipped: Triton is not installed (on Windows: python -m pip install triton-windows, the "
@@ -3874,7 +4144,7 @@ def maybe_compile(model, mode, device, return_hidden=False, amp_dtype=None, micr
         # the shape and autocast state training uses: Dynamo guards on both, so this graph is the one step 1 reuses
         x = torch.zeros((max(1, int(micro)), model.ctx), dtype=torch.long, device=device)
         # fork_rng: the warm-up's dropout masks must not consume the (restored) random state of the run
-        with torch.random.fork_rng(devices=[device] if device.type == "cuda" else []):
+        with fork_device_rng(device):
             with torch.autocast(device.type, dtype=amp_dtype or torch.float32, enabled=amp_dtype is not None):
                 out = compiled(x, return_hidden=return_hidden)
             out.float().sum().backward()
@@ -3886,8 +4156,7 @@ def maybe_compile(model, mode, device, return_hidden=False, amp_dtype=None, micr
         if device.type == "cuda":  # the loss in pieces (now, or after a first-step out-of-memory) is compiled too
             set_chunk_loss_compiled(True)
         return compiled
-    if device.type == "cuda":
-        torch.cuda.empty_cache()
+    free_device_memory(device)
     if compiled is not None and "out of memory" in failure[1].lower():
         print("torch.compile warm-up ran out of memory; keeping the compiled model (the first step's "
               "out-of-memory handling picks the memory savings).")

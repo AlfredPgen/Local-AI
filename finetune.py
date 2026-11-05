@@ -117,14 +117,9 @@ def is_oom(exc):
     return isinstance(exc, RuntimeError) and "out of memory" in str(exc).lower()
 
 
-def free_memory(device):
-    """Hand freed blocks back after an out-of-memory error (call it outside the
-    `except` block: the error's traceback still holds the failed step's tensors)."""
-    gc.collect()
-    if device.type == "cuda":
-        torch.cuda.empty_cache()
-    elif device.type == "mps":
-        torch.mps.empty_cache()
+# Hand freed blocks back after an out-of-memory error (call it outside the `except` block: the error's traceback
+# still holds the failed step's tensors); the same helper the training script uses, on every device
+free_memory = tiny_gpt.free_device_memory
 
 
 def item_length(item):
@@ -147,18 +142,20 @@ def length_grouped_batches(items, batch, rng, group=50):
     return out
 
 
-def gpu_busy():
+def gpu_busy(out_dir=None):
+    """Another training job on this machine (tiny_gpt.gpu_busy: live training locks here and in out_dir, or an
+    occupied NVIDIA GPU)."""
     try:
-        import run_pipeline
-        return run_pipeline.gpu_busy()
+        dirs = (HERE,) + ((out_dir,) if out_dir and os.path.abspath(out_dir) != os.path.abspath(HERE) else ())
+        return tiny_gpt.gpu_busy(*dirs)
     except Exception:  # noqa: BLE001
         return False
 
 
 def check_gpu_free(device, args):
-    if device.type == "cuda" and not args.force and gpu_busy():
-        raise SystemExit("The GPU is busy (another training run?). Two GPU jobs at once can crash the graphics "
-                         "driver; use --device cpu, wait for the other job, or pass --force.")
+    # every accelerator, not only CUDA: on a Mac a second trainer competes for the unified memory
+    if device.type != "cpu" and not args.force and gpu_busy(getattr(args, "out_dir", None)):
+        raise SystemExit(tiny_gpt.GPU_BUSY_MESSAGE + " (Or use --device cpu, or pass --force.)")
 
 
 def save(model, tok, cfg, base_obj, path, info, history):
@@ -211,8 +208,8 @@ def train(args):
     mem = {"micro": min(args.micro_batch or args.batch, args.batch)}  # halved, or checkpointing added, on OOM
     decay = [p for p in model.parameters() if p.dim() >= 2]
     other = [p for p in model.parameters() if p.dim() < 2]
-    opt = torch.optim.AdamW([{"params": decay, "weight_decay": args.weight_decay},
-                             {"params": other, "weight_decay": 0.0}], lr=args.lr, betas=(0.9, 0.95))
+    opt, _ = tiny_gpt.make_adamw([{"params": decay, "weight_decay": args.weight_decay},
+                                  {"params": other, "weight_decay": 0.0}], device, lr=args.lr, betas=(0.9, 0.95))
     steps_per_epoch = math.ceil(len(train_rows) / args.batch)
     total = steps_per_epoch * args.epochs
     schedule = tiny_gpt.LRSchedule("cosine", total, args.lr, args.lr * 0.1, max(1, total // 10))
@@ -444,7 +441,12 @@ def main(argv=None):
                 and (args.micro_batch is None or 1 <= args.micro_batch <= args.batch)):
             p.error("check --epochs (1-100), --batch (1-1024), --micro-batch (1 to --batch), --lr (0-1) and "
                     "--val-fraction (0-0.5)")
-        return train(args)
+        # a fine-tune takes the same <name>.train.lock as a training run, so gpu_busy() sees it on every device
+        lock = tiny_gpt.acquire_run_lock(args)
+        try:
+            return train(args)
+        finally:
+            tiny_gpt.release_run_lock(lock)
     except SystemExit as exc:
         if exc.code not in (0, None):
             print(f"ERROR: {exc.code}" if isinstance(exc.code, str) else f"exit code {exc.code}", file=sys.stderr)
