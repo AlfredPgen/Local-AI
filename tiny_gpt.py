@@ -38,6 +38,7 @@ import argparse
 import atexit
 import dataclasses
 import datetime
+import gc
 import hashlib
 import json
 import math
@@ -194,6 +195,19 @@ def device_label(device):
     if device.type == "mps":
         return "Apple MPS"
     return f"CPU ({os.cpu_count()} threads)"
+
+
+def free_device_memory(device):
+    """Return freed tensors to the device's allocator (and the allocator's cache to
+    the driver) after an out-of-memory error or a failed save: gc first, so that
+    tensors kept alive only by a reference cycle are released as well."""
+    gc.collect()
+    backend = getattr(torch, device.type, None)
+    if backend is not None and hasattr(backend, "empty_cache"):
+        try:
+            backend.empty_cache()
+        except RuntimeError:  # a backend that is present but not initialised
+            pass
 
 
 def synchronize(device):
@@ -410,9 +424,12 @@ class RotaryEmbedding(nn.Module):
     def forward(self, q, k, pos=0):
         """pos: the absolute position of the first token in q and k (KV-cached decoding)."""
         t = q.size(-2)
-        cos = self.cos[:, :, pos:pos + t].to(dtype=q.dtype)
-        sin = self.sin[:, :, pos:pos + t].to(dtype=q.dtype)
-        return q * cos + rotate_half(q) * sin, k * cos + rotate_half(k) * sin
+        cos, sin = self.cos[:, :, pos:pos + t], self.sin[:, :, pos:pos + t]
+        # The rotation is done in fp32 and rounded once at the end: cos/sin stay exact and the products are not
+        # rounded to bf16 twice (about a quarter less rounding error). torch.compile fuses the casts, so under
+        # autocast this costs nothing; in eager mode it is about 1% more memory traffic.
+        qf, kf = q.float(), k.float()
+        return ((qf * cos + rotate_half(qf) * sin).to(q.dtype), (kf * cos + rotate_half(kf) * sin).to(k.dtype))
 
 
 class SwiGLU(nn.Module):
@@ -883,10 +900,10 @@ def launch_dashboard(path, args, state):
             if sys.platform == "win32":
                 flags = subprocess.IDLE_PRIORITY_CLASS | subprocess.CREATE_NO_WINDOW
                 state["proc"] = subprocess.Popen(cmd, cwd=HERE, stdout=log, stderr=subprocess.STDOUT,
-                                                 env={**os.environ, "CUDA_VISIBLE_DEVICES": ""}, creationflags=flags)
+                                                 env={**os.environ, "CUDA_VISIBLE_DEVICES": "-1"}, creationflags=flags)
             else:
                 state["proc"] = subprocess.Popen(cmd, cwd=HERE, stdout=log, stderr=subprocess.STDOUT,
-                                                 env={**os.environ, "CUDA_VISIBLE_DEVICES": ""},
+                                                 env={**os.environ, "CUDA_VISIBLE_DEVICES": "-1"},
                                                  preexec_fn=lambda: os.nice(19))
         if push:
             state["pushed"] = now
@@ -1346,10 +1363,15 @@ class EvalSet:
 
 
 @torch.no_grad()
-def evaluate(model, evalset, device, amp_dtype, batch_windows, bins=10, byte_tables=None):
+def evaluate(model, evalset, device, amp_dtype, batch_windows, bins=10, byte_tables=None, share=None):
     """Validation loss per source plus how 'opinionated' the model is.
 
-    Returns mean loss per source; 'loss' is the mean over sources. Entropy is
+    Returns mean loss per source; 'loss' is the mean over sources (balanced, so
+    the small sources count as much as the large ones; it drives NEW BEST).
+    With `share` (sampling probability per source, TokenBatcher.share()),
+    'loss_mix' and 'bpb_mix' are the same means weighted as training samples
+    the sources: that is the number to compare with the training loss, since
+    the balanced mean differs from it by composition alone. Entropy is
     the mean entropy (nats) of the predicted next-token distribution,
     confidence the mean top-1 probability, top1 the accuracy of the top
     prediction, and ece the expected calibration error of that confidence.
@@ -1401,10 +1423,20 @@ def evaluate(model, evalset, device, amp_dtype, batch_windows, bins=10, byte_tab
     n = max(sums["tokens"], 1)
     nz = count > 0
     ece = float(((conf_sum[nz] - acc_sum[nz]).abs()).sum() / n)
+
+    def mix_mean(values):
+        # sum_s w_s x_s / sum_s w_s over the sources present, w_s = training sampling share of source s
+        if share is None or not values:
+            return None
+        w = {name: float(share.get(name, 0.0)) for name in values}
+        return float(sum(values[name] * w[name] for name in values) / max(sum(w.values()), 1e-12))
+
     return {
         "loss": float(np.mean(list(per_source.values()))),
+        "loss_mix": mix_mean(per_source),
         "per_source": per_source,
         "bpb": float(np.mean(list(bpb_source.values()))) if bpb_source else None,
+        "bpb_mix": mix_mean(bpb_source),
         "bpb_per_source": bpb_source,
         "tokens": sums["tokens"],
         "entropy": sums["entropy"] / n,
@@ -1952,7 +1984,7 @@ def plan_run(args, manifest, device, amp_dtype, token_cap=None):
         lines.append(f"note: --steps {args.steps:,} trains {epochs:.2f} epochs, more than --max-epochs {max_epochs:g}.")
     if epochs > 4:
         lines.append(f"note: {epochs:.1f} epochs repeats data beyond the ~4 epochs that Muennighoff et al. (2023) "
-                     "found nearly as good as fresh data; expect diminishing returns and watch the val-train gap.")
+                     "found nearly as good as fresh data; expect diminishing returns and watch val(mix) against train.")
     return cfg, settings, lines
 
 
@@ -2186,7 +2218,8 @@ def parse_args(argv=None):
     g = p.add_argument_group("run")
     g.add_argument("--name", default=DEFAULT_NAME, help="checkpoint base name")
     g.add_argument("--out-dir", default=HERE, help="folder for checkpoints and metrics")
-    g.add_argument("--resume", action="store_true", help="continue <name>.pt exactly where it stopped")
+    g.add_argument("--resume", action="store_true", help="continue <name>.pt: same windows, schedule and optimizer state (GPU kernels are not "
+                        "bit-deterministic, so a replayed step differs at about 1e-5 in the loss)")
     g.add_argument("--init-from", help="start a new run from another checkpoint's weights (tinyGPT or legacy)")
     g.add_argument("--overwrite", action="store_true",
                    help="allow a fresh run over an existing name (old files are renamed *.bak-<time>)")
@@ -2321,6 +2354,10 @@ def validate_args(args, parser):
         parser.error("--time-budget-hours must be between 0.01 and 2160")
     if args.warmup_steps is not None and args.warmup_steps < 0:
         parser.error("--warmup-steps must be >= 0")
+    if args.warmup_steps is not None and args.steps is not None and args.warmup_steps >= args.steps:
+        parser.error("--warmup-steps must be smaller than --steps")
+    if args.schedule == "wsd" and args.decay_frac == 0:
+        print("WARNING: --decay-frac 0 with wsd: the learning rate never decays (warmup-stable only)")
     if args.log_every < 0 or (args.sample_every is not None and args.sample_every < 0):
         parser.error("--log-every/--sample-every must be >= 0")
     if args.resume and args.init_from:
@@ -2403,6 +2440,9 @@ def read_safetensors(path):
         if not 0 <= begin <= end <= len(data) or info["dtype"] not in by_name:
             raise SystemExit(f"{path}: corrupt entry {name}")
         dtype = by_name[info["dtype"]]
+        if begin == end:  # torch.frombuffer refuses an empty buffer
+            tensors[name] = torch.empty(info["shape"], dtype=dtype)
+            continue
         buf = torch.frombuffer(bytearray(data[begin:end]), dtype=torch.int16 if dtype == torch.bfloat16 else dtype)
         tensors[name] = (buf.view(torch.bfloat16) if dtype == torch.bfloat16 else buf).reshape(info["shape"])
     return tensors, metadata
@@ -2730,7 +2770,7 @@ def _train(args):
             resume_path, from_best = best_path, True
         else:
             raise SystemExit(f"Nothing to resume: {ckpt_path} does not exist.{_resume_hint(args)}")
-        resume_obj = safe_load(resume_path, args.trust_checkpoint)
+        resume_obj = safe_load(resume_path, args.trust_checkpoint, mmap=True)
         family, kind = checkpoint_info(resume_obj)
         wanted = "inference" if from_best else "training"
         if family != "tinygpt" or kind != wanted or "train_config" not in resume_obj:
@@ -2744,7 +2784,7 @@ def _train(args):
                              "or --overwrite (existing files are renamed, not deleted).")
         dataset_dir = ensure_dataset(args)
         if args.init_from:
-            init_obj = safe_load(args.init_from, args.trust_checkpoint)
+            init_obj = safe_load(args.init_from, args.trust_checkpoint, mmap=True)
     if not dataset_dir:
         raise SystemExit("No training data: pass --dataset <folder from data_prep.py> (or --data <md folder>).")
     if not os.path.isdir(dataset_dir):
@@ -2788,6 +2828,10 @@ def _train(args):
         if ignored:
             print(f"Note: {', '.join(ignored)} ignored on --resume (the checkpoint's settings are kept).")
         if args.steps and args.steps != settings["steps"]:
+            if args.steps <= int(settings["warmup_steps"]):
+                raise SystemExit(f"--steps {args.steps:,} is not above this run's warmup of "
+                                 f"{int(settings['warmup_steps']):,} steps; the schedule needs at least one step "
+                                 "after the warmup.")
             old = LRSchedule(settings["schedule"], settings["steps"], settings["lr"], settings["min_lr"],
                              settings["warmup_steps"], settings["decay_frac"], settings["decay_shape"])
             new = LRSchedule(settings["schedule"], args.steps, settings["lr"], settings["min_lr"],
@@ -2822,6 +2866,8 @@ def _train(args):
     mix = parse_mix(args.mix if resume_obj is None else (args.mix or settings.get("mix")), arrays["train"])
     byte_tables = tuple(torch.from_numpy(t) for t in tok.byte_tables())
     z_loss = float(settings.setdefault("z_loss", args.z_loss if resume_obj is None else 0.0))
+    if resume_obj is not None and args.z_loss != settings["z_loss"] and args.z_loss != 1e-4:
+        print(f"Note: --z-loss ignored on --resume; this run keeps z_loss {settings['z_loss']:g}.")
     eval_tokens = int(settings.setdefault("eval_tokens", args.eval_tokens))  # fixed windows stay fixed on resume
     if resume_obj is not None and eval_tokens != args.eval_tokens and args.eval_tokens != 65_536:
         print(f"Note: --eval-tokens ignored on --resume; this run keeps {eval_tokens:,} (its validation windows).")
@@ -2903,7 +2949,7 @@ def _train(args):
             interval_state = resume_obj.get("interval")
             if os.path.exists(best_path):
                 try:
-                    newer = safe_load(best_path, args.trust_checkpoint)
+                    newer = safe_load(best_path, args.trust_checkpoint, mmap=True)
                     nm = newer.get("metrics", {})
                     if (newer.get("dataset", {}).get("fingerprint") == manifest["fingerprint"]
                             and float(nm.get("best_val", float("inf"))) < best_val):
@@ -2927,9 +2973,23 @@ def _train(args):
             start_step = int(init_obj.get("step", 0))
             note += (f"; optimizer state restored for {restored}/{total_p} tensors; schedule continues at step "
                      f"{start_step:,}")
+            if restored < total_p:
+                # the tensors without state (a changed optimizer) start their running averages from zero at the
+                # schedule's current learning rate: the same 50-step re-warm as a resume from a best checkpoint,
+                # stored in the settings so a pause inside the ramp resumes inside it
+                rewarm_start, rewarm_steps = start_step, min(50, max(total_steps - start_step, 1))
+                settings["rewarm_start"], settings["rewarm_steps"] = rewarm_start, rewarm_steps
+                note += (f"; learning rate re-warmed over {rewarm_steps} steps for the {total_p - restored} tensors "
+                         "whose optimizer state restarts")
         resume_note = note + "; best/last validation reset because the validation set is new"
         if start_step >= total_steps:
             raise SystemExit(f"--init-from checkpoint is at step {start_step:,}; set --steps above that.")
+
+    # Everything the checkpoints held has been copied into the model, optimizer, scaler, RNG and sampler: drop
+    # them now (1.8 GB of RAM for the 216M run) instead of keeping them alive for the whole session.
+    resumed = resume_obj is not None
+    energy_before = resume_obj.get("energy") if resumed else None
+    resume_obj = init_obj = source_obj = None
 
     train_model = maybe_compile(model, args.compile, device, return_hidden=bool(loss_chunk), amp_dtype=amp_dtype,
                                 micro=micro)
@@ -2961,13 +3021,13 @@ def _train(args):
     print(f"budget: {total_steps:,} steps x {settings['tokens_per_step']:,} tokens = {train_tokens_total:,} tokens "
           f"= {train_tokens_total / n_total:,.1f} tokens/parameter, {train_tokens_total / max(unique, 1):,.2f} epochs")
     print(f"every {args.eval_every} steps: metrics line (train = mean training loss since the previous line; "
-          f"val = mean of per-source validation losses on fixed windows, val X @S was measured at step S; "
-          f"ppl = exp(val)), then a sample"
+          f"val = balanced mean over sources of the validation loss on fixed windows (drives NEW BEST), "
+          f"val X @S was measured at step S; val(mix) weights sources as training samples them: compare it with "
+          f"train; ppl = exp(val)), then a sample"
           + (f"; fact probes: {len(probes)} from {os.path.basename(args.probes)}" if probes else "")
           + "; lines starting with '...' in between are progress only (train loss since the previous line, "
           "no validation)")
-    meter = EnergyMeter(device, args.cpu_watts, args.grid_intensity,
-                        resume_obj.get("energy") if resume_obj is not None else None,
+    meter = EnergyMeter(device, args.cpu_watts, args.grid_intensity, energy_before,
                         tariff=Tariff(args.tariff, args.region))
     print(meter.describe() + (f" Earlier sessions of this run: {meter.short()}." if meter.kwh() else ""))
     save_when = f"every {args.save_every} steps" + (f" and every {args.save_minutes:g} min" if args.save_minutes > 0
@@ -3012,7 +3072,7 @@ def _train(args):
         with open(metrics_path, "a", encoding="utf-8") as handle:
             handle.write(json.dumps({"run_id": run_id, **entry}) + "\n")
 
-    if args.overwrite and resume_obj is None:
+    if args.overwrite and not resumed:
         stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
         for path in (ckpt_path, best_path, metrics_path):
             if os.path.exists(path):
@@ -3020,11 +3080,12 @@ def _train(args):
                 print(f"renamed existing {path} -> {path}.bak-{stamp}")
 
     # ---------------- baseline evaluation ----------------
-    if resume_obj is None and not history:
+    if not resumed and not history:
         print(f"measuring the untrained model on the fixed validation windows ({evalset.describe()}) ...")
-        ev = evaluate(model, evalset, device, amp_dtype, eval_batch, byte_tables=byte_tables)
+        ev = evaluate(model, evalset, device, amp_dtype, eval_batch, byte_tables=byte_tables, share=batcher.share())
         history.append({"step": start_step, "tokens": tokens_seen, "train_loss": None, "val_loss": ev["loss"],
-                        "bpb": ev["bpb"], "bpb_per_source": ev["bpb_per_source"],
+                        "val_mix": ev["loss_mix"], "bpb": ev["bpb"], "bpb_mix": ev["bpb_mix"],
+                        "bpb_per_source": ev["bpb_per_source"],
                         "val_per_source": ev["per_source"], "ppl": math.exp(min(ev["loss"], 50)), "lr": 0.0,
                         "tok_s": None, "elapsed_s": 0.0, "train_seconds": train_seconds,
                         "entropy": ev["entropy"], "confidence": ev["confidence"], "top1": ev["top1"],
@@ -3058,6 +3119,10 @@ def _train(args):
     progress_micro = 0
     last_gnorm = torch.zeros((), device=device)
     overflow_run = 0  # FP16 updates skipped in a row by the GradScaler (gradients overflowed)
+    nonfinite_run = 0  # updates skipped in a row because the gradient norm was not finite (BF16/FP32 path)
+    save_failures = 0  # periodic saves failed in a row (disk full, locked file, no memory for the copy)
+    oom_retries = 0  # out-of-memory retries of the current step (after the first step)
+    fail_note = None  # the exception that ended the run, for the experiments table
     seg = time.perf_counter()
     interval_wall, interval_start_step = time.perf_counter(), start_step
     last_print = time.perf_counter()
@@ -3104,7 +3169,7 @@ def _train(args):
         step = start_step
         while step < total_steps:
             step_start = snapshot()  # taken before the step number moves on, so it always belongs to this step
-            scaler_state = scaler.state_dict() if scaler is not None and first_step else None
+            scaler_state = scaler.state_dict() if scaler is not None else None  # for a retry of this step
             step += 1
             lr = schedule.lr_at(step)
             if rewarm_steps and step - rewarm_start <= rewarm_steps:  # only after resuming from a best checkpoint
@@ -3155,9 +3220,26 @@ def _train(args):
                             overflow_run += 1
                             if overflow_run >= MAX_OVERFLOW_SKIPS or new_scale < 1.0:
                                 last_gnorm = gnorm
+                    elif not bool(torch.isfinite(gnorm)):
+                        # Without a GradScaler nothing skips a bad step for us: one inf or NaN gradient element
+                        # would poison every weight through the optimizer's moments. Drop the update and the
+                        # batch's share of the loss sums; last_gnorm is not touched, so the save and Ctrl+C
+                        # checks still see the last good norm and keep the still-good weights.
+                        opt.zero_grad(set_to_none=True)
+                        interval_loss.copy_(step_start[3])
+                        progress_loss.copy_(step_start[4])
+                        nonfinite_run += 1
+                        print(f"step {step}: non-finite gradient norm {float(gnorm)}; update skipped "
+                              f"({nonfinite_run}/{MAX_OVERFLOW_SKIPS})")
+                        if nonfinite_run >= MAX_OVERFLOW_SKIPS:
+                            last_gnorm = gnorm
+                            raise FloatingPointError(
+                                f"gradients became {float(gnorm)} by step {step}; {ckpt_path} was not overwritten "
+                                "and still holds the last good training state. Resume it with a lower --lr (a new "
+                                "--name with --init-from).")
                     else:
                         opt.step()
-                        last_gnorm = gnorm
+                        last_gnorm, nonfinite_run = gnorm, 0
                     opt.zero_grad(set_to_none=True)
                     interval_micro += accum
                     progress_micro += accum
@@ -3166,14 +3248,34 @@ def _train(args):
                     done_step = step
             except RuntimeError as exc:  # torch.cuda.OutOfMemoryError / MPS OOM are RuntimeErrors
                 oom = "out of memory" in str(exc).lower()
+                if not first_step:
+                    if not oom:
+                        raise
+                    # Out of memory later in the run (fragmentation, another program on the GPU): the step is
+                    # replayed on the same windows up to twice, after the allocator has been emptied, rather than
+                    # ending a run that trained fine until now.
+                    oom_retries += 1
+                    if oom_retries > 2:
+                        raise
+                    opt.zero_grad(set_to_none=True)
+                    x = y = logits = flat = loss = ce = zsum = None
+                    free_device_memory(device)
+                    rewind(step_start)
+                    if scaler is not None:  # a new scaler with the same scale: forgets an unscale_ already done
+                        scaler = torch.amp.GradScaler(device.type)
+                        scaler.load_state_dict(scaler_state)
+                    time.sleep(5)
+                    print(f"Out of memory at step {step}; retrying the same step ({oom_retries}/2).")
+                    step -= 1
+                    held.deliver()
+                    continue
                 # a compiled model that fails at the first step for another reason (a graph recompiled after an
                 # earlier out-of-memory retry) is retried once in eager mode; an eager failure is raised as it is
-                if not first_step or not (oom or train_model is not model):
+                if not (oom or train_model is not model):
                     raise
                 opt.zero_grad(set_to_none=True)
                 x = y = logits = flat = loss = ce = zsum = None  # drop the failed batch and its graph before retrying
-                if device.type == "cuda":
-                    torch.cuda.empty_cache()
+                free_device_memory(device)
                 rewind(step_start)  # the retry trains on the same windows, as an uninterrupted run would
                 if scaler is not None:  # a new scaler with the same scale: forgets an unscale_ already done
                     scaler = torch.amp.GradScaler(device.type)
@@ -3201,6 +3303,12 @@ def _train(args):
                           "accumulation " + ("(same tokens per step)." if settings["tokens_per_step"] == old_tps
                                              else f"({settings['tokens_per_step']:,} tokens per step instead of "
                                                   f"{old_tps:,})."))
+                    if settings["tokens_per_step"] != old_tps:  # the header's budget line is stale: say it again
+                        train_tokens_total = total_steps * settings["tokens_per_step"]
+                        settings["planned_train_tokens"] = train_tokens_total
+                        print(f"budget now: {total_steps:,} steps x {settings['tokens_per_step']:,} tokens = "
+                              f"{train_tokens_total:,} tokens = {train_tokens_total / n_total:,.1f} tokens/parameter, "
+                              f"{train_tokens_total / max(unique, 1):,.2f} epochs")
                 elif ckpt_ok:
                     model.grad_checkpoint = settings["activation_checkpointing"] = True
                     print(f"Out of memory at the first step with micro-batch {micro}; retrying with activation "
@@ -3219,6 +3327,7 @@ def _train(args):
                 held.deliver()  # a Ctrl+C held during the failed update
                 continue
             first_step = False
+            oom_retries = 0
             held.deliver()  # a Ctrl+C held during the update: the step is complete, so it is saved as done
 
             do_eval = step % args.eval_every == 0 or step == total_steps
@@ -3260,7 +3369,8 @@ def _train(args):
                         f"training loss became {train_loss} by step {step}. The last good checkpoint is "
                         f"{ckpt_path}; resume it with a lower --lr (start a new --name with --init-from).")
                 tok_s = interval_tokens / max(interval_train_time, 1e-9)
-                ev = evaluate(model, evalset, device, amp_dtype, eval_batch, byte_tables=byte_tables)
+                ev = evaluate(model, evalset, device, amp_dtype, eval_batch, byte_tables=byte_tables,
+                              share=batcher.share())
                 ev["step"] = step
                 probe_acc, probe_by_category, probe_floor_acc = None, None, None
                 if probes:
@@ -3277,8 +3387,9 @@ def _train(args):
                 per_step = (time.perf_counter() - interval_wall) / max(step - interval_start_step, 1)
                 eta = per_step * (total_steps - step)
                 entry = {"step": step, "tokens": tokens_seen, "train_loss": train_loss, "val_loss": ev["loss"],
+                         "val_mix": ev["loss_mix"],
                          "val_per_source": ev["per_source"], "ppl": math.exp(min(ev["loss"], 50)), "lr": lr,
-                         "bpb": ev["bpb"], "bpb_per_source": ev["bpb_per_source"],
+                         "bpb": ev["bpb"], "bpb_mix": ev["bpb_mix"], "bpb_per_source": ev["bpb_per_source"],
                          "tok_s": tok_s, "elapsed_s": elapsed, "train_seconds": train_seconds,
                          "run_seconds": run_seconds(),
                          "entropy": ev["entropy"], "confidence": ev["confidence"], "top1": ev["top1"],
@@ -3288,6 +3399,10 @@ def _train(args):
                          "co2e_g": round(meter.co2e_g(), 1), "cost_gbp": round(meter.cost_gbp() or 0.0, 4),
                          "is_best": is_best, "time": now_iso()}
                 history.append(entry)
+                # the interval is recorded: zero its sums now, so a Ctrl+C during the best save, the print or the
+                # sample does not fold these steps into the next row as well
+                interval_loss.zero_()
+                interval_micro, interval_tokens, interval_train_time = 0, 0, 0.0
                 if is_best:  # before printing or sampling, so Ctrl+C can never leave an announced best unsaved
                     try:
                         save(best_path, True, step)
@@ -3308,7 +3423,9 @@ def _train(args):
                 else:
                     status_text = f"best {best_val:.3f} @{best_step}"
                 print(f"step {step:>6}/{total_steps} | train {train_loss:.3f} | val {ev['loss']:.3f} @{step}"
-                      + _per_source(ev) + f" | ppl {entry['ppl']:,.2f} | bpb {ev['bpb']:.3f} | lr {lr:.2e} | {tok_s:,.0f} tok/s | "
+                      + _per_source(ev)
+                      + (f" | val(mix) {ev['loss_mix']:.3f}" if ev.get("loss_mix") is not None else "")
+                      + f" | ppl {entry['ppl']:,.2f} | bpb {ev['bpb']:.3f} | lr {lr:.2e} | {tok_s:,.0f} tok/s | "
                       f"{meter.short()} | {elapsed_text()} | ETA {fmt_dur(eta)} | {status_text}")
                 last_print = time.perf_counter()
                 if args.sample_every and (step % args.sample_every == 0 or step == total_steps):
@@ -3317,8 +3434,6 @@ def _train(args):
                                     0.8, 50, 0.95, gen)
                     shown = text.replace("\n", " \u23ce ").strip()
                     print(f"    sample @{step}: \"{shown}\"")
-                interval_loss.zero_()
-                interval_micro, interval_tokens, interval_train_time = 0, 0, 0.0
                 progress_loss.zero_()
                 progress_micro = 0
                 interval_wall, interval_start_step = time.perf_counter(), step
@@ -3329,8 +3444,23 @@ def _train(args):
                         f"gradients became {float(last_gnorm)} by step {step}; {ckpt_path} was not overwritten and "
                         "still holds the last good training state. Resume it with a lower --lr (a new --name with "
                         "--init-from).")
-                saved = save(ckpt_path, False, step)
-                last_save = time.perf_counter()
+                try:
+                    saved = save(ckpt_path, False, step)
+                    save_failures = 0
+                except Exception as exc:  # noqa: BLE001 - not BaseException: Ctrl+C keeps its own path below
+                    # A save that fails (disk full, file locked, no RAM for the CPU copy) must not end a run that
+                    # is training fine: the loop goes on and tries again in about a minute, three times in a row
+                    # at most. A save that the session needs now (its last step, --stop-after-steps) is raised.
+                    save_failures += 1
+                    print(f"WARNING: could not save {ckpt_path} ({type(exc).__name__}: {str(exc)[:160]}); "
+                          f"training continues, next attempt in about a minute ({save_failures}/3)")
+                    x = y = logits = flat = loss = ce = zsum = None
+                    free_device_memory(device)
+                    last_save = time.perf_counter() - args.save_minutes * 60 + 60
+                    if save_failures >= 3 or stop_now or step == total_steps:
+                        raise
+                else:
+                    last_save = time.perf_counter()
             if stop_now and step < total_steps:
                 status = "stopped"
                 print(f"Stopped after {args.stop_after_steps:,} steps this session (--stop-after-steps); saved "
@@ -3358,14 +3488,25 @@ def _train(args):
             atomic_save(payload(step, inference_only=False), crash)
             print(f"\nPaused after step {step:,}, but the gradients were not finite: the state went to {crash}; "
                   f"{ckpt_path} still holds the last good training state.")
-    except BaseException:
+    except BaseException as exc:
         status = "failed"
+        fail_note = f"{type(exc).__name__}: {str(exc)[:200]}"
         crash = os.path.join(args.out_dir, f"{args.name}_crash.pt")
+        # the step's tensors and graph are dropped first: after an out-of-memory error the full state (optimizer
+        # included) needs the room, and if even that fails the weights alone are still worth keeping
+        x = y = logits = flat = loss = ce = zsum = None
+        gc.collect()
         try:
-            atomic_save(payload(step, inference_only=False), crash)
-            print(f"\nState at step {step:,} saved to {crash} for inspection (not used by --resume).")
-        except Exception as exc:  # noqa: BLE001
-            print(f"Could not save crash state: {exc}")
+            try:
+                atomic_save(payload(step, inference_only=False), crash)
+                print(f"\nState at step {step:,} saved to {crash} for inspection (not used by --resume).")
+            except Exception as save_exc:  # noqa: BLE001
+                print(f"Could not save the full crash state ({type(save_exc).__name__}: {str(save_exc)[:160]}); "
+                      "saving the weights only.")
+                atomic_save(payload(step, inference_only=True), crash)
+                print(f"\nWeights at step {step:,} saved to {crash} for inspection (not used by --resume).")
+        except Exception as save_exc:  # noqa: BLE001
+            print(f"Could not save crash state: {save_exc}")
         raise
     finally:
         meter.stop()
@@ -3390,6 +3531,8 @@ def _train(args):
             "dataset": os.path.basename(os.path.normpath(dataset_dir)),
             "best_val": f"{best_val:.4f}" if math.isfinite(best_val) else None, "best_step": best_step,
             "last_val": f"{last_eval['loss']:.4f}" if last_eval else None,
+            "last_val_mix": f"{last_eval['loss_mix']:.4f}" if last_eval and last_eval.get("loss_mix") is not None
+            else None,
             "last_bpb": f"{last_eval['bpb']:.4f}" if last_eval and last_eval.get("bpb") else None,
             "last_ppl": f"{math.exp(min(last_eval['loss'], 50)):.2f}" if last_eval else None,
             "benchmark_accuracy": f"{last_hist['probe_acc']:.3f}" if last_hist.get("probe_acc") is not None else None,
@@ -3398,7 +3541,7 @@ def _train(args):
             "train_hours": f"{train_seconds / 3600:.2f}", "run_hours": f"{run_seconds() / 3600:.2f}",
             "energy_kwh": f"{meter.kwh():.3f}",
             "co2e_kg": f"{meter.co2e_g() / 1000:.4f}", "cost_gbp": f"{meter.cost_gbp() or 0.0:.2f}",
-            "checkpoint": ckpt_path})
+            "checkpoint": ckpt_path, "notes": fail_note})
         print(f"RUN {run_id} {status} at {now_iso()} | step {step:,}/{total_steps:,} | best val "
               f"{best_val:.4f} @{best_step} | last val "
               + (f"{last_eval['loss']:.4f} @{last_eval['step']}" if last_eval else "none")
@@ -3412,7 +3555,7 @@ EXPERIMENT_COLUMNS = ["time", "event", "name", "status", "step", "total_steps", 
                       "d_model", "layers", "heads", "kv_heads", "ctx", "vocab", "tokens_seen", "tokens_per_step",
                       "micro_batch", "grad_accum", "activation_checkpointing", "loss_chunk_tokens", "optimizer", "lr",
                       "min_lr", "schedule", "warmup_steps", "decay_frac", "decay_shape", "weight_decay", "betas", "grad_clip", "z_loss", "dropout",
-                      "precision", "dataset", "best_val", "best_step", "last_val", "last_bpb", "last_ppl",
+                      "precision", "dataset", "best_val", "best_step", "last_val", "last_val_mix", "last_bpb", "last_ppl",
                       "benchmark_accuracy", "benchmark_floor", "benchmark_items", "tok_s", "device", "train_hours",
                       "run_hours", "energy_kwh", "co2e_kg", "cost_gbp", "checkpoint", "notes"]
 

@@ -30,6 +30,7 @@ import tiny_gpt  # noqa: E402
 
 PY = sys.executable
 PATCHED_RUN = r'''
+import gc
 import signal
 import sys
 
@@ -39,8 +40,10 @@ sys.path.insert(0, sys.argv[1])
 import tiny_gpt  # noqa: E402
 
 mode, n = sys.argv[2], int(sys.argv[3])
-calls = {"next": 0, "clip": 0}
+calls = {"next": 0, "clip": 0, "save": 0, "gen": 0}
 real_next, real_clip = tiny_gpt.TokenBatcher.next, torch.nn.utils.clip_grad_norm_
+real_save, real_gen = tiny_gpt.atomic_save, tiny_gpt.generate
+before = {}
 
 
 def next_batch(self):
@@ -50,14 +53,43 @@ def next_batch(self):
         raise KeyboardInterrupt
     if mode == "oom" and calls["next"] <= n:
         raise RuntimeError("CUDA out of memory (simulated)")
+    if mode == "oom_at_step" and calls["next"] == n:  # once, in the middle of the run
+        raise RuntimeError("CUDA out of memory (simulated)")
     return out
 
 
-def clip(*a, **k):
+def clip(params, *a, **k):
+    params = list(params)
     calls["clip"] += 1
     if mode == "sigint" and calls["clip"] == n:
         signal.raise_signal(signal.SIGINT)
-    return real_clip(*a, **k)
+    if mode == "nangrad" and calls["clip"] == n:  # one infinite gradient element in the n-th update
+        params[0].grad.view(-1)[0] = float("inf")
+        before.update({i: p.detach().clone() for i, p in enumerate(params)})
+    if mode == "nangrad" and calls["clip"] == n + 1:
+        changed = sum(int(not torch.equal(before[i], p.detach())) for i, p in enumerate(params))
+        print(f"FAULT CHECK: {changed} parameters changed by the update with the non-finite gradient")
+    if mode == "gcscan" and calls["clip"] == n:  # the loaded checkpoint dicts must be gone by now
+        alive = [o for o in gc.get_objects() if isinstance(o, dict) and "optimizer" in o and "model" in o]
+        print(f"FAULT CHECK: {len(alive)} checkpoint dicts alive after setup")
+    return real_clip(params, *a, **k)
+
+
+def save(obj, path):
+    if obj.get("checkpoint_type") == "training" and not path.endswith("_crash.pt"):
+        calls["save"] += 1
+        # savefail: the first n training-state saves fail; saveflaky: of the first n, two in every three fail
+        if (mode == "savefail" and calls["save"] <= n) or (
+                mode == "saveflaky" and calls["save"] <= n and calls["save"] % 3 != 0):
+            raise OSError(28, "No space left on device (simulated)")
+    return real_save(obj, path)
+
+
+def gen(*a, **k):
+    calls["gen"] += 1
+    if mode == "interrupt_sample" and calls["gen"] == n:  # Ctrl+C right after the metrics line was printed
+        raise KeyboardInterrupt
+    return real_gen(*a, **k)
 
 
 tiny_gpt.TokenBatcher.next = next_batch
@@ -65,6 +97,8 @@ tiny_gpt.TokenBatcher.next = next_batch
 # on memory savings in some runs and not in others
 tiny_gpt.device_memory_budget = lambda device: (8 * 2 ** 30, "8.0 GiB (test)")
 torch.nn.utils.clip_grad_norm_ = clip
+tiny_gpt.atomic_save = save
+tiny_gpt.generate = gen
 tiny_gpt.main(sys.argv[4:])
 '''
 BIO = ("Genetic drift changes allele frequencies in small populations. Natural selection acts on phenotypes, "
@@ -384,6 +418,18 @@ class TestPipeline(unittest.TestCase):
         self.assertAlmostEqual(s.lr_at(100), 1e-4)
         self.assertLess(s.lr_at(90), 1e-3)
         self.assertEqual(s.phase(95), "decay")
+        # a warmup longer than the run is clamped to total - 1, so the peak is still reached
+        c = tiny_gpt.LRSchedule("wsd", 1000, 1e-3, 1e-4, 5000, 0.2, "1-sqrt")
+        self.assertEqual(c.warmup, 999)
+        self.assertAlmostEqual(c.lr_at(999), 1e-3)
+        cos = tiny_gpt.LRSchedule("cosine", 100, 1e-3, 1e-4, 10)
+        self.assertAlmostEqual(cos.lr_at(10), 1e-3)
+        self.assertAlmostEqual(cos.lr_at(55), (1e-3 + 1e-4) / 2)
+        self.assertAlmostEqual(cos.lr_at(100), 1e-4)
+        self.assertAlmostEqual(cos.lr_at(200), 1e-4, msg="past the end the schedule stays at min_lr")
+        self.assertAlmostEqual(tiny_gpt.LRSchedule("wsd", 100, 1e-3, 1e-4, 10, 0.0).lr_at(100), 1e-3,
+                               msg="decay_frac 0: warmup-stable only, never decays")
+        self.assertAlmostEqual(tiny_gpt.LRSchedule("wsd", 100, 1e-3, 0.0, 10, 0.2).lr_at(100), 0.0)
 
     def test_planner_respects_data_budget(self):
         manifest = {"tokenizer": {"vocab_size": 8192},
@@ -414,6 +460,15 @@ class TestPipeline(unittest.TestCase):
                            "--eval-tokens", "2048", "--sample-tokens", "8", "--no-probes"])
         self.assertEqual(code, 0, out_r)
         self.assertIn("RESUMED", out_r)
+        self.assertIn("val(mix)", out_r)
+        # extending a run needs at least one step after its warmup
+        warmup = torch.load(os.path.join(self.runs, "B.pt"), map_location="cpu",
+                            weights_only=True)["train_config"]["warmup_steps"]
+        code, out_w = run(["tiny_gpt.py", "--name", "B", "--out-dir", self.runs, "--log-file",
+                           os.path.join(self.runs, "log.txt"), "--device", "cpu", "--resume", "--no-probes",
+                           "--steps", str(warmup)])
+        self.assertNotEqual(code, 0)
+        self.assertIn("is not above this run's warmup", out_w)
 
         def metrics(text):
             return {int(m.group(1)): (float(m.group(2)), float(m.group(3)), int(m.group(4)), m.group(5)) for m in
@@ -1038,7 +1093,8 @@ class TestPipeline(unittest.TestCase):
         self.assertNotIn("UNSAFE CODE RAN", buf.getvalue())
 
     def test_cli_rejects_bad_values(self):
-        for bad in (["--name", "..\\evil"], ["--lr", "5"], ["--steps", "0"], ["--resume", "--init-from", "x.pt"]):
+        for bad in (["--name", "..\\evil"], ["--lr", "5"], ["--steps", "0"], ["--resume", "--init-from", "x.pt"],
+                    ["--steps", "10", "--warmup-steps", "10"]):
             with redirect_stdout(io.StringIO()), self.assertRaises(SystemExit):
                 with open(os.devnull, "w") as devnull:
                     old = sys.stderr
@@ -1047,6 +1103,9 @@ class TestPipeline(unittest.TestCase):
                         tiny_gpt.parse_args(bad)
                     finally:
                         sys.stderr = old
+        with redirect_stdout(io.StringIO()) as buf:
+            tiny_gpt.parse_args(["--steps", "10", "--warmup-steps", "2", "--decay-frac", "0"])
+        self.assertIn("--decay-frac 0 with wsd: the learning rate never decays", buf.getvalue())
 
     def test_memory_savings_for_larger_models(self):
         """Activation checkpointing and the chunked loss leave the mathematics unchanged; the planner turns them
@@ -1169,6 +1228,9 @@ class TestPipeline(unittest.TestCase):
         code, out_q = run(muon + ["--name", "Q", "--steps", "16", "--init-from", os.path.join(self.runs, "P.pt")])
         self.assertEqual(code, 0, out_q)
         self.assertIn("optimizer state restored for 6/20 tensors", out_q)
+        self.assertIn("learning rate re-warmed over 8 steps for the 14 tensors whose optimizer state restarts", out_q)
+        self.assertEqual(torch.load(os.path.join(self.runs, "Q.pt"), map_location="cpu",
+                                    weights_only=True)["train_config"].get("rewarm_steps"), 8)
         png = os.path.join(self.runs, "N.png")
         code, out_v = run(["view_pt.py", os.path.join(self.runs, "N.pt"), "--plot", "--out", png, "--dpi", "50",
                            "--no-forward"])
@@ -1280,6 +1342,64 @@ class TestPipeline(unittest.TestCase):
         self.assertEqual(code, 0, out_p)
         self.assertIn("the schedule continues at the --init-from checkpoint's step 8", out_p)
         self.assertEqual(torch.load(os.path.join(self.runs, "O5.pt"), map_location="cpu", weights_only=True)["step"], 9)
+
+    def test_mid_run_faults_recover(self):
+        """Faults after the first step: an out-of-memory error replays the step on the same windows; a
+        non-finite gradient norm skips the update and changes no weight; a failed periodic save is retried
+        (three in a row end the run, with the error recorded in experiments.csv); Ctrl+C right after a
+        metrics line does not fold that interval into the next row; the loaded checkpoint is freed after
+        setup."""
+        import csv
+        base = list(self.common[1:]) + ["--steps", "8", "--no-probes"]
+
+        def lines(text, total):
+            return re.findall(r"step +(\d+)/%d \| train ([\d.]+) \| val ([\d.]+)" % total, text)
+
+        code, out = self.patched_run("none", 0, base + ["--name", "F0"])
+        self.assertEqual(code, 0, out)
+        self.assertTrue(lines(out, 8))
+        # out of memory at step 3 (batch read 3): replayed on the same windows, so the run matches an unfaulted one
+        code, out_o = self.patched_run("oom_at_step", 3, base + ["--name", "F1"])
+        self.assertEqual(code, 0, out_o)
+        self.assertIn("Out of memory at step 3; retrying the same step (1/2).", out_o)
+        self.assertEqual(lines(out, 8), lines(out_o, 8), out_o)
+        # an infinite gradient element at step 4: the update is skipped, every weight stays, the run completes
+        code, out_n = self.patched_run("nangrad", 4, base + ["--name", "F2"])
+        self.assertEqual(code, 0, out_n)
+        self.assertIn("step 4: non-finite gradient norm inf; update skipped (1/20)", out_n)
+        self.assertIn("FAULT CHECK: 0 parameters changed", out_n)
+        self.assertTrue(lines(out_n, 8), "the metrics line must still carry finite numbers")
+        self.assertEqual(torch.load(os.path.join(self.runs, "F2.pt"), map_location="cpu",
+                                    weights_only=True)["step"], 8)
+        # saves that fail: training goes on and the counter resets after a success ...
+        code, out_s = self.patched_run("saveflaky", 6, base + ["--name", "F3", "--save-every", "1"])
+        self.assertEqual(code, 0, out_s)
+        self.assertEqual(out_s.count("WARNING: could not save"), 4, out_s)
+        self.assertIn("(2/3)", out_s)
+        self.assertNotIn("(3/3)", out_s)
+        self.assertEqual(torch.load(os.path.join(self.runs, "F3.pt"), map_location="cpu",
+                                    weights_only=True)["step"], 8)
+        # ... but three failures in a row end the run, with a crash file and the error in experiments.csv
+        code, out_f = self.patched_run("savefail", 3, base + ["--name", "F4", "--save-every", "1"])
+        self.assertNotEqual(code, 0)
+        self.assertIn("(3/3)", out_f)
+        self.assertTrue(os.path.isfile(os.path.join(self.runs, "F4_crash.pt")))
+        with open(os.path.join(self.runs, "results", "experiments.csv"), encoding="utf-8-sig", newline="") as handle:
+            row = [r for r in csv.DictReader(handle) if r["name"] == "F4" and r["event"] == "training run"][-1]
+        self.assertEqual(row["status"], "failed")
+        self.assertTrue(row["notes"].startswith("OSError"), row["notes"])
+        # Ctrl+C inside the sample after the step-8 metrics line: the interval was already recorded, so the
+        # resumed run's step-16 train value covers steps 9-16 only, as in an uninterrupted run
+        base16 = list(self.common[1:]) + ["--steps", "16", "--no-probes"]
+        code, out_u = self.patched_run("none", 0, base16 + ["--name", "F5"])
+        self.assertEqual(code, 0, out_u)
+        code, out_i = self.patched_run("interrupt_sample", 1, base16 + ["--name", "F6"])
+        self.assertEqual(code, 0, out_i)
+        self.assertIn("Paused after step 8 ", out_i)
+        code, out_r = self.patched_run("gcscan", 1, self.resume_args("F6"))
+        self.assertEqual(code, 0, out_r)
+        self.assertIn("FAULT CHECK: 0 checkpoint dicts alive after setup", out_r)
+        self.assertEqual([m for m in lines(out_u, 16) if m[0] == "16"], [m for m in lines(out_r, 16) if m[0] == "16"])
 
     def test_keep_split_from_and_build_lock_refusals(self):
         """--keep-split-from needs a finished earlier build (manifest.json, a docs.tsv ending in a newline);

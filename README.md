@@ -107,10 +107,11 @@ this computer sustained in its last run. `--plan` shows the choice and the reaso
 **3. The model.** A decoder-only transformer, as in GPT and Llama: rotary position embeddings, RMSNorm, SwiGLU
 feed-forward layers, grouped-query attention and tied input/output embeddings. Training uses AdamW (or Muon for
 the block matrices, `--optimizer muon`), a warmup-stable-decay learning-rate schedule, z-loss, gradient clipping and
-BF16 mixed precision, with exact resumption after Ctrl+C or a shutdown. For models too big for the GPU's memory the
-planner switches on two savings that leave the mathematics unchanged: the loss computed a few thousand tokens at a
-time, and activation checkpointing (blocks recomputed in the backward pass). An out-of-memory error at the first
-step is recovered automatically.
+BF16 mixed precision, with resumption after Ctrl+C or a shutdown on the same windows, schedule and optimizer state
+(GPU kernels are not bit-deterministic, so a replayed step differs at about 1e-5 in the loss). For models too big
+for the GPU's memory the planner switches on two savings that leave the mathematics unchanged: the loss computed a
+few thousand tokens at a time, and activation checkpointing (blocks recomputed in the backward pass). An
+out-of-memory error at the first step is recovered automatically.
 
 **4. Evaluation.** Validation loss per source on fixed windows, bits per byte (comparable across tokenizers), a
 biology fact benchmark scored against a shuffled-question floor, calibration of the model's confidence, a
@@ -157,7 +158,7 @@ python -m unittest test_tiny_gpt.py
 ```
 
 About 30 tests on the CPU: data preparation (filters, duplicates, splits, identical results for any number of
-workers), converters, the model and training loop (exact resumption, Muon, the memory savings), the planner,
+workers), converters, the model and training loop (resumption on the same windows and state, Muon, the memory savings), the planner,
 evaluation, fine-tuning, detection and checkpoint safety.
 
 ## Licence

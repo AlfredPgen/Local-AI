@@ -334,7 +334,8 @@ and, without more text, not better.
 - Every 200 steps a **metrics line**: training loss, validation loss per source, bits per byte, speed, energy used,
   CO2 and electricity cost, time left. `NEW BEST` means the model improved; `tinyGPT_best.pt` is saved then.
 - **Pause:** press Ctrl+C. **Continue:** `python tiny_gpt.py --resume` (same `--name` if you used one). A step
-  is either applied in full or not at all, and the resumed run continues exactly as if it had not stopped.
+  is either applied in full or not at all, and the resumed run continues on the same windows, schedule and
+  optimizer state (GPU kernels are not bit-deterministic, so a replayed step differs at about 1e-5 in the loss).
 - **Dashboard:** after each `NEW BEST` the dashboard is redrawn in the background on the CPU (log:
   `logs\dashboard.log`) and pushed to GitHub (`dashboards\`) at most every 3 hours (`--dashboard-push-hours`;
   `--dashboard off` switches it off).

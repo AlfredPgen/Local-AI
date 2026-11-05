@@ -166,8 +166,9 @@ Every script was reviewed for bugs, stale code and speed. What you will notice:
 
 **Fixes from a second audit that you may notice:**
 
-- **Training:** a Ctrl+C at any moment, even in the middle of a step, resumes exactly as if the run had not
-  stopped. A best checkpoint that could not be written is no longer claimed. `--init-from` without `--steps`
+- **Training:** a Ctrl+C at any moment, even in the middle of a step, resumes on the same windows, schedule and
+  optimizer state as if the run had not stopped (GPU kernels are not bit-deterministic, so a replayed step
+  differs at about 1e-5 in the loss). A best checkpoint that could not be written is no longer claimed. `--init-from` without `--steps`
   trains the planned steps after the checkpoint's step, instead of stopping at once. When the tokens per step are
   not a power of two, the batch no longer loses up to half of them to rounding.
 - **Safety:** checkpoints are flushed to disk before they are renamed into place. A save that had to use a
@@ -1211,11 +1212,12 @@ step 400/11870 | train 4.912 | val 4.470 @400 [md 4.51 wiki 4.43] | ppl 87.36
   - the tokenizer;
   - the settings.
 - **tinyGPT_best.pt** holds the weights of the best validation loss, for inference only.
-- `python tiny_gpt.py --resume` continues exactly where the run stopped. The learning-rate schedule is stateless, so
-  resuming is exact.
+- `python tiny_gpt.py --resume` continues where the run stopped: same windows, schedule and optimizer state. The
+  learning-rate schedule is stateless, so it continues at the same step (GPU kernels are not bit-deterministic,
+  so a replayed step differs at about 1e-5 in the loss).
 - **Ctrl+C at any moment** is safe. During an update the Ctrl+C is held until the update is complete, so a step is
-  applied in full or not at all; a step stopped halfway is rewound, so the resumed run gives the same numbers as
-  an uninterrupted one.
+  applied in full or not at all; a step stopped halfway is rewound, so the resumed run replays the same windows
+  as an uninterrupted one.
 - **No training state yet?** If the PC stopped before tinyGPT.pt was first written, `--resume` continues from
   tinyGPT_best.pt at its step. Weights, schedule position and history are kept. Adam's averages start again from zero,
   so the learning rate is ramped back up over 50 steps. The ramp is saved, so a pause during it resumes inside it.
