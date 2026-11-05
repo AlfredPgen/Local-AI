@@ -4,6 +4,7 @@ Runs on CPU in temporary folders (nothing in the project folder is written):
     python -m unittest -v test_tiny_gpt.py
 """
 
+import dataclasses
 import glob
 import hashlib
 import io
@@ -1171,6 +1172,10 @@ class TestPipeline(unittest.TestCase):
         micro, _, ckpt, _ = tiny_gpt.choose_memory_plan(big, 262_144, int(5.6 * 2 ** 30), True)
         self.assertTrue(ckpt)
         self.assertGreaterEqual(micro, 1)
+        # Muon's smaller optimizer state: at this card's budget the planner takes micro 2 x 132 without recomputation
+        # (about 2k tokens per micro-step already saturate the GEMMs) over 4 x 66 with it
+        self.assertEqual(tiny_gpt.choose_memory_plan(big, 270_336, int(6.0 * 2 ** 30), True, "muon"),
+                         (2, 132, False, 0))
         with self.assertRaises(SystemExit):
             tiny_gpt.choose_memory_plan(big, 262_144, 2 * 2 ** 30, True)
         # a run with both savings: stopped, resumed (and switched off on resume) like an uninterrupted run
@@ -1327,9 +1332,11 @@ class TestPipeline(unittest.TestCase):
         self.assertFalse(glob.glob(os.path.join(self.runs, "K*.train.lock")), "the run lock must be released")
 
     def test_first_step_out_of_memory_escalation(self):
-        """A first-step out-of-memory error switches on the cheapest saving first (loss in pieces, micro-batch
-        down to 4, then activation checkpointing), retries on the same windows, never switches on a saving the
-        command line turned off, and experiments.csv records the settings actually used."""
+        """A first-step out-of-memory error switches on the cheapest saving first (loss in pieces, the micro-batch
+        halved down to about 2k tokens, then activation checkpointing, then halved further: at ctx 64 a
+        micro-batch of 8 is already below 2k tokens, so recomputation comes before the halving), retries on the
+        same windows, never switches on a saving the command line turned off, and experiments.csv records the
+        settings actually used."""
         import csv
         base = list(self.common[1:]) + ["--steps", "8", "--no-probes"]
 
@@ -1338,8 +1345,8 @@ class TestPipeline(unittest.TestCase):
 
         code, out = self.patched_run("oom", 3, base + ["--name", "O1"])
         self.assertEqual(code, 0, out)
-        order = [out.find(s) for s in ("retrying with the loss computed", "retrying with micro-batch 4 x 2",
-                                       "retrying with activation checkpointing")]
+        order = [out.find(s) for s in ("retrying with the loss computed", "retrying with activation checkpointing",
+                                       "retrying with micro-batch 4 x 2")]
         self.assertTrue(all(i >= 0 for i in order) and order == sorted(order), out)
         with open(os.path.join(self.runs, "results", "experiments.csv"), encoding="utf-8-sig", newline="") as handle:
             row = [r for r in csv.DictReader(handle) if r["name"] == "O1" and r["event"] == "training run"][-1]
@@ -1367,6 +1374,44 @@ class TestPipeline(unittest.TestCase):
         self.assertEqual(code, 0, out_p)
         self.assertIn("the schedule continues at the --init-from checkpoint's step 8", out_p)
         self.assertEqual(torch.load(os.path.join(self.runs, "O5.pt"), map_location="cpu", weights_only=True)["step"], 9)
+
+    def test_resume_with_a_new_micro_batch(self):
+        """--resume may trade micro-batch for accumulation at the same tokens per step (2 x 132 instead of 4 x 66
+        with recomputation): the run continues to its step count with the same tokens seen, the metrics row and
+        the saved settings carry the new pair and the peak memory, and a pair that changes the tokens per step
+        is refused."""
+        base = self.common + ["--steps", "8", "--no-probes"]  # 8 x 64 tokens x 1 = 512 tokens per step
+        code, out = run(base + ["--name", "MB", "--stop-after-steps", "4"])
+        self.assertEqual(code, 0, out)
+        code, out_bad = run(["tiny_gpt.py"] + self.resume_args("MB") + ["--batch-size", "4", "--grad-accum", "3"])
+        self.assertNotEqual(code, 0)
+        self.assertIn("tokens per step must stay 512", out_bad)
+        self.assertIn("--batch-size B --grad-accum 512//(B*64)", out_bad)
+        # the accumulation may be left out: 512 // (4 x 64) = 2
+        code, out_r = run(["tiny_gpt.py"] + self.resume_args("MB") + ["--batch-size", "4"])
+        self.assertEqual(code, 0, out_r)
+        self.assertIn("micro-batch 8 x 1 -> 4 x 2 (same 512 tokens per step", out_r)
+        self.assertNotIn("--batch-size ignored", out_r)
+        ck = torch.load(os.path.join(self.runs, "MB.pt"), map_location="cpu", weights_only=True)
+        tc = ck["train_config"]
+        self.assertEqual((ck["step"], ck["tokens_seen"], tc["micro_batch"], tc["grad_accum"], tc["tokens_per_step"]),
+                         (8, 8 * 512, 4, 2, 512))
+        metrics = glob.glob(os.path.join(self.runs, "MB*metrics*.jsonl"))
+        self.assertEqual(len(metrics), 1, metrics)
+        with open(metrics[0], encoding="utf-8") as handle:
+            rows = [json.loads(line) for line in handle if line.strip()]
+        last = [r for r in rows if r.get("step") == 8]
+        self.assertEqual(len(last), 1, rows)
+        self.assertGreater(last[0]["peak_mem_gib"], 0.0)
+        self.assertEqual(last[0]["tokens"], 8 * 512)
+        # the same pair again is not a change (no note), and a different accumulation alone is refused
+        code, out_same = run(["tiny_gpt.py"] + self.resume_args("MB") + ["--steps", "9", "--batch-size", "4",
+                                                                         "--grad-accum", "2"])
+        self.assertEqual(code, 0, out_same)
+        self.assertNotIn("micro-batch 4 x 2 ->", out_same)
+        code, out_acc = run(["tiny_gpt.py"] + self.resume_args("MB") + ["--steps", "10", "--grad-accum", "4"])
+        self.assertNotEqual(code, 0)
+        self.assertIn("tokens per step must stay 512", out_acc)
 
     def test_mid_run_faults_recover(self):
         """Faults after the first step: an out-of-memory error replays the step on the same windows; a
@@ -2350,6 +2395,236 @@ class TestFixes(unittest.TestCase):
                 finetune.main(["sft", "--base", data, "--data", data, "--name", "x", "--batch", "8",
                                "--micro-batch", bad, "--log-file", log, "--device", "cpu"])
             self.assertEqual(ctx.exception.code, 2, bad)
+
+    def test_full_loss_shares_one_logsumexp(self):
+        """The full-logits loss and its z-loss come from one logsumexp: the same value and gradients as
+        F.cross_entropy plus a second logsumexp; the piece-wise (eager) loss agrees with it."""
+        torch.manual_seed(0)
+        logits = torch.randn(37, 300, requires_grad=True)
+        y = torch.randint(0, 300, (37,))
+        loss, lse = tiny_gpt.full_lm_loss(logits, y)
+        total = loss + 1e-4 * lse.pow(2).mean()
+        grad, = torch.autograd.grad(total, logits)
+        want = (torch.nn.functional.cross_entropy(logits, y)
+                + 1e-4 * torch.logsumexp(logits, -1).pow(2).mean())
+        want_grad, = torch.autograd.grad(want, logits)
+        self.assertTrue(torch.allclose(total, want, atol=1e-6), (total.item(), want.item()))
+        self.assertTrue(torch.allclose(grad, want_grad, atol=1e-6), (grad - want_grad).abs().max().item())
+        h, w = torch.randn(37, 16), torch.randn(300, 16)
+        ce, z, n = tiny_gpt.chunked_lm_loss(h, w, y, 10)
+        full, lse2 = tiny_gpt.full_lm_loss(h @ w.t(), y)
+        self.assertEqual(int(n), 37)
+        self.assertTrue(torch.allclose(ce / n, full, atol=1e-5))
+        self.assertTrue(torch.allclose(z / n, lse2.pow(2).mean(), atol=1e-4))
+        self.assertIs(tiny_gpt._chunk_loss_fn, tiny_gpt._chunk_loss, "eager piece-wise loss on the CPU")
+
+    @unittest.skipUnless(torch.cuda.is_available() and os.environ.get("TINYGPT_GPU_TESTS"),
+                         "needs CUDA and TINYGPT_GPU_TESTS=1 (never while a training run occupies the GPU)")
+    def test_compiled_chunk_loss_matches_eager(self):
+        """The compiled piece-wise loss (used under torch.compile on CUDA) gives the eager values and gradients,
+        -100 labels included."""
+        dev = torch.device("cuda")
+        torch.manual_seed(0)
+        h = torch.randn(64, 32, device=dev, requires_grad=True)
+        w = torch.randn(500, 32, device=dev, requires_grad=True)
+        y = torch.randint(0, 500, (64,), device=dev)
+        y[:3] = -100
+
+        def run_loss(compiled):
+            tiny_gpt.set_chunk_loss_compiled(compiled)
+            try:
+                h.grad = w.grad = None
+                ce, z, n = tiny_gpt.chunked_lm_loss(h, w, y, 24)
+                (ce / n + 1e-4 * z / n).backward()
+                return ce.detach().clone(), z.detach().clone(), h.grad.clone(), w.grad.clone()
+            finally:
+                tiny_gpt.set_chunk_loss_compiled(False)
+
+        for a, b in zip(run_loss(False), run_loss(True)):
+            self.assertTrue(torch.allclose(a, b, atol=1e-4, rtol=1e-4), (a - b).abs().max().item())
+
+    def test_speed_probe_flops_and_peak_memory(self):
+        """The planner's speed probe times micro-steps and one optimizer update per step with the planned
+        optimizer and returns the peak memory; the FLOP count carries the recompute of activation
+        checkpointing; peak_memory_bytes is a running maximum."""
+        cfg = tiny_gpt.ModelConfig(vocab_size=300, ctx=32, d_model=64, n_layers=2, n_heads=4, n_kv_heads=2)
+        cpu = torch.device("cpu")
+        n = tiny_gpt.count_params(cfg)[0]
+        self.assertEqual(tiny_gpt.flops_per_token(cfg), 6 * n + 12 * 2 * 32 * 64)
+        self.assertEqual(tiny_gpt.flops_per_token(cfg, True), tiny_gpt.flops_per_token(cfg) + 2 * n + 4 * 2 * 32 * 64)
+        built = []
+        real = tiny_gpt.build_optimizer
+
+        def spy(model, settings, device):
+            built.append(settings["optimizer"])
+            return real(model, settings, device)
+
+        with unittest.mock.patch.object(tiny_gpt, "build_optimizer", side_effect=spy):
+            sec, peak = tiny_gpt.measure_seconds_per_step(cfg, 2, 3, cpu, None, warmup=1, timed=2, settings={
+                "optimizer": "muon", "lr": 1e-3, "weight_decay": 0.1, "betas": [0.9, 0.95]})
+            sec_ck, peak_ck = tiny_gpt.measure_seconds_per_step(cfg, 2, 3, cpu, None, warmup=1, timed=2,
+                                                                checkpointing=True, loss_chunk=16)
+        self.assertEqual(built, ["muon", "adamw"])
+        self.assertGreater(sec, 0.0)
+        self.assertGreater(sec_ck, 0.0)
+        self.assertGreater(peak, 0)
+        self.assertGreater(peak_ck, 0)
+        self.assertEqual(tiny_gpt.peak_memory_bytes(cpu, 10 ** 15), 10 ** 15)
+        self.assertGreater(tiny_gpt.peak_memory_bytes(cpu), 0)
+
+    def test_time_budget_ladder_search(self):
+        """plan_with_time_budget without an explicit shape: the ladder binary search (mocked speed test, bigger
+        is slower) picks the largest shape whose tokens >= r x N fit the budget, with the device's hot factor
+        and the compile correction; a hopeless budget falls to the smallest shape with a note; a probe peak above
+        the memory budget steps to the next memory option; a recorded sustained speed caps the step time."""
+        manifest = {"tokenizer": {"vocab_size": 16384},
+                    "sources": {"md": {"train": {"tokens": 1_000_000_000}, "doc_tokens_percentiles": {"90": 1000}}}}
+        budget = (64 * 2 ** 30, "64 GiB (test)")
+        probes = []
+        peak = {"gib": 1.0}
+
+        def fake_measure(cfg, micro, accum, device, amp_dtype, attn_pref="auto", warmup=2, timed=3,
+                         checkpointing=False, loss_chunk=0, settings=None):
+            probes.append((cfg.d_model, settings["optimizer"]))
+            return micro * accum * cfg.ctx * tiny_gpt.count_params(cfg)[0] * 1e-13, int(peak["gib"] * 2 ** 30)
+
+        def plan(argv, device=torch.device("cpu"), speed=(None, "no table (test)"), triton=False):
+            args = tiny_gpt.parse_args(["--name", "x"] + argv)
+            with unittest.mock.patch.object(tiny_gpt, "device_memory_budget", return_value=budget), \
+                    unittest.mock.patch.object(tiny_gpt, "measure_seconds_per_step", side_effect=fake_measure), \
+                    unittest.mock.patch.object(tiny_gpt, "sustained_speed", return_value=speed), \
+                    unittest.mock.patch.object(tiny_gpt, "have_triton", return_value=triton):
+                return tiny_gpt.plan_with_time_budget(args, manifest, device, None)
+
+        ladder = tiny_gpt.shape_ladder(16384)
+        # the fake step time is tokens/step x N x 1e-13 s, so the tokens that fit are budget_s / (slow x N x 1e-13)
+        # and the condition tokens >= 20 N holds for N^2 <= budget_s / (slow x 20 x 1e-13)
+        hours, slow = 1.0, tiny_gpt.SLOW_FACTOR["cpu"]
+        bound = hours * 3600 * 0.92 / (slow * 20 * 1e-13)
+        want = max((c for c in ladder if tiny_gpt.count_params(c)[0] ** 2 <= bound), key=lambda c: c.d_model)
+        del probes[:]
+        cfg, settings, lines = plan(["--time-budget-hours", str(hours), "--optimizer", "muon", "--compile", "off"])
+        self.assertEqual((cfg.d_model, cfg.n_layers), (want.d_model, want.n_layers))
+        self.assertGreater(want.d_model, ladder[0].d_model)
+        self.assertLess(want.d_model, 1024)
+        self.assertTrue(all(o == "muon" for _, o in probes), probes)
+        self.assertLessEqual(len(probes), 6, "a binary search over the ladder, not a scan")
+        self.assertTrue(any(f"slowed by {slow:g}x" in ln for ln in lines), lines)
+        self.assertTrue(any("probe measured 1.00 GiB" in ln for ln in lines), lines)
+        self.assertGreaterEqual(settings["steps"] * settings["tokens_per_step"],
+                                20 * tiny_gpt.count_params(cfg)[0] * 0.9)
+        self.assertTrue(any("satisfies the data AND the time budget" in ln for ln in lines), lines)
+        # a hopeless budget (the smallest allowed, 0.01 h, at 1000 tokens per parameter): the smallest shape,
+        # trained on what fits
+        cfg0, settings0, lines0 = plan(["--time-budget-hours", "0.01", "--tokens-per-param", "1000", "--compile",
+                                        "off"])
+        self.assertEqual(cfg0.d_model, ladder[0].d_model)
+        self.assertTrue(any("even the smallest shape" in ln for ln in lines0), lines0)
+        # compile will be on (CUDA with Triton): the probe's time is divided by COMPILE_SPEEDUP, so a bit more fits
+        del probes[:]
+        cfg_c, _, lines_c = plan(["--time-budget-hours", str(hours)], device=torch.device("cuda"), triton=True)
+        self.assertTrue(any(f"divided by {tiny_gpt.COMPILE_SPEEDUP:g}" in ln for ln in lines_c), lines_c)
+        self.assertTrue(any("compiled;" in ln for ln in lines_c), lines_c)
+        bound_c = hours * 3600 * 0.92 * tiny_gpt.COMPILE_SPEEDUP / (tiny_gpt.SLOW_FACTOR["cuda"] * 20 * 1e-13)
+        want_c = max((c for c in ladder if tiny_gpt.count_params(c)[0] ** 2 <= bound_c), key=lambda c: c.d_model)
+        self.assertEqual(cfg_c.d_model, want_c.d_model)
+        # a sustained speed from earlier runs: the step time is at least tokens x FLOP/token / speed (here 6x the
+        # fake measurement), so the tokens that fit are budget_s x speed / FLOP per token
+        speed = 1e13
+        cfg_s, settings_s, lines_s = plan(["--time-budget-hours", str(hours), "--compile", "off"],
+                                          speed=(speed, "test table"))
+        self.assertTrue(any("speed from test table" in ln for ln in lines_s), lines_s)
+
+        def fits_at_speed(c):
+            shaped = tiny_gpt.ModelConfig(**dataclasses.asdict(c))
+            shaped.ctx = 256 if c.d_model <= 192 else (512 if c.d_model <= 512 else 1024)  # plan_run's ctx rule
+            return hours * 3600 * 0.92 * speed / tiny_gpt.flops_per_token(shaped) >= 20 * tiny_gpt.count_params(c)[0]
+
+        want_s = max((c for c in ladder if fits_at_speed(c)), key=lambda c: c.d_model)
+        self.assertEqual(cfg_s.d_model, want_s.d_model)
+        self.assertNotEqual(cfg_s.d_model, want.d_model, "the speed path, not the measurement, set the shape")
+        fit = hours * 3600 * 0.92 * speed / tiny_gpt.flops_per_token(cfg_s, settings_s["activation_checkpointing"])
+        self.assertLessEqual(settings_s["steps"] * settings_s["tokens_per_step"], fit + settings_s["tokens_per_step"])
+        # the probe's peak above the memory budget: the next memory option from the start
+        peak["gib"] = 100.0
+        _, settings_p, lines_p = plan(["--time-budget-hours", str(hours), "--compile", "off"])
+        self.assertEqual((settings_p["activation_checkpointing"], settings_p["loss_chunk_tokens"]),
+                         (False, tiny_gpt.LOSS_CHUNK_TOKENS))
+        self.assertTrue(any("next memory option" in ln for ln in lines_p), lines_p)
+        peak["gib"] = 1.0
+
+    def test_sustained_speed_reads_the_device_rows(self):
+        """sustained_speed takes the latest run of 12 minutes or more on the same kind of device from
+        experiments.csv (rows without a device column count as CUDA), with the recompute of a checkpointed run
+        in its FLOP count."""
+        import csv
+        base = {"event": "training run", "vocab": "16384", "ctx": "1024", "d_model": "1024", "layers": "18",
+                "heads": "16", "kv_heads": "4", "params": "216180000"}
+        cfg = tiny_gpt.ModelConfig(vocab_size=16384, ctx=1024, d_model=1024, n_layers=18, n_heads=16, n_kv_heads=4)
+        rows = [{**base, "name": "gpu_ckpt", "time": "2026-11-01T00:00:00", "device": "cuda", "tokens_seen": "3600000",
+                 "train_hours": "0.5", "activation_checkpointing": "on"},
+                {**base, "name": "mac", "time": "2026-11-02T00:00:00", "device": "mps", "tokens_seen": "7200000",
+                 "train_hours": "1", "activation_checkpointing": "off"},
+                {**base, "name": "short", "time": "2026-11-03T00:00:00", "device": "cuda", "tokens_seen": "100000",
+                 "train_hours": "0.1", "activation_checkpointing": "off"},
+                {**base, "event": "benchmark", "name": "bench", "device": "cuda", "tokens_seen": "", "train_hours": ""}]
+        out = os.path.join(self.tmp, "speed_rows")
+        os.makedirs(os.path.join(out, "results"))
+        with open(os.path.join(out, "results", "experiments.csv"), "w", encoding="utf-8-sig", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=sorted(rows[0]))
+            writer.writeheader()
+            writer.writerows(rows)
+        speed, note = tiny_gpt.sustained_speed(out, torch.device("cuda"))
+        self.assertAlmostEqual(speed, 3600000 / 1800 * tiny_gpt.flops_per_token(cfg, True), delta=1.0)
+        self.assertIn("gpu_ckpt", note)
+        self.assertIn("activation checkpointing", note)
+        speed_m, note_m = tiny_gpt.sustained_speed(out, torch.device("mps"))
+        self.assertAlmostEqual(speed_m, 7200000 / 3600 * tiny_gpt.flops_per_token(cfg), delta=1.0)
+        self.assertIn("mac", note_m)
+        self.assertEqual(tiny_gpt.sustained_speed(out, torch.device("cpu"))[0], None)
+        self.assertIn("cpu device", tiny_gpt.sustained_speed(out, torch.device("cpu"))[1])
+        self.assertEqual(tiny_gpt.sustained_speed(os.path.join(self.tmp, "nowhere"), torch.device("cuda")),
+                         (None, "no experiments.csv"))
+        # a table from before the device column: its runs were CUDA runs
+        legacy = os.path.join(self.tmp, "speed_legacy")
+        os.makedirs(os.path.join(legacy, "results"))
+        old = {k: v for k, v in rows[1].items() if k not in ("device", "activation_checkpointing")}
+        with open(os.path.join(legacy, "results", "experiments.csv"), "w", encoding="utf-8-sig", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=sorted(old))
+            writer.writeheader()
+            writer.writerow(old)
+        self.assertIn("mac", tiny_gpt.sustained_speed(legacy, torch.device("cuda"))[1])
+        self.assertEqual(tiny_gpt.sustained_speed(legacy, torch.device("mps"))[0], None)
+
+    def test_experiments_csv_gains_the_peak_memory_column(self):
+        """A table written before peak_mem_gib existed is copied aside and rewritten once with the full header:
+        the old rows keep their values and the new row carries the new column."""
+        import csv
+        out = os.path.join(self.tmp, "exp_migration")
+        os.makedirs(os.path.join(out, "results"))
+        path = os.path.join(out, "results", "experiments.csv")
+        old_cols = [c for c in tiny_gpt.EXPERIMENT_COLUMNS if c != "peak_mem_gib"]
+        self.assertIn("peak_mem_gib", tiny_gpt.EXPERIMENT_COLUMNS)
+        with open(path, "w", encoding="utf-8-sig", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=old_cols)
+            writer.writeheader()
+            writer.writerow({"time": "2026-11-01T00:00:00", "event": "training run", "name": "old", "tok_s": "123",
+                             "device": "cuda"})
+        with redirect_stdout(io.StringIO()):
+            tiny_gpt.record_experiment(out, {"event": "training run", "name": "new", "peak_mem_gib": "1.23",
+                                             "device": "cpu"})
+        with open(path, encoding="utf-8-sig", newline="") as handle:
+            header = next(csv.reader(handle))
+        with open(path, encoding="utf-8-sig", newline="") as handle:
+            rows = list(csv.DictReader(handle))
+        self.assertEqual(header, tiny_gpt.EXPERIMENT_COLUMNS)
+        self.assertEqual([(r["name"], r["peak_mem_gib"], r["tok_s"], r["device"]) for r in rows],
+                         [("old", "", "123", "cuda"), ("new", "1.23", "", "cpu")])
+        self.assertEqual(len(glob.glob(path + ".before-columns-*")), 1)
+        # already current: no second copy
+        with redirect_stdout(io.StringIO()):
+            tiny_gpt.record_experiment(out, {"event": "training run", "name": "newer", "peak_mem_gib": "2.5"})
+        self.assertEqual(len(glob.glob(path + ".before-columns-*")), 1)
 
     def test_run_pipeline_guards(self):
         import run_pipeline
