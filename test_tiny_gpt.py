@@ -270,6 +270,48 @@ class TestPipeline(unittest.TestCase):
         kept_titles = [d["title"] for d in self.read_docs() if d["source"] == "wiki" and d["status"] in ("train", "val")]
         self.assertTrue(all(t.startswith("Genetics") for t in kept_titles))
 
+    def test_resume_after_pass2_gives_the_same_dataset(self):
+        """A build that fails after pass 2 keeps _work/state.pkl and the spool; --resume
+        continues from them and produces the same manifest (fingerprint) and docs.tsv
+        as an uninterrupted build."""
+        base = ["--md-dir", self.corpus.md, "--md-dir", f"notes={self.corpus.notes}", "--vocab-size", "600",
+                "--val-fraction", "0.2", "--threads", "2"]
+        plain = os.path.join(self.tmp, "resume_plain")
+        with redirect_stdout(io.StringIO()):
+            data_prep.prepare(["--out", plain] + base)
+        broken = os.path.join(self.tmp, "resume_broken")
+        real = data_prep._train_tokenizer
+
+        def fail_once(*a, **k):
+            data_prep._train_tokenizer = real
+            raise OSError("disk full (simulated)")
+
+        data_prep._train_tokenizer = fail_once
+        try:
+            with redirect_stdout(io.StringIO()) as buf, self.assertRaises(OSError):
+                data_prep.prepare(["--out", broken] + base)
+        finally:
+            data_prep._train_tokenizer = real
+        self.assertIn("--resume", buf.getvalue())
+        work = os.path.join(broken, "_work")
+        self.assertTrue(os.path.isfile(os.path.join(work, data_prep.STATE_NAME)), "state kept for --resume")
+        self.assertTrue(glob.glob(os.path.join(work, "spool2.jsonl*")), "spool kept for --resume")
+        self.assertFalse(data_prep._is_incomplete_build(broken), "a resumable build is never deleted")
+        with self.assertRaises(SystemExit):  # without --resume the folder is refused with a hint, not rebuilt
+            with redirect_stdout(io.StringIO()):
+                data_prep.prepare(["--out", broken] + base)
+        with redirect_stdout(io.StringIO()) as buf:
+            data_prep.prepare(["--out", broken, "--resume", "--threads", "2"])
+        self.assertIn("Resuming", buf.getvalue())
+        a, b = data_prep.read_manifest(plain), data_prep.read_manifest(broken)
+        self.assertEqual(a["fingerprint"], b["fingerprint"])
+        self.assertEqual(a["totals"], b["totals"])
+        self.assertIn("(resumed)", b["command"])
+        with open(os.path.join(plain, "docs.tsv"), encoding="utf-8") as f1, \
+                open(os.path.join(broken, "docs.tsv"), encoding="utf-8") as f2:
+            self.assertEqual(f1.read(), f2.read())
+        self.assertFalse(os.path.exists(work), "work files removed after the resumed build")
+
     def test_split_by_group_no_leakage(self):
         groups = {}
         for d in self.read_docs():
@@ -1344,9 +1386,9 @@ class TestFixes(unittest.TestCase):
     """Fast unit-level regression tests for the 2026-10 audit fixes (no dataset needed)."""
 
     def test_vocab_size_grows_with_data(self):
-        """4,096 below 20M characters, then doubling for every 10x more text, with no cap."""
+        """4,096 below 20M characters, then doubling for every 10x more text, capped at 65,536 (uint16 token files)."""
         cases = [(5e6, 4096), (2e7, 8192), (1.99e8, 8192), (2e8, 16384), (1.5e9, 16384), (1.5e10, 32768),
-                 (2e10, 65536), (2e11, 131072)]
+                 (2e10, 65536), (2e11, 65536), (2e13, 65536)]
         for chars, want in cases:
             self.assertEqual(data_prep.auto_vocab_size(chars), want, chars)
 
@@ -1500,6 +1542,334 @@ class TestFixes(unittest.TestCase):
         with self.assertRaises(KeyboardInterrupt):
             held.deliver()
         held.deliver()  # delivered once only
+
+    # ---------------- data_prep: 2026-11 audit (WP8) ----------------
+    def test_spool_round_trip_zstd_and_plain(self):
+        folder = os.path.join(self.tmp, "spools")
+        os.makedirs(folder)
+        rows = [{"s": "md", "id": f"d{i}", "x": "héllo\nwörld " * 50 + str(i)} for i in range(200)]
+        for have in (True, False):
+            data_prep._ZSTD = have
+            try:
+                path = data_prep._spool_path(folder, "spool1.md.jsonl")
+                self.assertEqual(path.endswith(".zst"), have)
+                with data_prep._open_spool(path, "w") as handle:
+                    for r in rows:
+                        json.dump(r, handle, ensure_ascii=False)
+                        handle.write("\n")
+                with data_prep._open_spool(path, "r") as handle:
+                    back = [json.loads(line) for line in handle]
+                self.assertEqual(back, rows)
+                self.assertEqual(data_prep._spool_line_count(path), (200, True))
+                if have:
+                    self.assertLess(os.path.getsize(path), len(json.dumps(rows)) / 5, "zstd compresses the JSON")
+            finally:
+                data_prep._ZSTD = None
+
+    def test_prefilter_pattern_cache_hit_and_miss(self):
+        terms = ["genetic drift", "allele*", "=MET", "Hardy-Weinberg"]
+        cache = os.path.join(self.tmp, "kw.txt.prefilter.json")
+        fresh = data_prep.cached_prefilter_patterns(terms, cache)
+        self.assertEqual(fresh, data_prep._prefilter_patterns(terms))
+        self.assertTrue(os.path.isfile(cache))
+        with open(cache, encoding="utf-8") as handle:
+            stored = json.load(handle)
+        stored["patterns"] = ["(?:sentinel)"]  # a hit returns what the cache holds
+        with open(cache, "w", encoding="utf-8") as handle:
+            json.dump(stored, handle)
+        self.assertEqual(data_prep.cached_prefilter_patterns(terms, cache), ["(?:sentinel)"])
+        # a changed term list (or pattern size) misses and rewrites the cache
+        self.assertEqual(data_prep.cached_prefilter_patterns(terms + ["CRISPR"], cache),
+                         data_prep._prefilter_patterns(terms + ["CRISPR"]))
+        self.assertEqual(data_prep.cached_prefilter_patterns(terms, cache), fresh)
+        with open(cache, "w", encoding="utf-8") as handle:
+            handle.write("not json")
+        self.assertEqual(data_prep.cached_prefilter_patterns(terms, cache), fresh, "a damaged cache is ignored")
+        self.assertIsNone(data_prep.prefilter_cache_path("genetic drift,allele*"))
+        kwfile = os.path.join(self.tmp, "kw.txt")
+        open(kwfile, "w").close()
+        self.assertEqual(data_prep.prefilter_cache_path(kwfile), os.path.abspath(kwfile) + ".prefilter.json")
+
+    def test_phrase_index_matches_first_word_matcher(self):
+        """The (first word, second word) phrase index counts exactly what the earlier
+        first-word matcher counted, on keywords.txt and planted edge cases."""
+        import collections
+
+        class FirstWordMatcher(data_prep._TermMatcher):  # the matcher before the audit, as a reference
+            def __init__(self, terms):
+                super().__init__(terms)
+                self.table, self.table_cs = collections.defaultdict(list), collections.defaultdict(list)
+                for term in terms:
+                    core, cs, _lead, trail = data_prep._term_parts(term)
+                    words = data_prep._WORDS_RE.findall(core)
+                    if len(words) < 2:
+                        continue
+                    if not cs:
+                        words = [w.lower() for w in words]
+                    (self.table_cs if cs else self.table)[words[0]].append((words[1:], term, trail))
+
+            @staticmethod
+            def _phrases(seq, present, table, counter, weight):
+                n = len(seq)
+                for i, w in enumerate(seq):
+                    if w not in present:
+                        continue
+                    for rest, term, trail in table[w]:
+                        k = len(rest)
+                        if i + k >= n or seq[i + 1:i + k] != rest[:-1]:
+                            continue
+                        last = seq[i + k]
+                        if last.startswith(rest[-1]) if trail else last == rest[-1]:
+                            counter[term] += weight
+
+            def count(self, text, counter, weight=1):
+                words = data_prep._WORDS_RE.findall(text)
+                if not words:
+                    return counter
+                lower = [w.lower() for w in words]
+                freq = collections.Counter(lower)
+                for w in freq.keys() & self.single.keys():
+                    counter[self.single[w]] += freq[w] * weight
+                for affixes in self.affixes:
+                    affixes.count(freq, counter, weight)
+                present = freq.keys() & self.table.keys()
+                if present:
+                    self._phrases(lower, present, self.table, counter, weight)
+                if self.need_case:
+                    freq_cs = collections.Counter(words)
+                    for w in freq_cs.keys() & self.single_cs.keys():
+                        counter[self.single_cs[w]] += freq_cs[w] * weight
+                    for affixes in self.affixes_cs:
+                        affixes.count(freq_cs, counter, weight)
+                    present = freq_cs.keys() & self.table_cs.keys()
+                    if present:
+                        self._phrases(words, present, self.table_cs, counter, weight)
+                return counter
+
+        terms = data_prep.read_terms(os.path.join(HERE, "keywords.txt")) + [
+            "Gallus gallus", "Loa loa", "Johnson & Johnson", "genetic drif*", "linkage disequilibrium map*",
+            "=HLA class I", "cell cell adhesion"]
+        old, new = FirstWordMatcher(terms), data_prep._TermMatcher(terms)
+        texts = [BIO, paragraphs(3), "Gallus gallus gallus is the red junglefowl.", "gallus " * 5, "Loa loa loa loa",
+                 "Johnson & Johnson makes genetic tests; Boris Johnson spoke.", "genetic drifting and genetic drift",
+                 "linkage disequilibrium mapping, linkage disequilibrium maps, linkage disequilibrium.",
+                 "HLA class I and hla class i molecules; HLA class II", "cell cell cell adhesion molecules",
+                 "genome-wide association study of heritability in the UK Biobank cohort, Hardy-Weinberg equilibrium",
+                 "a lone first word: linkage", "", "   "]
+        for text in texts:
+            self.assertEqual(new.count(text, collections.Counter()), old.count(text, collections.Counter()), text)
+        kw = data_prep.KeywordFilter(["cell cell adhesion", "genetic drif*"], [], min_hits=1, min_distinct=1)
+        self.assertEqual(kw.evaluate("", "cell cell cell adhesion")[3], collections.Counter({"cell cell adhesion": 1}))
+        self.assertEqual(kw.evaluate("", "genetic drift genetic drifts")[3], collections.Counter({"genetic drif*": 2}))
+
+    def test_structural_line_exemptions(self):
+        """Display maths and plain headings before a paragraph are never boilerplate;
+        short lines followed by short lines (category runs) still are."""
+        sl = data_prep._structural_line
+        para = "We fitted a linear mixed model to every trait and estimated the additive variance from the kinship."
+        self.assertTrue(len(para) >= 80)
+        for line in ("## Materials and Methods", "-----", "MATERIALS AND METHODS",
+                     "$$ \\hat{\\beta} = (X^T X)^{-1} X^T y $$", "\\begin{equation} E = mc^2", "x \\end{align}"):
+            self.assertTrue(sl(line, "Category: Genetics"), line)
+        self.assertTrue(sl("Materials and Methods", para))
+        self.assertTrue(sl("Etymology", para))
+        self.assertFalse(sl("Materials and Methods", "Category: Genetics"), "a short line after a short line")
+        self.assertFalse(sl("Materials and Methods"), "without the next line the heading rule is off")
+        self.assertFalse(sl("Materials and Methods", ""))
+        self.assertFalse(sl("This item is not available for download.", para), "a sentence is not a heading")
+        self.assertFalse(sl("one two three four five six seven eight nine", para), "more than 8 words")
+        self.assertFalse(sl("Please sign in to access the full text", "Category: x"))
+        lines = ["Materials and Methods", "", para, "Category: Genetics", "", "Category: Biology"]
+        self.assertEqual(data_prep._next_nonblank(lines, 0), para)
+        self.assertEqual(data_prep._next_nonblank(lines, 3), "Category: Biology")
+        self.assertEqual(data_prep._next_nonblank(lines, 5), "")
+        # the cleaning fast path gives the same text as the regexes it replaced
+        import collections
+        for text in ("a  \n b\t\n\n\n\nc \n", "plain\ntext", "x\n\n\n\n\ny", "tabs\t\t\nend  "):
+            stats = collections.Counter()
+            want = re.sub(r"\n{3,}", "\n\n", re.sub(r"[ \t]+(?=\n)", "", text)).strip()
+            self.assertEqual(data_prep.clean_text(text, stats), want, repr(text))
+
+    def test_leakage_move_updates_val_chars(self):
+        import collections
+        docs = [["md", "a", "A", 1000, 0, 0, None, None], ["md", "b", "B", 2000, 0, 0, None, None],
+                ["md", "c", "C", 300, 0, 0, None, None], ["md", "d", "D", 400, 0, 0, None, None],
+                ["web", "e", "E", 500, 0, 0, None, None]]
+        roots = np.asarray([0, 1, 1, 3, 4], dtype=np.int32)  # b and c are a near-duplicate group
+        clusters = {1: [1, 2]}
+        split_of = np.asarray([1, 2, 2, 2, 2], dtype=np.int8)  # a train; b, c, d, e validation
+        dropped = np.zeros(5, dtype=bool)
+        sources = {"md": {"val_chars": 2700, "train_chars": 1000}, "web": {"val_chars": 500, "train_chars": 0}}
+        forced = collections.Counter()
+        rows = [(0.9, "md", "c", "C", 20, 2), (0.6, "md", "d", "D", 12, 3), (0.7, "web", "e", "E", 9, 4),
+                (0.1, "md", "b", "B", 30, 1)]
+        out = data_prep._move_leaks_to_train(rows, docs, roots, clusters, split_of, dropped, {4}, sources, forced)
+        self.assertEqual([r[6] for r in out], [1, 1, 0, 0], "e is fixed as validation by --keep-split-from")
+        self.assertEqual(split_of.tolist(), [1, 1, 1, 1, 2], "c's whole group (b, c) moved with it")
+        self.assertEqual(sources["md"], {"val_chars": 0, "train_chars": 3700})
+        self.assertEqual(sources["web"], {"val_chars": 500, "train_chars": 0})
+        self.assertEqual(forced["leaks_into_train"], 3)
+
+    def test_tokenizer_window_sampler_covers_every_source(self):
+        """Window sampling gives each source its share in characters; sampling whole
+        documents left a one-book source out with probability 0.99."""
+        train_chars = {"books": 2_000_000, "web": 200_000_000, "notes": 50_000}
+        shares = data_prep.tokenizer_shares(train_chars, {"books": 3.0})
+        self.assertAlmostEqual(sum(shares.values()), 1.0)
+        self.assertAlmostEqual(shares["books"] / shares["web"], 3 * 2 / 200)
+        sample = 10_000_000
+        probs = {n: min(1.0, sample * shares[n] / train_chars[n]) for n in train_chars}
+        self.assertAlmostEqual(probs["books"], sample * 3 / (3 * 2_000_000 + 200_000_000 + 50_000))
+        book = "\n".join(paragraphs(k, 60) for k in range(80))  # one long document (~870k characters)
+        kept = data_prep.tokenizer_sample_lines(book, "books", "the_book.md", 1234, probs["books"])
+        chars = sum(len(p) for p in kept)
+        self.assertGreater(chars, 0, "the single book contributes windows")
+        self.assertLess(abs(chars - probs["books"] * len(book)) / (probs["books"] * len(book)), 0.25)
+        self.assertEqual(kept, data_prep.tokenizer_sample_lines(book, "books", "the_book.md", 1234, probs["books"]))
+        self.assertNotEqual(kept, data_prep.tokenizer_sample_lines(book, "books", "other.md", 1234, probs["books"]))
+        self.assertEqual(data_prep.tokenizer_sample_lines(book, "books", "x", 1, 1.0),
+                         [ln for ln in book.split("\n") if ln.strip()], "probability 1 keeps every non-blank line")
+        self.assertEqual(data_prep.tokenizer_sample_lines(book, "books", "x", 1, 0.0), [])
+        long_line = "w" * 10_000
+        self.assertEqual([len(p) for p in data_prep.tokenizer_sample_lines(long_line, "s", "x", 1, 1.0)],
+                         [4000, 4000, 2000], "a long line is cut into window-sized pieces")
+
+    def test_markdown_ids_use_forward_slashes(self):
+        import collections
+        root = os.path.join(self.tmp, "nested_ids")
+        os.makedirs(os.path.join(root, "a", "b"))
+        for name in (os.path.join("a", "b", "deep.md"), "top.md"):
+            with open(os.path.join(root, name), "w", encoding="utf-8") as handle:
+                handle.write(BIO)
+        stats = {"scanned": 0, "skipped": collections.Counter(), "cleaning": collections.Counter()}
+        ids = [d[0] for d in data_prep.iter_markdown([root], ["*.md"], [], True, stats, [])]
+        self.assertEqual(sorted(ids), ["a/b/deep.md", "top.md"])
+        second = os.path.join(self.tmp, "nested_ids_2")
+        os.makedirs(second)
+        with open(os.path.join(second, "top.md"), "w", encoding="utf-8") as handle:
+            handle.write(BIO)
+        ids = [d[0] for d in data_prep.iter_markdown([root, second], ["*.md"], [], True, stats, [])]
+        self.assertEqual(sorted(ids), ["nested_ids/a/b/deep.md", "nested_ids/top.md", "nested_ids_2/top.md"])
+
+    def test_lsh_joins_chains_through_the_previous_member(self):
+        """A ~ B ~ C with A !~ C: C shares a bucket with A and B in bands 6-9 only; the
+        comparison with the bucket's first member (A) fails, the one with the previous
+        member (B) joins it. Signatures are band-major (bands, n, rows)."""
+        rng = np.random.default_rng(0)
+        a = rng.integers(0, 2 ** 32, 128, dtype=np.uint64).astype(np.uint32)
+        c = rng.integers(0, 2 ** 32, 128, dtype=np.uint64).astype(np.uint32)
+        c[48:80] = a[48:80]                      # bands 6-9 shared by all three
+        b = a.copy()
+        b[80:] = c[80:]                          # B = A on 0-79, = C on 80-127 ...
+        b[80::8] += 1                            # ... except one value per band, so B and C share no extra bucket
+        sims = {k: float((x == y).mean()) for k, (x, y) in {"ab": (a, b), "bc": (b, c), "ac": (a, c)}.items()}
+        self.assertAlmostEqual(sims["ab"], 80 / 128)
+        self.assertAlmostEqual(sims["bc"], 74 / 128)
+        self.assertAlmostEqual(sims["ac"], 32 / 128)
+        sig = np.stack([a, b, c]).reshape(3, 16, 8).transpose(1, 0, 2).copy()
+        self.assertEqual(data_prep.lsh_clusters(sig, 0.55).tolist(), [0, 0, 0])
+        self.assertEqual(data_prep.lsh_clusters(sig, 0.6).tolist(), [0, 0, 2], "B ~ C below the threshold")
+        self.assertEqual(data_prep.lsh_clusters(sig, 0.55, active=[0, 2]).tolist(), [0, 1, 2])
+        self.assertEqual(data_prep.signature_similarity(sig, np.asarray([1, 2]), np.asarray([0, 0])).tolist(),
+                         [80 / 128, 32 / 128])
+        path = os.path.join(self.tmp, "signatures.npy")
+        mm = data_prep.open_signatures(path, 3)
+        for i, s in enumerate((a, b, c)):
+            mm[:, i, :] = s.reshape(16, 8)
+        self.assertEqual(data_prep.lsh_clusters(mm, 0.55).tolist(), [0, 0, 0])
+        del mm
+        uf = data_prep.UnionFind(5)
+        uf.union(4, 1)
+        uf.union(3, 4)
+        self.assertEqual(uf.roots().tolist(), [0, 1, 2, 1, 1])
+        self.assertEqual(uf.parent.dtype, np.int32)
+
+    def test_rope_rotation_in_fp32_rounded_once(self):
+        """RoPE rotates in fp32 and rounds once: a bf16 input gives exactly the fp32 rotation cast to bf16, and an
+        fp32 input the fp32 rotation itself."""
+        rope = tiny_gpt.RotaryEmbedding(8, 32)
+        torch.manual_seed(0)
+        q, k = torch.randn(2, 3, 20, 8), torch.randn(2, 3, 20, 8)
+        cos, sin = rope.cos[:, :, 4:24], rope.sin[:, :, 4:24]
+        want_q = q * cos + tiny_gpt.rotate_half(q) * sin
+        want_k = k * cos + tiny_gpt.rotate_half(k) * sin
+        got_q, got_k = rope(q, k, pos=4)
+        self.assertTrue(torch.equal(got_q, want_q) and torch.equal(got_k, want_k))
+        qb, kb = q.to(torch.bfloat16), k.to(torch.bfloat16)
+        got_qb, got_kb = rope(qb, kb, pos=4)
+        self.assertEqual((got_qb.dtype, got_kb.dtype), (torch.bfloat16, torch.bfloat16))
+        self.assertTrue(torch.equal(got_qb, (qb.float() * cos + tiny_gpt.rotate_half(qb.float()) * sin).to(torch.bfloat16)))
+        self.assertTrue(torch.equal(got_kb, (kb.float() * cos + tiny_gpt.rotate_half(kb.float()) * sin).to(torch.bfloat16)))
+        tiny_gpt.free_device_memory(torch.device("cpu"))  # a no-op on the CPU, never an error
+
+    def test_safetensors_round_trip_all_dtypes(self):
+        """write_safetensors/read_safetensors agree for every supported dtype, a non-contiguous view, a 0-d
+        tensor and a tensor with no elements."""
+        tensors = {}
+        for dtype in tiny_gpt._ST_DTYPES:
+            if dtype == torch.bool:
+                tensors["t_bool"] = torch.tensor([[True, False, True], [False, False, True]])
+            elif dtype.is_floating_point:
+                tensors[f"t_{str(dtype).split('.')[-1]}"] = torch.randn(3, 5).to(dtype)
+            else:
+                tensors[f"t_{str(dtype).split('.')[-1]}"] = torch.arange(-6, 9).reshape(3, 5).to(dtype)
+        tensors["strided"] = torch.arange(24.0).reshape(4, 6)[:, ::2]
+        tensors["scalar"] = torch.tensor(2.5)
+        tensors["empty"] = torch.zeros(0, 7)
+        path = os.path.join(self.tmp, "all.safetensors")
+        tiny_gpt.write_safetensors(tensors, path, {"note": "x"})
+        back, meta = tiny_gpt.read_safetensors(path)
+        self.assertEqual(meta, {"note": "x"})
+        self.assertEqual(sorted(back), sorted(tensors))
+        for name, t in tensors.items():
+            self.assertEqual((back[name].dtype, tuple(back[name].shape)), (t.dtype, tuple(t.shape)), name)
+            self.assertTrue(torch.equal(back[name], t), name)
+
+    def test_evaluate_matches_by_hand(self):
+        """evaluate(): per-source loss, balanced and mix-weighted means, bits per byte, top-1 and the expected
+        calibration error agree with a by-hand log-softmax."""
+        model = self.small_model(seed=3)
+        rng = np.random.default_rng(1)
+        arrays = {"a": rng.integers(0, 50, 200, dtype=np.int64), "b": rng.integers(0, 50, 90, dtype=np.int64)}
+        evalset = tiny_gpt.EvalSet(arrays, 16, 32)
+        self.assertEqual({n: w.shape[0] for n, w in evalset.windows.items()}, {"a": 2, "b": 2})
+        size = torch.from_numpy(rng.integers(1, 5, 50).astype(np.int64))
+        marked = torch.from_numpy(rng.random(50) < 0.5)
+        line_break = torch.from_numpy(rng.random(50) < 0.5)
+        share = {"a": 0.75, "b": 0.25}
+        got = tiny_gpt.evaluate(model, evalset, torch.device("cpu"), None, 1, byte_tables=(size, marked, line_break),
+                                share=share)
+        loss, bpb, correct, total = {}, {}, 0, 0
+        conf_sum, acc_sum = np.zeros(10), np.zeros(10)
+        with torch.no_grad():
+            for name, windows in evalset.windows.items():
+                x, y = windows[:, :-1], windows[:, 1:]
+                logp = torch.log_softmax(model(x).float(), -1).double()
+                nll = -logp.gather(-1, y.unsqueeze(-1)).squeeze(-1)
+                loss[name] = nll.mean().item()
+                n_bytes = int(size[y].sum()) - int((marked[y] & line_break[x]).sum())
+                bpb[name] = nll.sum().item() / (math.log(2) * n_bytes)
+                conf, pred = logp.exp().max(-1)
+                correct += int((pred == y).sum())
+                total += y.numel()
+                for c, ok in zip(conf.flatten().tolist(), (pred == y).flatten().tolist()):
+                    b = int(min(c, 1 - 1e-9) * 10)
+                    conf_sum[b] += c
+                    acc_sum[b] += float(ok)
+        for name in loss:
+            self.assertAlmostEqual(got["per_source"][name], loss[name], places=6)
+            self.assertAlmostEqual(got["bpb_per_source"][name], bpb[name], places=6)
+        self.assertAlmostEqual(got["loss"], (loss["a"] + loss["b"]) / 2, places=6)
+        self.assertAlmostEqual(got["loss_mix"], 0.75 * loss["a"] + 0.25 * loss["b"], places=6)
+        self.assertAlmostEqual(got["bpb"], (bpb["a"] + bpb["b"]) / 2, places=6)
+        self.assertAlmostEqual(got["bpb_mix"], 0.75 * bpb["a"] + 0.25 * bpb["b"], places=6)
+        self.assertAlmostEqual(got["top1"], correct / total, places=9)
+        self.assertAlmostEqual(got["ece"], float(np.abs(conf_sum - acc_sum).sum() / total), places=6)
+        self.assertEqual(got["tokens"], total)
+        # without a share there is no mix-weighted number; a share that misses a source gives it weight 0
+        self.assertIsNone(tiny_gpt.evaluate(model, evalset, torch.device("cpu"), None, 2)["loss_mix"])
+        self.assertAlmostEqual(tiny_gpt.evaluate(model, evalset, torch.device("cpu"), None, 2,
+                                                 share={"a": 0.4})["loss_mix"], loss["a"], places=6)
 
     def test_atomic_save_reports_the_fallback_path(self):
         path = os.path.join(self.tmp, "x.pt")

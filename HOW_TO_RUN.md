@@ -193,7 +193,7 @@ python data_prep.py --out datasets\bio_all --text-root $D `
     --parquet "$D\web\fineweb-edu\sample\10BT\*.parquet" --parquet-name fineweb --min-score 3 `
     --jsonl "$D\web\pes2o\data\v2\*.json.gz" --jsonl-name pes2o `
     --include-keywords keywords.txt --keyword-min-distinct 3 `
-    --tokenizer-weights books=3,articles=3 --near-dup drop --near-dup-max-docs 3000000
+    --tokenizer-weights books=3,articles=3 --near-dup drop
 ```
 
 What the options mean:
@@ -210,13 +210,19 @@ What the options mean:
 | `--tokenizer-weights books=3,articles=3` | Let books and articles shape the vocabulary more. |
 | `--superbpe` | Optional: a SuperBPE tokenizer, whose tokens can span words ("of the"): about 12% fewer tokens at 16,384 pieces. In a small test (20.5M parameters) it did 3% worse in bits per byte, so it is off by default; see the guide. In run_pipeline.py: `SUPERBPE = True`. |
 | `--near-dup drop` | Keep only one copy of near-identical documents (for example the 5 copies of *The Germ-Plasm*). |
-| `--near-dup-max-docs 3000000` | Look for near-duplicates in sources of up to 3 million documents. |
+| `--near-dup-max-docs N` | Optional guard: stop if more than N documents would be searched for near-duplicates (default 0 = no limit; the search works at tens of millions of documents). |
+| `--work-dir D:\tinygpt_work` | Optional: put the compressed text spool on another drive (a build needs about 0.4x the corpus there; at 3-5x the current corpus 40-70 GB). |
+| `--tokenizer-from tinyGPT_best.pt` | Build for an EXISTING model: reuse its tokenizer. Without it the automatic vocabulary rule picks a size for the text (32,768 for the current corpus, while the running models use 16,384), and a vocabulary change needs a fresh model. `run_pipeline.py continue` passes it. |
 | `--threads 8` | Optional: use all 8 CPU threads for tokenising. |
 | `--scan-only` | Add this to count and filter without tokenising (fast check of the settings). |
+| `--resume` | A build that failed after pass 2 (disk full, crash) keeps its work files; `python data_prep.py --out datasets\bio_all --resume` redoes only the tokenizer and the tokenisation, not the hours of reading. |
 
 The result: `datasets\bio_all\report.md` explains, per source, what was kept, removed and why, and how the tokenizer's
 pieces are used on the training data (a chart, `token_summary.png`; every piece with its count is in `token_counts.tsv`). Lines repeated in
-20 or more documents (licence notices, navigation) are removed as boilerplate, but headings never are.
+20 or more documents (licence notices, navigation) are removed as boilerplate, but headings and display maths never
+are. Validation documents whose text largely appears in training (an abstract and its paper, a lightly edited copy)
+are moved to training before the tokenizer is trained and listed in `leakage.tsv`; one text under 5 or more file
+names is listed as a possible download placeholder.
 
 `python run_pipeline.py build` runs this command (the books and articles weights only for folders that exist).
 

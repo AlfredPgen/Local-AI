@@ -225,22 +225,35 @@ def jsonl_source(name, paths, args, use_kw, max_docs):
     return t
 
 
-def train_tokenizer(tallies, vocab, work, args=None):
+def sample_probabilities(tallies, estimates, args, budget=6_000_000):
+    """{source: probability} for data_prep.tokenizer_sample_lines over the kept
+    sample texts, so the tokenizer here sees the sources in the same proportions
+    as a build's tokenizer: share = weight x estimated training characters / mass
+    (data_prep.tokenizer_shares), and the sample's total is the largest `budget`
+    for which no source needs more text than its sample holds."""
+    weights = dp.parse_tokenizer_weights(args.tokenizer_weights, [t.name for t in tallies]) if args else {}
+    shares = dp.tokenizer_shares({t.name: max(estimates[t.name][1], 1) for t in tallies}, weights)
+    available = {t.name: max(t.text_chars, 1) for t in tallies}
+    total = min([budget] + [available[n] / shares[n] for n in shares if shares[n] > 0])
+    return {n: min(1.0, total * shares[n] / available[n]) for n in shares}
+
+
+def train_tokenizer(tallies, vocab, work, args=None, estimates=None):
     """A tokenizer like data_prep.py's, trained on the kept sample (with --superbpe:
-    the same two stages)."""
+    the same two stages) with data_prep's window sampler, so the characters per
+    token measured here match a real build's."""
     import sentencepiece as spm
     extra = max(1, round(vocab * args.superbpe_fraction)) if getattr(args, "superbpe", False) else 0
+    if estimates is None:
+        estimates = {t.name: (t.kept, t.kept_chars) for t in tallies}
+    probs = sample_probabilities(tallies, estimates, args)
+    seed = args.seed if args is not None else 1234
     corpus = os.path.join(work, "corpus.txt")
     with open(corpus, "w", encoding="utf-8", newline="\n") as out:
         for t in tallies:
-            budget = 3_000_000
-            for text in t.texts:
-                for line in text.split("\n"):
-                    if line.strip():
-                        out.write(line[:4000] + "\n")
-                budget -= len(text)
-                if budget <= 0:
-                    break
+            for k, text in enumerate(t.texts):
+                for piece in dp.tokenizer_sample_lines(text, t.name, k, seed, probs[t.name]):
+                    out.write(piece + "\n")
     spm.SentencePieceTrainer.train(
         input=corpus, model_prefix=os.path.join(work, "spm"), model_type="bpe", vocab_size=vocab - extra,
         character_coverage=0.9995, byte_fallback=True, split_digits=True, unk_id=0, bos_id=1, eos_id=2, pad_id=-1,
@@ -314,7 +327,8 @@ def main(argv=None):
 
     include = dp.read_terms(args.include_keywords)
     exclude = dp.read_terms(args.exclude_keywords)
-    kw = dp.KeywordFilter(include, exclude, args.keyword_min_hits, args.keyword_min_distinct, args.title_weight)
+    kw = dp.KeywordFilter(include, exclude, args.keyword_min_hits, args.keyword_min_distinct, args.title_weight,
+                          pattern_cache=dp.prefilter_cache_path(args.include_keywords))
     dp._init_worker(kw, {"language": args.language, "max_replacement_ratio": args.max_replacement_ratio,
                          "min_chars": args.min_chars, "exact_dedup": args.exact_dedup,
                          "boilerplate": "off", "boilerplate_min_len": args.boilerplate_min_len})
@@ -362,7 +376,7 @@ def main(argv=None):
         else:
             kind = "SuperBPE" if args.superbpe else "SentencePiece"
             print(f"training a {vocab:,}-piece {kind} tokenizer on the kept sample ...", flush=True)
-            tok = train_tokenizer(tallies, vocab, work, args)
+            tok = train_tokenizer(tallies, vocab, work, args, estimates)
             how = f"a {vocab:,}-piece {kind} tokenizer trained on the kept sample"
         cpt = {t.name: chars_per_token(tok, t.texts) for t in tallies}
 

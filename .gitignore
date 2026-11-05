@@ -20,6 +20,7 @@ tinyGPT_advanced_techniques.docx
 # regenerable
 __pycache__/
 *.pyc
+*.prefilter.json
 *.docx.previous
 *_dashboard.png
 *_embeddings.html

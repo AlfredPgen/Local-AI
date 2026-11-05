@@ -59,7 +59,7 @@ def build_command():
     weights = ",".join(f"{n}=3" for n in ("books", "articles") if n in folders)
     return cmd + ["--include-keywords", KEYWORDS, "--keyword-min-distinct", "3"] + (
         ["--tokenizer-weights", weights] if weights else []) + [
-        "--near-dup", "drop", "--near-dup-max-docs", "3000000"] + (["--superbpe"] if SUPERBPE else [])
+        "--near-dup", "drop"] + (["--superbpe"] if SUPERBPE else [])
 
 
 def train_command(hours, name, plan=False):
@@ -140,7 +140,9 @@ def step_continue(hours, name, new_dataset):
               f"tokenizer and the train/validation split of {DATASET}.")
         if "--superbpe" in cmd:  # the reused tokenizer already has its SuperBPE pieces; data_prep refuses both
             cmd.remove("--superbpe")
-        if run(cmd + ["--tokenizer-from", DATASET, "--keep-split-from", DATASET]):
+        # the tokenizer comes from the model itself (its embedding belongs to that vocabulary), not from the dataset
+        # folder, which may have been rebuilt with another vocabulary since
+        if run(cmd + ["--tokenizer-from", base, "--keep-split-from", DATASET]):
             return 1
     if gpu_busy():
         print(GPU_BUSY)
