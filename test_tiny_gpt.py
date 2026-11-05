@@ -2,11 +2,13 @@
 
 Runs on CPU in temporary folders (nothing in the project folder is written):
     python -m unittest -v test_tiny_gpt.py
+The integration tests that launch several training runs as child processes (90 % of the suite's time) run
+only with TINYGPT_SLOW_TESTS=1 set; without it the fast tests take a few minutes on the CPU. Checks that need
+the GPU also need TINYGPT_GPU_TESTS=1 (never while a training run occupies it).
 """
 
 import dataclasses
 import glob
-import hashlib
 import io
 import json
 import math
@@ -30,6 +32,10 @@ import data_prep  # noqa: E402
 import tiny_gpt  # noqa: E402
 
 PY = sys.executable
+# the integration tests (child training processes, minutes each) are opt-in, so everyday edits get a fast suite;
+# they launch real processes on purpose (Ctrl+C, the run lock and the fault injection below need them)
+SLOW = unittest.skipUnless(os.environ.get("TINYGPT_SLOW_TESTS"),
+                           "integration test: set TINYGPT_SLOW_TESTS=1 to run it (the full suite takes 8-14 min)")
 PATCHED_RUN = r'''
 import gc
 import signal
@@ -70,6 +76,8 @@ def clip(params, *a, **k):
     if mode == "nangrad" and calls["clip"] == n + 1:
         changed = sum(int(not torch.equal(before[i], p.detach())) for i, p in enumerate(params))
         print(f"FAULT CHECK: {changed} parameters changed by the update with the non-finite gradient")
+    if mode == "diverge" and calls["clip"] >= n:  # every update from the n-th on: the run has diverged
+        params[0].grad.view(-1)[0] = float("inf")
     if mode == "gcscan" and calls["clip"] == n:  # the loaded checkpoint dicts must be gone by now
         alive = [o for o in gc.get_objects() if isinstance(o, dict) and "optimizer" in o and "model" in o]
         print(f"FAULT CHECK: {len(alive)} checkpoint dicts alive after setup")
@@ -476,6 +484,7 @@ class TestPipeline(unittest.TestCase):
                 self.assertEqual(settings["steps"], 15000)
 
     # ---------------- training, resume, generation, logs ----------------
+    @SLOW
     def test_train_resume_generate_log_and_viewer(self):
         code, out = run(self.common + ["--name", "A", "--steps", "24", "--ema", "on"])  # the EMA is opt-in
         self.assertEqual(code, 0, out)
@@ -1150,6 +1159,7 @@ class TestPipeline(unittest.TestCase):
             tiny_gpt.parse_args(["--steps", "10", "--warmup-steps", "2", "--decay-frac", "0"])
         self.assertIn("--decay-frac 0 with wsd: the learning rate never decays", buf.getvalue())
 
+    @SLOW
     def test_memory_savings_for_larger_models(self):
         """Activation checkpointing and the chunked loss leave the mathematics unchanged; the planner turns them
         on only when needed; a run with them stops, resumes exactly, and may switch them on resume; fine-tuning
@@ -1272,6 +1282,7 @@ class TestPipeline(unittest.TestCase):
             losses.append(float(re.findall(r"epoch 1 \| train loss [\d.]+ \| held-out loss ([\d.]+)", out_f)[0]))
         self.assertAlmostEqual(losses[0], losses[1], places=3)
 
+    @SLOW
     def test_muon_optimizer(self):
         """--optimizer muon: Muon for the 14 block matrices, AdamW for the embedding and 9 norm gains (5 RMSNorm
         gains and the 4 QK-norm gains new runs have); an
@@ -1418,7 +1429,8 @@ class TestPipeline(unittest.TestCase):
         """tiny_gpt.main(args) in a child process with a fixed memory budget and one fault injected:
         'interrupt' raises KeyboardInterrupt in the n-th batch read (inside a step), 'sigint' sends SIGINT
         inside the n-th optimizer update, 'oom' makes the first n batch reads raise a CUDA out-of-memory
-        error ('none': no fault)."""
+        error, 'nangrad' puts an infinite gradient element into the n-th update and 'diverge' into every update
+        from the n-th on ('none': no fault)."""
         script = os.path.join(self.tmp, "patched_run.py")
         with open(script, "w", encoding="utf-8") as f:
             f.write(PATCHED_RUN)
@@ -1429,6 +1441,7 @@ class TestPipeline(unittest.TestCase):
                 "--device", "cpu", "--resume", "--eval-every", "8", "--eval-tokens", "2048", "--sample-tokens", "8",
                 "--no-probes"]
 
+    @SLOW
     def test_interrupted_step_resumes_exactly(self):
         """Ctrl+C inside a step (grad-accum 2, between evaluations) rewinds the sampler, dropout RNG and loss
         sums; Ctrl+C inside the optimizer update is held until the step is complete; both resume exactly.
@@ -1476,6 +1489,7 @@ class TestPipeline(unittest.TestCase):
         self.assertEqual(at16(out), at16(out_r), "a run interrupted inside the update must resume exactly")
         self.assertFalse(glob.glob(os.path.join(self.runs, "K*.train.lock")), "the run lock must be released")
 
+    @SLOW
     def test_first_step_out_of_memory_escalation(self):
         """A first-step out-of-memory error switches on the cheapest saving first (loss in pieces, the micro-batch
         halved down to about 2k tokens, then activation checkpointing, then halved further: at ctx 64 a
@@ -1702,18 +1716,68 @@ class TestPipeline(unittest.TestCase):
         self.assertEqual(drop, set())
         self.assertEqual((list(unchecked), list(unknown)), (["B"], ["C"]))
 
-    @unittest.skipUnless(os.path.isfile(os.path.join(HERE, "tiny_gpt_bpe_best.pt")), "no v3 checkpoint here")
+    @SLOW
+    def test_divergence_never_overwrites_the_good_files(self):
+        """A run whose gradients stay infinite (20 skipped updates in a row) stops with an error and never writes
+        a bad state: <name>.pt still holds the last good weights (the ones the step-4 best was saved from), no
+        evaluation after the divergence becomes a NEW BEST, and the diverged state goes to <name>_crash.pt.
+        --overwrite of the earlier run first renames its .pt, _best.pt and _metrics.jsonl to *.bak-<time>,
+        byte for byte."""
+        base = list(self.common[1:]) + ["--no-probes", "--eval-every", "4", "--save-every", "4", "--name", "DV"]
+        code, out = self.patched_run("none", 0, base + ["--steps", "8"])
+        self.assertEqual(code, 0, out)
+        files = {p: os.path.join(self.runs, "DV" + p) for p in (".pt", "_best.pt", "_metrics.jsonl")}
+        before = {p: data_prep.sha256_file(f) for p, f in files.items()}
+        # every update from step 5 on has an infinite gradient element: steps 5-24 are skipped, then the run stops
+        code, out_d = self.patched_run("diverge", 5, base + ["--steps", "40", "--overwrite"])
+        self.assertNotEqual(code, 0, out_d)
+        self.assertIn("update skipped (20/20)", out_d)
+        self.assertIn("was not overwritten", out_d)
+        for p, f in files.items():
+            backups = glob.glob(glob.escape(f) + ".bak-*")
+            self.assertEqual(len(backups), 1, (p, backups))
+            self.assertEqual(data_prep.sha256_file(backups[0]), before[p], p)
+        statuses = re.findall(r"^step +(\d+)/40 \| train .*\| (NEW BEST.*|best [\d.]+ @\d+)$", out_d, re.M)
+        self.assertEqual([s for s, status in statuses if status.startswith("NEW BEST")], ["4"], out_d)
+        self.assertTrue(os.path.isfile(os.path.join(self.runs, "DV_crash.pt")))
+        last = torch.load(files[".pt"], map_location="cpu", weights_only=True)
+        best = torch.load(files["_best.pt"], map_location="cpu", weights_only=True)
+        self.assertEqual(last["step"], 20, "the periodic saves before the stop hold the unchanged good weights")
+        self.assertEqual(best["step"], 4)
+        for name, tensor in last["model"].items():
+            self.assertTrue(bool(torch.isfinite(tensor.float()).all()), name)
+            self.assertTrue(torch.equal(tensor.to(best["model"][name].dtype), best["model"][name]), name)
+
     def test_legacy_v3_checkpoint_read_only(self):
-        path = os.path.join(HERE, "tiny_gpt_bpe_best.pt")
-        before = hashlib.sha256(open(path, "rb").read()).hexdigest()
-        model, tok, cfg, obj = tiny_gpt.load_for_inference(path)
+        """A checkpoint in the original script's v3 layout (settings CTX/D/LAYERS/HEADS, unrounded 8d/3 FFN,
+        a SentencePiece proto used in 'plain' mode, model_version 3), built here so the legacy loader runs on
+        every machine: it is classified, rebuilt with the same logits, generates, and the file is not changed."""
+        with open(os.path.join(self.ds, "tokenizer.model"), "rb") as handle:
+            proto = handle.read()
+        vocab = data_prep.Tokenizer(proto, "plain").vocab_size
+        torch.manual_seed(4)
+        cfg = tiny_gpt.ModelConfig(vocab_size=vocab, ctx=64, d_model=64, n_layers=2, n_heads=4, n_kv_heads=4,
+                                   ffn_hidden=(8 * 64) // 3)
+        original = tiny_gpt.TinyGPT(cfg).eval()
+        path = os.path.join(self.tmp, "legacy_v3_best.pt")
+        torch.save({"model_version": 3, "settings": {"CTX": 64, "D": 64, "LAYERS": 2, "HEADS": 4},
+                    "model": original.state_dict(), "tokenizer_proto": proto, "step": 1000, "best_val": 3.21}, path)
+        before = data_prep.sha256_file(path)
+        model, tok, loaded_cfg, obj = tiny_gpt.load_for_inference(path)
         self.assertEqual(tiny_gpt.checkpoint_info(obj), ("legacy-v3", "inference"))
         self.assertEqual(tok.encode_mode, "plain")
-        self.assertEqual(cfg.ffn_hidden, (8 * cfg.d_model) // 3)
+        self.assertEqual(loaded_cfg.ffn_hidden, (8 * loaded_cfg.d_model) // 3)
+        self.assertEqual((loaded_cfg.vocab_size, loaded_cfg.ctx, loaded_cfg.n_kv_heads), (vocab, 64, 4))
+        self.assertTrue(loaded_cfg.tie_embeddings)
+        x = torch.randint(0, vocab, (2, 20), generator=torch.Generator().manual_seed(0))
+        with torch.no_grad():
+            torch.testing.assert_close(model(x), original(x), rtol=1e-5, atol=1e-5)
         text = tiny_gpt.generate(model, tok, "Genetic drift", 5, torch.device("cpu"),
                                  generator=torch.Generator().manual_seed(0))
-        self.assertTrue(text.startswith("Genetic drift"))
-        self.assertEqual(before, hashlib.sha256(open(path, "rb").read()).hexdigest())
+        self.assertTrue(text.startswith("Genetic drift"), text)
+        self.assertEqual(before, data_prep.sha256_file(path))
+        self.assertEqual(tiny_gpt.checkpoint_info({"model_version": 3, "settings": {}, "optimizer": {}}),
+                         ("legacy-v3", "training"))
 
 
 class CharTok:
@@ -3881,6 +3945,218 @@ class TestFixes(unittest.TestCase):
             ids.append(int(got.argmax()))
         self.assertEqual(len(ids), 23)
 
+    # ---------------- WP9: numerics, sampling and planner helpers without a dataset ----------------
+    def test_grad_scaler_skips_the_combined_optimizer_on_inf(self):
+        """GradScaler (the FP16 path) with the Muon + AdamW CombinedOptimizer: an infinite gradient element makes
+        scaler.step skip the update of BOTH optimizers (no weight and no optimizer state changes) and halves the
+        loss scale; a finite step afterwards updates every parameter. GradScaler('cpu') runs the same bookkeeping
+        as on CUDA, so the skip semantics are checked without a GPU."""
+        model = self.small_model(seed=7).train()
+        settings = {"optimizer": "muon", "lr": 1e-3, "betas": [0.9, 0.95], "weight_decay": 0.1}
+        opt = tiny_gpt.build_optimizer(model, settings, torch.device("cpu"))[0]
+        self.assertIsInstance(opt, tiny_gpt.CombinedOptimizer)
+        params = [p for g in opt.param_groups for p in g["params"]]
+        scaler = torch.amp.GradScaler("cpu", init_scale=2.0 ** 10)
+        x = torch.randint(0, 50, (2, 16), generator=torch.Generator().manual_seed(0))
+
+        def backward(poison=False):
+            loss = torch.nn.functional.cross_entropy(model(x[:, :-1]).reshape(-1, 50), x[:, 1:].reshape(-1))
+            scaler.scale(loss).backward()
+            if poison:
+                params[0].grad.view(-1)[0] = float("inf")
+            scaler.unscale_(opt)
+
+        def snapshot():
+            sd = opt.state_dict()["state"]
+            return ([p.detach().clone() for p in params],
+                    {i: {k: (v.clone() if torch.is_tensor(v) else v) for k, v in st.items()} for i, st in sd.items()})
+
+        backward()
+        scaler.step(opt)  # a normal step first, so there is optimizer state to leave untouched
+        scaler.update()
+        opt.zero_grad(set_to_none=True)
+        self.assertEqual(scaler.get_scale(), 2.0 ** 10)
+        weights, state = snapshot()
+        self.assertEqual(len(state), len(params), "both optimizers hold a state per parameter after one step")
+        backward(poison=True)
+        scaler.step(opt)
+        scaler.update()
+        opt.zero_grad(set_to_none=True)
+        changed = sum(int(not torch.equal(w, p.detach())) for w, p in zip(weights, params))
+        self.assertEqual(changed, 0, f"{changed}/{len(params)} parameters changed by the skipped update")
+        after = opt.state_dict()["state"]
+        for i, st in state.items():
+            for k, v in st.items():
+                same = torch.equal(v, after[i][k]) if torch.is_tensor(v) else v == after[i][k]
+                self.assertTrue(same, f"optimizer state {i}/{k} changed by the skipped update")
+        self.assertEqual(scaler.get_scale(), 2.0 ** 9, "the scale halves after an overflow")
+        backward()
+        scaler.step(opt)
+        scaler.update()
+        changed = sum(int(not torch.equal(w, p.detach())) for w, p in zip(weights, params))
+        self.assertEqual(changed, len(params), "a finite step updates every parameter")
+
+    def test_kv_cache_under_bf16_autocast(self):
+        """Generation in bfloat16 (amp_dtype as on the GPU and the Mac): the KV-cached decoder agrees with a full
+        bf16 forward pass within bf16 rounding (atol 0.05) and picks the same greedy token as the FP32 model;
+        generate() under autocast gives the greedy FP32 continuation."""
+        torch.manual_seed(11)
+        cfg = tiny_gpt.ModelConfig(vocab_size=50, ctx=16, d_model=32, n_layers=2, n_heads=4, n_kv_heads=2)
+        model = tiny_gpt.TinyGPT(cfg).eval()
+        with torch.no_grad():  # a larger output scale, so the greedy choice is clear of bf16 rounding
+            model.lm_head.weight.mul_(8.0)
+        seq = torch.randint(0, 50, (1, 16), generator=torch.Generator().manual_seed(2)).tolist()[0]
+        bf16 = torch.bfloat16
+        with torch.no_grad():
+            full32 = model(torch.tensor([seq]))[0].float()
+            with torch.autocast("cpu", dtype=bf16):
+                full16 = model(torch.tensor([seq]))[0].float()
+        dec = tiny_gpt.IncrementalDecoder(model, torch.device("cpu"), bf16)
+        for i in range(4, 17):  # the prompt (4 tokens), then one token at a time
+            got = dec.next_logits(seq[:i])
+            self.assertEqual(got.dtype, torch.float32)
+            self.assertTrue(torch.allclose(got, full16[i - 1], atol=0.05), (got - full16[i - 1]).abs().max())
+            self.assertEqual(int(got.argmax()), int(full32[i - 1].argmax()), f"greedy token at position {i}")
+        tok = CharTok()
+        a = tiny_gpt.generate(model, tok, "drift", 10, torch.device("cpu"), bf16, temperature=0)
+        b = tiny_gpt.generate(model, tok, "drift", 10, torch.device("cpu"), None, temperature=0)
+        self.assertEqual(a, b)
+
+    def test_planner_helpers_are_finite_and_bounded(self):
+        """swiglu_hidden is 8d/3 rounded up to a multiple of 64 (2752 at d 1024, the 216M run's FFN);
+        count_params equals the built model's parameter count, tied or untied, MHA or GQA, with or without
+        QK-norm; heuristic_lr stays finite inside its table and never rises with the model; tokens_per_step_for is
+        a power of two in [16,384, 2,097,152] for any size and budget; default_ctx and the RoPE base rule are
+        bounded and monotone."""
+        self.assertEqual(tiny_gpt.swiglu_hidden(1024), 2752)
+        for d in range(64, 4097, 64):
+            h = tiny_gpt.swiglu_hidden(d)
+            self.assertEqual(h % 64, 0)
+            self.assertTrue(8 * d / 3 <= h < 8 * d / 3 + 64, (d, h))
+        for tie in (True, False):
+            for kv in (4, 2, 1):
+                for qk in (False, True):
+                    cfg = tiny_gpt.ModelConfig(vocab_size=70, ctx=16, d_model=32, n_layers=2, n_heads=4,
+                                               n_kv_heads=kv, tie_embeddings=tie, qk_norm=qk)
+                    model = tiny_gpt.TinyGPT(cfg)
+                    unique = sum(p.numel() for p in model.parameters())  # parameters() lists a tied matrix once
+                    self.assertEqual(tiny_gpt.count_params(cfg)[0], unique, (tie, kv, qk))
+                    self.assertEqual(tuple(tiny_gpt.count_params(cfg)), tuple(model.param_counts()), (tie, kv, qk))
+                    embed = 70 * 32 * (1 if tie else 2)
+                    self.assertEqual(tiny_gpt.count_params(cfg)[1], unique - embed)
+        lrs = [lr for _, lr in tiny_gpt.LR_TABLE]
+        prev = float("inf")
+        for n in np.logspace(2, 13, 89):
+            lr = tiny_gpt.heuristic_lr(float(n))
+            self.assertTrue(math.isfinite(lr) and min(lrs) - 1e-15 <= lr <= max(lrs) + 1e-15, (n, lr))
+            self.assertLessEqual(lr, prev + 1e-15, f"the heuristic LR rose at N = {n:.3g}")
+            prev = lr
+            for per_param in (1, 20, 200):
+                tps = tiny_gpt.tokens_per_step_for(float(n), per_param * float(n))
+                self.assertEqual(tps & (tps - 1), 0, tps)
+                self.assertTrue(2 ** 14 <= tps <= 2 ** 21, (n, per_param, tps))
+        self.assertAlmostEqual(tiny_gpt.heuristic_lr(0), max(lrs), places=15, msg="no parameters: the first row")
+        self.assertEqual(tiny_gpt.tokens_per_step_for(0, 0), 2 ** 14)
+        prev_ctx = 0
+        for d in range(64, 8193, 64):
+            ctx = tiny_gpt.default_ctx(d)
+            self.assertIn(ctx, (256, 512, 1024, 2048, 4096))
+            self.assertGreaterEqual(ctx, prev_ctx)
+            prev_ctx = ctx
+        bases = [tiny_gpt.default_rope_base(2 ** k) for k in range(6, 18)]
+        self.assertEqual(bases, sorted(bases))
+        self.assertEqual(min(bases), 10_000.0)
+
+    class _FixedLogits(torch.nn.Module):
+        """A stand-in model whose next-token logits are always the same (not a TinyGPT, so generate() calls it
+        on the whole window, as for wrappers)."""
+        ctx = 32
+
+        def __init__(self, logits):
+            super().__init__()
+            self.logits = logits
+
+        def forward(self, x):
+            return self.logits.expand(x.shape[0], x.shape[1], -1)
+
+    class _IdTok:
+        """Encodes to fixed ids and decodes to the id list itself, so a test can read the sampled ids."""
+        bos_id = -1
+
+        def __init__(self, eos_id=-1):
+            self.eos_id = eos_id
+
+        def encode(self, text):
+            return [0]
+
+        def decode(self, ids):
+            return list(ids)
+
+    def test_sampling_constraints(self):
+        """generate(): top_k keeps only the k most likely tokens, top_p the smallest set whose mass reaches p,
+        a temperature near 0 (or 0) is greedy, and the end-of-document token stops generation without being
+        emitted."""
+        probs = torch.tensor([0.02, 0.05, 0.08, 0.40, 0.03, 0.10, 0.02, 0.30])  # most likely: 3, then 7, then 5
+        model = self._FixedLogits(probs.log())
+        cpu = torch.device("cpu")
+
+        def sample(n=400, eos=-1, **kw):
+            gen = torch.Generator().manual_seed(0)
+            return tiny_gpt.generate(model, self._IdTok(eos), "x", n, cpu, generator=gen, **kw)[1:]
+
+        top2 = sample(temperature=1.0, top_k=2, top_p=1.0)
+        self.assertEqual(set(top2), {3, 7}, "top_k 2: only the two most likely tokens")
+        self.assertAlmostEqual(top2.count(3) / len(top2), 0.4 / 0.7, delta=0.08)
+        nucleus = sample(temperature=1.0, top_k=0, top_p=0.5)
+        self.assertEqual(set(nucleus), {3, 7}, "top_p 0.5: 0.40 + 0.30 is the smallest set reaching half the mass")
+        nucleus75 = sample(temperature=1.0, top_k=0, top_p=0.75)
+        self.assertEqual(set(nucleus75), {3, 7, 5})
+        free = sample(temperature=1.0, top_k=0, top_p=1.0)
+        self.assertEqual(set(free), set(range(8)), "no limits: every token can be drawn")
+        self.assertEqual(sample(50, temperature=1e-6), [3] * 50, "a temperature near 0 is greedy")
+        self.assertEqual(sample(50, temperature=0), [3] * 50)
+        self.assertEqual(sample(50, eos=3, temperature=0), [], "end-of-document first: nothing is emitted")
+        stopped = sample(400, eos=7, temperature=1.0, top_k=2, top_p=1.0)
+        self.assertNotIn(7, stopped)
+        self.assertLess(len(stopped), 400, "generation stops at the end-of-document token")
+
+    def test_parse_mix_and_sampled_shares(self):
+        """--mix: parse_mix accepts name=0 and rejects unknown names, missing '=', non-numbers, negative and
+        all-zero weights; TokenBatcher's drawn windows follow share() (2,000 windows within 3 points), and a source
+        with weight 0 is never drawn."""
+        sources = {"a": 1, "b": 1, "c": 1}
+        self.assertEqual(tiny_gpt.parse_mix("a=3, b=0", sources), {"a": 3.0, "b": 0.0, "c": 1.0})
+        self.assertEqual(tiny_gpt.parse_mix(None, sources), {"a": 1.0, "b": 1.0, "c": 1.0})
+        for bad in ("d=1", "a", "a=x", "a=-1", "a=0,b=0,c=0"):
+            with self.assertRaises(SystemExit, msg=bad):
+                tiny_gpt.parse_mix(bad, sources)
+        arrays = {"a": np.arange(0, 25, dtype=np.int64).repeat(40), "b": np.arange(25, 50, dtype=np.int64).repeat(40),
+                  "c": np.arange(50, 75, dtype=np.int64).repeat(40)}  # the token value tells the source
+        batcher = tiny_gpt.TokenBatcher(arrays, tiny_gpt.parse_mix("a=3,b=1,c=0", arrays), 8, 100,
+                                        torch.device("cpu"), 0)
+        share = batcher.share()
+        self.assertEqual(sorted(share), ["a", "b"])
+        self.assertAlmostEqual(share["a"], 0.75, places=6)
+        drawn = torch.cat([batcher.next()[0][:, 0] for _ in range(20)])
+        self.assertEqual(drawn.numel(), 2000)
+        self.assertEqual(int((drawn >= 50).sum()), 0, "weight 0: never drawn")
+        self.assertAlmostEqual(float((drawn < 25).float().mean()), 0.75, delta=0.03)
+
+    @unittest.skipUnless(torch.cuda.is_available() and os.environ.get("TINYGPT_GPU_TESTS"),
+                         "needs CUDA and TINYGPT_GPU_TESTS=1 (never while a training run occupies the GPU)")
+    def test_training_peak_memory_within_the_estimate(self):
+        """estimate_train_bytes against the CUDA allocator: three real training micro-steps (bf16 autocast, AdamW
+        and Muon, with and without checkpointing) never allocate more than 1.3 x the estimate the planner uses."""
+        dev = torch.device("cuda")
+        cfg = tiny_gpt.ModelConfig(vocab_size=8192, ctx=256, d_model=256, n_layers=4, n_heads=8, n_kv_heads=2)
+        for optimizer in ("adamw", "muon"):
+            for checkpointing in (False, True):
+                settings = {"optimizer": optimizer, "lr": 1e-4, "weight_decay": 0.0, "betas": [0.9, 0.95]}
+                _, peak = tiny_gpt.measure_seconds_per_step(cfg, 4, 1, dev, torch.bfloat16, warmup=1, timed=2,
+                                                            checkpointing=checkpointing, settings=settings)
+                estimate = tiny_gpt.estimate_train_bytes(cfg, 4, True, checkpointing, 0, optimizer, dev)
+                self.assertLessEqual(peak, 1.3 * estimate, (optimizer, checkpointing, peak, estimate))
+
 
 class TestOtherScripts(unittest.TestCase):
     """run_pipeline, compare_models, tools/edit_weights.py, finetune, benchmark's batched decoding, view_pt's
@@ -4096,7 +4372,7 @@ class TestOtherScripts(unittest.TestCase):
 
     def test_viewer_does_not_reuse_an_edited_files_stored_evaluation(self):
         import view_pt
-        sha = tiny_gpt.file_sha256(tiny_gpt.DEFAULT_PROBES)
+        sha = data_prep.sha256_file(tiny_gpt.DEFAULT_PROBES)
         stored = {"file_sha256": sha, "accuracy": 0.5}
         args = types_ns(probes=tiny_gpt.DEFAULT_PROBES)
         ck = types_ns(metrics={"last_eval": {"step": 7, "probes": stored}}, obj={"step": 7}, finetune=None, edit=None)
