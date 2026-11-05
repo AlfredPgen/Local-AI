@@ -288,7 +288,6 @@ def build_data(args):
 # eval
 # ---------------------------------------------------------------------------
 def evaluate(checkpoints, args):
-    import torch
     import finetune
     import tiny_gpt
     device = tiny_gpt.select_device(args.device)

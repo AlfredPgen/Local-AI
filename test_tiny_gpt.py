@@ -4443,7 +4443,7 @@ class TestOtherScripts(unittest.TestCase):
 
     def test_key_padding_mask_in_the_kv_cache(self):
         """A left-padded row decoded with a key_valid mask gives the logits of the same row alone."""
-        model, cpu = self.model(seed=8, varied=False), torch.device("cpu")
+        model = self.model(seed=8, varied=False)
         row = torch.randint(1, 50, (1, 9))
         with torch.no_grad():
             alone = model.lm_head(model(row, return_hidden=True, cache=model.new_cache())[:, -1])
