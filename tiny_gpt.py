@@ -534,6 +534,9 @@ class ModelConfig:
             problems.append("expert_hidden must be positive")
         if self.n_experts and self.moe_every < 1:
             problems.append("moe_every must be at least 1")
+        if self.n_experts and self.moe_every > self.n_layers:
+            # (index + 1) % moe_every == 0 never holds: an "MoE" run with no MoE block (and no load figures to report)
+            problems.append(f"moe_every {self.moe_every} leaves no mixture-of-experts block in {self.n_layers} layers")
         if self.shared_hidden < 0:
             problems.append("shared_hidden must be >= 0")
         if self.router not in ("softmax", "sigmoid"):
@@ -3314,9 +3317,10 @@ def parse_args(argv=None):
     g.add_argument("--shared-hidden", type=int, default=0,
                    help="hidden size of a SwiGLU every token also goes through (DeepSeek-style shared expert; 0 = none)")
     g.add_argument("--moe-every", type=int, default=1, help="make every N-th block an MoE block (1 = all)")
-    g.add_argument("--router", choices=("softmax", "sigmoid"), default="softmax",
-                   help="routing scores: softmax over the experts (Mixtral) or a sigmoid per expert (DeepSeek-V3)")
-    g.add_argument("--balance", choices=("loss", "bias", "both"), default="bias",
+    g.add_argument("--router", choices=("softmax", "sigmoid"),
+                   help="routing scores: softmax over the experts (Mixtral) or a sigmoid per expert (DeepSeek-V3); "
+                        "default softmax")
+    g.add_argument("--balance", choices=("loss", "bias", "both"),
                    help="how the experts are kept evenly loaded: the Switch load-balancing loss (--lb-loss), "
                         "DeepSeek-V3's auxiliary-loss-free routing bias updated after every step (--bias-rate), "
                         "or both (default bias)")
@@ -4008,6 +4012,9 @@ def _train(args):
             ignored.append(f"--qk-norm {args.qk_norm}")
         if args.experts and args.experts != cfg.n_experts:
             ignored.append(f"--experts {args.experts} (the architecture is the checkpoint's)")
+        for flag, value, have in (("--router", args.router, cfg.router), ("--balance", args.balance, cfg.balance)):
+            if value is not None and value != have:  # model fields like the experts: fixed for the run
+                ignored.append(f"{flag} {value} (the checkpoint's is {have})")
         if args.lr_scale != 1.0:
             ignored.append(f"--lr-scale {args.lr_scale:g}")
         if args.doc_mask is not None and (args.doc_mask == "on") != bool(settings["doc_mask"]):
@@ -4048,6 +4055,9 @@ def _train(args):
         if args.experts and args.experts != cfg.n_experts:
             plan_lines.append(f"--experts {args.experts} ignored: the architecture is the checkpoint's "
                               f"({cfg.n_experts or 'no'} experts); start a fresh run to change it")
+        for flag, value, have in (("--router", args.router, cfg.router), ("--balance", args.balance, cfg.balance)):
+            if value is not None and value != have:
+                plan_lines.append(f"{flag} {value} ignored: the checkpoint's model keeps {have}")
         if cfg.ctx != stored_ctx:
             plan_lines.append(f"model was trained at ctx {stored_ctx}; continuing at {cfg.ctx} (RoPE tables rebuilt "
                               "for the new length, weights unchanged)")

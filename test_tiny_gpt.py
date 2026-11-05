@@ -1339,10 +1339,11 @@ class TestPipeline(unittest.TestCase):
         self.assertEqual(code, 0, out_s)
         code, out_r = run(["tiny_gpt.py", "--name", "Y", "--out-dir", self.runs, "--log-file", log, "--device", "cpu",
                            "--resume", "--eval-every", "8", "--eval-tokens", "2048", "--sample-tokens", "8",
-                           "--no-probes", "--moe-impl", "grouped", "--experts", "8"])
+                           "--no-probes", "--moe-impl", "grouped", "--experts", "8", "--balance", "loss"])
         self.assertEqual(code, 0, out_r)
         self.assertIn("optimizer state 36/36 tensors", out_r)
         self.assertIn("--experts 8 (the architecture is the checkpoint's)", out_r)
+        self.assertIn("--balance loss (the checkpoint's is bias)", out_r)
         if tiny_gpt.grouped_mm_available(torch.device("cpu"))[0]:
             self.assertIn("experts run as grouped", out_r)
 
@@ -3747,7 +3748,8 @@ class TestFixes(unittest.TestCase):
         self.assertEqual(tiny_gpt.expert_hidden_for(2816, 2), 1408)
         self.assertEqual(tiny_gpt.expert_hidden_for(192, 2), 128)
         for bad in ({"n_experts": 1}, {"n_experts": 100}, {"n_experts": 4, "experts_per_token": 5},
-                    {"n_experts": 4, "moe_every": 0}, {"n_experts": 4, "router": "argmax"},
+                    {"n_experts": 4, "moe_every": 0}, {"n_experts": 4, "moe_every": 1000},
+                    {"n_experts": 4, "router": "argmax"},
                     {"n_experts": 4, "balance": "none"}, {"n_experts": 4, "expert_hidden": -1}):
             with self.assertRaises(SystemExit, msg=bad):
                 tiny_gpt.ModelConfig(vocab_size=50, d_model=32, n_heads=4, n_kv_heads=2, **bad)
