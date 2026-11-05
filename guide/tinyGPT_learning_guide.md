@@ -1,7 +1,7 @@
 ---
 title: "tinyGPT: a learning guide"
 subtitle: "Training a small biology language model on your own data, understanding every step, and scaling it up"
-date: "8 October 2026"
+date: "5 November 2026"
 ---
 
 # Start here
@@ -10,8 +10,10 @@ date: "8 October 2026"
 
 tinyGPT is a small language model that you train from scratch on a laptop with an RTX 3070 GPU. It uses the same design as GPT,
 Llama and Qwen (a decoder-only transformer), and it learns from your own biology, genetics and statistics text plus
-selected parts of Wikipedia and the web. The run started on 29 September has **17,308,032 parameters** (not 31
-million) and will read **778 million tokens**.
+selected parts of Wikipedia and the web. The run now training, `tinyGPT_muon` (started 11 October on
+`datasets\bio_all`), has **216,175,616 parameters** and will read **16.2 billion tokens** in 60,000 steps; it was
+paused at step 12,000 on 3 November. The first run, started on 29 September, had 17,308,032 parameters and read
+778 million tokens; it appears in a few places below as a smaller worked example, marked as such.
 
 At this size tinyGPT won't become an expert assistant. Its purpose is to let you:
 
@@ -21,9 +23,8 @@ At this size tinyGPT won't become an expert assistant. Its purpose is to let you
 
 Chapter 11 explains what it would take to build something much stronger.
 
-This guide replaces three earlier documents: *HOW_LLMS_ARE_TRAINED.md* (the concepts), *GUIDE.md* (the Mac Studio
-and cloud plan) and *tinyGPT_advanced_techniques.docx* (the technique catalogue). The two Markdown files stay in the
-folder as sources.
+This guide replaces three earlier documents: a note on the concepts, the Mac Studio and cloud plan, and
+*tinyGPT_advanced_techniques.docx* (the technique catalogue, kept locally). Their content is in the chapters below.
 
 ![**The tinyGPT pipeline.** **a**, text sources. **b**, data preparation turns raw text into clean, deduplicated,
 English, on-topic token shards, split by document. **c**, pre-training repeats a four-step loop (forward pass, loss,
@@ -35,7 +36,8 @@ answerer. **e**, tools to inspect, compare, export and use checkpoints.](figures
 | File | What it does |
 |-------------------------|---------------------------------------------------------------------------|
 | data_prep.py | Builds a tokenised dataset from your folders, Wikipedia, FineWeb-Edu and peS2o: cleaning, English filter, keyword filter, deduplication, document-level split, tokenizer, leakage audit and a report |
-| tiny_gpt.py | Plans and trains the model; also `--plan`, `--generate`, `--benchmark` and `--export` |
+| tiny_gpt.py | Plans and trains the model; also `--plan`, `--generate` (with a key/value cache), `--benchmark` and `--export` |
+| benchmark.py | 21 open benchmarks (MMLU, MedQA, PubMedQA, SciQ, ARC, HumanEval ...): `download`, `run` on a checkpoint, `plot` (Section 6.5) |
 | run_pipeline.py | The whole pipeline in a few commands: build, plan, train, resume, continue, posttrain |
 | view_pt.py | Dashboard picture of a checkpoint: weights, embeddings, attention, outputs, calibration, benchmark and loss curves |
 | compare_models.py | Is checkpoint A really better than B? A paired bootstrap over validation documents |
@@ -46,10 +48,11 @@ answerer. **e**, tools to inspect, compare, export and use checkpoints.](figures
 | download_pmc.py, download_arxiv.py, download_rxiv.py | Open-access papers from PubMed Central, arXiv, bioRxiv and medRxiv, as Markdown |
 | download_docs.py, doc_sources.tsv | Software documentation (manuals, tutorials, examples) of about 920 tools, as Markdown |
 | tools/ | Keyword-list checks: kw_check.py (format, duplicates, common words), kw_covered.py (terms that only double-count), term_evidence.py (literature hits), url_check.py (documentation links) |
+| tools/edit_weights.py, tools/compare_edit.py | Find the MLP neurons or the residual direction that drive repetition loops, remove them in a COPY of a checkpoint, and compare the copy with the original on prompts the edit never saw |
 | youtube_transcripts.py | On-topic lecture transcripts from YouTube channels |
 | download_wikipedia.py | English Wikipedia in the format data_prep.py reads |
 | gpu_check.py | GPU readings, a load test and a training benchmark; refuses to run while the GPU is busy |
-| test_tiny_gpt.py | About 30 automated tests that run on the CPU |
+| test_tiny_gpt.py | 125 automated tests that run on the CPU (the six slow integration tests only with `TINYGPT_SLOW_TESTS=1`) |
 | keywords.txt | 22,650 topic terms in 80 categories for the keyword filter |
 | probes_biology.tsv | The fact benchmark: 336 questions in 16 categories, with near-miss wrong answers |
 | calibrate_probes.py | Sets the benchmark's difficulty labels from how open reference models score it |
@@ -66,18 +69,22 @@ every step and option.
 cd $HOME\local-ai
 python run_pipeline.py build                               # build datasets\bio_all from ai_training_data
 python run_pipeline.py plan --hours 48                     # which model fits in 48 hours
-python run_pipeline.py train --hours 48                    # train it
+python run_pipeline.py train --hours 48 --name tinyGPT_48h # train it (a new name; tinyGPT_muon exists)
+python run_pipeline.py resume                              # continue tinyGPT_muon after Ctrl+C
 python tiny_gpt.py --dataset datasets\bio_all --plan       # what would be trained
-python tiny_gpt.py --dataset datasets\bio_all              # train, planned for you
-python tiny_gpt.py --resume                                # continue after Ctrl+C
-python tiny_gpt.py --generate "Genetic drift is"           # write text
-python tiny_gpt.py --benchmark                             # the 336-question fact test
-python view_pt.py tinyGPT_best.pt --plot                   # dashboard picture
+python tiny_gpt.py --dataset datasets\bio_all --name test  # train, planned for you
+python tiny_gpt.py --name tinyGPT_muon --resume            # continue after Ctrl+C
+python tiny_gpt.py --name tinyGPT_muon --generate "Genetic drift is"   # write text
+python tiny_gpt.py --name tinyGPT_muon --benchmark         # the 336-question fact test
+python view_pt.py tinyGPT_muon_best.pt --plot              # dashboard picture
 python compare_models.py A_best.pt B_best.pt --device cpu  # A versus B, 95% interval
-python finetune.py sft --base tinyGPT_best.pt --name tinyGPT_sft `
+python finetune.py sft --base tinyGPT_muon_best.pt --name tinyGPT_sft `
     --data finetune_examples\sft_examples.jsonl
-python detect_text.py sample.txt --checkpoint tinyGPT_best.pt
+python detect_text.py sample.txt --checkpoint tinyGPT_muon_best.pt
 ```
+
+`tiny_gpt.py` uses the name `tinyGPT` unless `--name` (or `--checkpoint FILE`) says otherwise, so commands for the
+current run carry `--name tinyGPT_muon`; the settings at the top of run_pipeline.py already name it.
 
 Long commands are split with a backtick (`` ` ``) at the end of each line, as PowerShell (the VS Code terminal)
 expects. In the old Command Prompt, use `^` instead.
@@ -147,6 +154,46 @@ Every script was reviewed for bugs, stale code and speed. What you will notice:
   MinHash, Section 9.8), and headings are no longer removed as boilerplate.
 - **Realistic time budgets:** `--time-budget-hours` now uses the speed your last training run sustained, not a
   few seconds on a cool GPU, which had been 1.7 times too optimistic.
+
+## What changed from 9 October to 5 November 2026
+
+**New tools:**
+
+- **benchmark.py (11 October):** 21 open benchmarks downloaded with their licences and checksums, scored like the
+  fact benchmark, coding sets run in a network-free sandbox (Section 6.5).
+- **The 216M run (11 October):** `tinyGPT_muon` on `datasets\bio_all` (4.08 billion training tokens, SuperBPE with
+  16,384 pieces), with Muon; Chapter 3 explains its settings.
+- **A key/value cache for generation (5 November):** each new token runs the model on that token only, reusing the
+  keys and values of the text so far, instead of rereading the whole text: the same output, many times faster for
+  long texts. `--generate`, the training samples, `finetune.py ask` and `benchmark.py` use it.
+- **tools/edit_weights.py and tools/compare_edit.py (5 November):** find the neurons or the direction that drive
+  repetition loops, remove them in a copy of a checkpoint, and test the copy on prompts the search never saw.
+
+**The 5 November audit** reviewed every script, then ran short GPU experiments while the run was paused
+(`results\ab_2026-11-05.md`). What you may notice:
+
+- **Training keeps going through trouble:** a failed save is retried a minute later; an out-of-memory error after the
+  first step replays the step; a step with a non-finite gradient is skipped instead of poisoning the weights; the
+  checkpoint is read lazily (1.8 GB of RAM freed on the 216M run).
+- **Faster on this GPU:** the planner prefers a micro-batch of about 2,048 tokens without activation checkpointing
+  (2 x 132 instead of 4 x 66 for the 216M model: 5-16 % faster per step, measured), one log-sum-exp serves the loss
+  and the z-loss, and the memory estimate is calibrated to the measured peak, which every metrics line now records
+  (`peak_mem_gib`).
+- **New planner rules (Section 3.4):** context length by width (up to 4,096), the RoPE base following the context,
+  the batch from DeepSeek's compute-based fit with the learning rate following the batch, and WSD decaying to 0.
+- **New-run defaults from the experiments:** QK-norm on (0.106 bits per byte better); the learning-rate table doubled
+  with weight decay 0.05 (the shrink per step unchanged); a weight average (EMA) only on request, now debiased;
+  document masking only on request. A resumed run keeps what its checkpoint recorded.
+- **Mixture of experts** (`--experts N`, Section 3.5): available, measured, and not the default: on this GPU it
+  was 2.2-2.3 times slower per step than the dense model of the same active size.
+- **Mac Studio readiness:** MPS budget and hard memory cap, an attention-memory probe, fused AdamW, MPS random
+  states in the checkpoint, saving without a bulk CPU copy, and a first-day checklist in HOW_TO_RUN.md.
+- **Reporting:** `val(mix)` (the validation loss weighted like the training mix) beside `val`, the decay
+  timescale of the weight decay in the plan, and new experiments-table columns.
+- **Data preparation for a 3-5x larger build:** near-duplicate search on a memory-mapped file, compressed work
+  files, a `--resume` after the slow passes, leaked validation documents moved to training, display maths and
+  headings never removed as boilerplate, and the tokenizer sampled in windows from every source.
+- **Tests:** 125, in a fast set of about 4-5 minutes; the integration tests run with `TINYGPT_SLOW_TESTS=1`.
 
 ## What changed from 1 to 8 October 2026
 
@@ -218,13 +265,15 @@ models use 100,000 to 250,000 tokens; in English, one word is about 1.3 tokens.
 **In tinyGPT:**
 
 - **Tokenizer:** a SentencePiece BPE tokenizer, trained by data_prep.py on your own data. Its size follows the
-  amount of text: **4,096 pieces below 20M characters, then twice as many for every ten times more text** (16,384 below 2B characters, 32,768 below 20B, 65,536 below 200B, with no upper limit; `--vocab-size` overrides it). Its vocabulary therefore contains
-  pieces such as *allele*, *heritab* and *GWAS*.
+  amount of text: **4,096 pieces below 20M characters, then twice as many for every ten times more text** (16,384 below 2B characters, 32,768 below 20B, capped at 65,536 so the token files stay 16-bit; `--vocab-size` overrides it). Its vocabulary therefore contains
+  pieces such as *allele*, *heritab* and *GWAS*. bio_all's tokenizer has 16,384 pieces (SuperBPE); the rule would
+  give 32,768 for that much text today, which is why a rebuild for the running model reuses its tokenizer.
 - **Digits** are split one by one, so the model learns numbers digit by digit.
 - **Lines** are encoded one at a time, with a newline token between them, so Markdown structure is kept.
 - **Special tokens:** begin-of-document (1) and end-of-document (2).
-- **Starting point:** a model that guesses uniformly has loss $\ln 8192 = 9.01$ (for 8,192 pieces). Your log's
-  baseline line shows exactly this.
+- **Starting point:** a model that guesses uniformly has loss $\ln 16384 = 9.70$ for 16,384 pieces ($\ln 8192 =
+  9.01$ for the first run's 8,192). The log's baseline line, the untrained model at step 0, comes out close to it
+  (9.89 for the 216M run, whose random initial scores are not quite uniform).
 
 ### SuperBPE: tokens that span words (optional)
 
@@ -233,7 +282,8 @@ a second stage. Ordinary BPE fills the first 90% of the vocabulary; then BPE con
 blocking merges, so the last 10% become tokens such as "▁of▁the", ",▁and" and "▁as▁well▁as▁the" (▁ marks a space).
 A token spans at most 4 words, and digits, newlines and tabs are never merged.
 
-- **Turn it on:** `data_prep.py --superbpe`, or `SUPERBPE = True` at the top of run_pipeline.py.
+- **Turn it on:** `data_prep.py --superbpe`, or `SUPERBPE = True` at the top of run_pipeline.py (set today: bio_all
+  and the 216M run use SuperBPE).
   - `--superbpe-fraction 0.1` sets the share of the vocabulary for the second stage (the paper's best setting for
     model quality).
   - `--superbpe-max-words 4` sets the longest token.
@@ -260,8 +310,9 @@ A token spans at most 4 words, and digits, newlines and tabs are never merged.
   - The gap shrank steadily, from 0.150 bits per byte at step 200 to 0.041 at the end, so a longer run or a
     bigger model might close it.
   - Limits: one run each, and only 2.4 training tokens per parameter (the planner uses 20).
-  - For now, keep ordinary BPE; test SuperBPE again with a bigger model or a longer run. The numbers are in
-    benchmarks\superbpe_2026-09-30\results.md.
+  - bio_all (11 October) was nevertheless built with SuperBPE, and the 216M run trains on it. The comparison at
+    that size, the same model on a BPE and a SuperBPE build judged by bits per byte, is still to be run (TODO.md).
+    The numbers of the small test are in benchmarks\superbpe_2026-09-30\results.md.
 - **The trade-off inside a fixed vocabulary:** multi-word tokens take slots that rarer whole words would otherwise
   get. At 32,768 pieces, ordinary BPE keeps "▁disequilibrium" whole; SuperBPE splits it into "▁dise" + "quilibrium".
 - **How it's built here:** the second stage is learnt in Python on the tokenizer's training text (about 4 minutes
@@ -277,10 +328,11 @@ A token spans at most 4 words, and digits, newlines and tabs are never merged.
 
 ## The transformer
 
-**Embeddings.** Each token ID is replaced by a **vector** of numbers: 384 in your run, 4,096 in a mid-sized model.
+**Embeddings.** Each token ID is replaced by a **vector** of numbers: 1,024 in the 216M run, 4,096 in a mid-sized
+model.
 Tokens used in similar ways end up with similar vectors; view_pt.py plots them.
 
-**Layers.** The vectors pass through a stack of identical **blocks**: 8 in your run, 30 to 100 in large models. Each
+**Layers.** The vectors pass through a stack of identical **blocks**: 18 in the 216M run, 30 to 100 in large models. Each
 block has two parts.
 
 - **Attention** lets every token gather information from the tokens before it. Each token computes three vectors:
@@ -326,9 +378,9 @@ The loss for one prediction is $-\ln$ of the probability the model gave to the c
 | 0.01 | 4.61 |
 
 Training minimises the average of this loss over all predictions: the **cross-entropy**. **Perplexity** is
-$e^{\text{loss}}$, the effective number of tokens the model hesitates between. Your run's validation loss fell from
-9.07 (guessing) to 4.89 after 200 steps, a perplexity of 133. Good large models reach a perplexity of about 5 to 7 on
-general text.
+$e^{\text{loss}}$, the effective number of tokens the model hesitates between. The 216M run's validation loss fell
+from 9.89 (untrained) to 6.47 after 200 steps and 2.93 after 12,000, a perplexity of 18.7. Good large models reach a
+perplexity of about 5 to 7 on general text (perplexities are comparable only for the same tokenizer).
 
 > **For a statistician:** this is exactly **maximum likelihood**. The model is a conditional multinomial
 > distribution for the next token, and the loss is the negative log-likelihood per token. Weight decay acts as an L2
@@ -339,12 +391,12 @@ That's why next-token prediction produces capable models at scale.
 
 ## How it learns: gradient descent
 
-1. **Take a batch.** In your run that's 128 windows of 512 tokens: 65,536 predictions per step.
+1. **Take a batch.** In the 216M run that's 264 windows of 1,024 tokens: 270,336 predictions per step.
 2. **Forward pass:** compute the probabilities and the average loss.
 3. **Backward pass (back-propagation):** the chain rule gives the **gradient**, the direction in which each parameter
    should move to reduce the loss. It costs about twice the forward pass.
 4. **Update** every parameter a small step against its gradient. The step size is the **learning rate**.
-5. Repeat: 11,870 times in your run.
+5. Repeat: 60,000 times in the 216M run.
 
 The details that make it work:
 
@@ -354,7 +406,7 @@ The details that make it work:
 - **Mixed precision.** Most arithmetic is done in 16-bit bfloat16, which halves memory and roughly doubles speed.
   Sensitive sums stay in 32-bit.
 - **Compute rule of thumb.** Training costs about $6ND$ floating-point operations for $N$ parameters and $D$ tokens.
-  Your run: $6 \times 1.73\times10^{7} \times 7.78\times10^{8} = 8.1\times10^{16}$.
+  The 216M run: $6 \times 2.16\times10^{8} \times 1.62\times10^{10} = 2.1\times10^{19}$.
 
 ## How it writes: generation
 
@@ -461,7 +513,7 @@ Search over your papers plus tools that run R and Python close much of the gap *
 
 ![**The tinyGPT architecture.** **a**, one forward pass: embedding, $L$ identical blocks (each with two residual
 additions), final normalisation and the tied output layer. **b**, causal attention in one head. **c**, where the
-17,308,032 parameters of your run sit.](figures/fig2_architecture.png){width=16.5cm}
+17,308,032 parameters of the first (September) run sit; Section 9.2 counts the 216M run's.](figures/fig2_architecture.png){width=16.5cm}
 
 ## Design choices, and why
 
@@ -470,12 +522,14 @@ additions), final normalisation and the tied output layer. **b**, causal attenti
 | Positions | **RoPE** (rotary embeddings) | Attention scores depend on the distance between tokens; no learnt position table |
 | Normalisation | **RMSNorm**, applied before each part (pre-norm) | Simpler and more stable than LayerNorm; used by Llama and Qwen |
 | Feed-forward | **SwiGLU**, hidden width $8d/3$ rounded up to a multiple of 64 | Better loss per parameter than a GELU network of the same size |
-| Attention | **Grouped-query attention (GQA)** once there are 8 or more heads | Several query heads share one key/value head; less memory at generation. Your run has 6 heads, so it uses ordinary multi-head attention |
-| Output | **Tied embeddings** | The output layer reuses the embedding matrix, saving 3.1M parameters (18% of your model) |
+| Attention | **Grouped-query attention (GQA)** once there are 8 or more heads | Several query heads share one key/value head; less memory at generation. The 216M run has 16 query heads and 4 key/value heads (`--kv-heads 16` would be ordinary multi-head attention: about 10% more parameters for about 10% more time) |
+| QK-norm | RMSNorm over each query and key head before RoPE, for new runs | Keeps the attention scores bounded, so higher learning rates stay stable (Gemma 3, Qwen3, OLMo 2); 0.106 bits per byte better in the 5 November A/B. The 216M run started without it and keeps its architecture |
+| Output | **Tied embeddings** | The output layer reuses the embedding matrix, saving 16.8M parameters (7.8% of the 216M model) |
+| Feed-forward, optional | **Mixture of experts** with `--experts N` | Several smaller SwiGLU experts and a router per block: more parameters for the same computation per token. Dense is the default (Section 3.5) |
 | Biases | None | They add little and complicate weight decay |
-| Attention kernel | PyTorch SDPA, `repeat_kv` path chosen by a timing race | On Windows the native GQA path falls back to a kernel about 5 times slower (17 times with torch 2.5.1) |
-| Compilation | `torch.compile` when Triton is installed (`triton-windows` on Windows) | Fuses many small GPU operations into few: 1.46 times faster for 36.6M and 1.44 times for 70M parameters on the RTX 3070, measured alternating both modes; the first steps take 10-30 s longer to compile |
-| Optimizer | **AdamW** by default; **Muon** for the block matrices with `--optimizer muon` | AdamW is the standard; Muon is a newer, often faster alternative (Section 3.5) |
+| Attention kernel | PyTorch SDPA; on CUDA the GQA path (`repeat_kv` or `enable_gqa`) is chosen by a timing race, elsewhere `repeat_kv` | On Windows the native GQA path falls back to a kernel about 5 times slower (17 times with torch 2.5.1) |
+| Compilation | `torch.compile` when Triton is installed (`triton-windows` on Windows); on a Mac only with `--compile on`, falling back to eager | Fuses many small GPU operations into few: 1.46 times faster for 36.6M and 1.44 times for 70M parameters on the RTX 3070, measured alternating both modes; the first steps take 10-30 s longer to compile |
+| Optimizer | **AdamW** by default (fused on CUDA and MPS); **Muon** for the block matrices with `--optimizer muon` | AdamW is the standard; Muon is a newer, often faster alternative (Section 3.5) |
 
 ## Why decoder-only, and not encoder-decoder?
 
@@ -514,97 +568,144 @@ and in what they're trained to predict.
 
 ## Your run's settings explained
 
-The run you started on 29 September (`--dataset datasets\bio_v2 --d-model 384 --layers 8`) printed a `model{...}`
-and a `train{...}` block. Here is what each value means and where it came from.
+The run started on 11 October (`tinyGPT_muon`: `--dataset datasets\bio_all --optimizer muon`, 60,000 steps, the
+model shape from the planner) printed a `model{...}` and a `train{...}` block. Here is what each value means and where
+it came from. The planner rules have changed since (Section 3.4); a resumed run keeps the values it started with.
 
 **model{...}: the shape of the network**
 
 | Setting | Value | What it means | How it was chosen |
 |----------------|-------------|-------------------------------|----------------------------------------|
-| vocab_size | 8,192 | Number of distinct tokens | Fixed by the dataset's tokenizer (data_prep.py, automatic size) |
-| ctx | 512 | Tokens the model sees at once (the context window) | 90th percentile of document length rounded up to a power of 2, capped at 512 for widths up to 512 |
-| d_model | 384 | Width of every token vector | Your `--d-model 384` |
-| n_layers | 8 | Number of transformer blocks | Your `--layers 8` |
-| n_heads | 6 | Attention heads per block | $384 / 64$: heads of width 64 |
-| n_kv_heads | 6 | Key/value heads | Equal to n_heads (GQA starts at 8 heads, with 4 query heads per key/value head) |
-| ffn_hidden | 1,024 | Width inside the SwiGLU feed-forward part | $8 \times 384 / 3 = 1{,}024$ |
-| rope_base | 10,000 | Base of RoPE's rotation frequencies | Standard value; larger bases suit longer contexts |
+| vocab_size | 16,384 | Number of distinct tokens | Fixed by bio_all's tokenizer (SuperBPE) |
+| ctx | 1,024 | Tokens the model sees at once (the context window) | The planner's context for widths up to 1,024 |
+| d_model | 1,024 | Width of every token vector | The largest ladder shape that fits in 8 GB (the data would support 817M parameters; Section 3.4) |
+| n_layers | 18 | Number of transformer blocks | The ladder: $1024/64 + 2$ |
+| n_heads | 16 | Attention heads per block | $1024 / 64$: heads of width 64 |
+| n_kv_heads | 4 | Key/value heads | GQA: 4 query heads per key/value head from 8 heads on |
+| ffn_hidden | 2,752 | Width inside the SwiGLU feed-forward part | $8 \times 1024 / 3 = 2{,}731$, rounded up to a multiple of 64 |
+| rope_base | 10,000 | Base of RoPE's rotation frequencies | Standard up to ctx 2,048; it grows with longer contexts |
+| qk_norm | false | RMSNorm on queries and keys | The run started before QK-norm existed; new runs have it on |
 | dropout | 0 | Share of activations zeroed at random during training | Off, because each token is seen at most 4 times; dropout only helps with heavy repetition |
 | norm_eps | 1e-6 | Small constant inside RMSNorm | Prevents division by zero |
-| tie_embeddings | true | The output layer shares the embedding matrix | Default; saves 3,145,728 parameters |
+| tie_embeddings | true | The output layer shares the embedding matrix | Default; saves 16,777,216 parameters |
 
 **train{...}: how it learns**
 
 | Setting | Value | What it means | How it was chosen |
 |----------------|-------------|-------------------------------|----------------------------------------|
-| steps | 11,870 | Number of parameter updates | planned_train_tokens ÷ tokens_per_step, rounded down |
-| micro_batch | 32 | Windows processed together on the GPU | The largest that fits the measured GPU memory |
-| grad_accum | 4 | Micro-batches whose gradients are summed before one update | tokens_per_step ÷ (micro_batch × ctx) |
-| tokens_per_step | 65,536 | Tokens behind each update: $32 \times 4 \times 512$ | About $16\sqrt{N}$, rounded to a power of 2 |
-| lr | 0.001017 | Peak learning rate | Interpolated on a log-log scale from published models (Pythia-70M $10^{-3}$, GPT-3 125M $6\times10^{-4}$, ...) at 17.3M parameters |
-| min_lr | 0.0001017 | Learning rate at the very end | 10% of the peak (`--min-lr-ratio 0.1`, the default when this run started). New WSD runs now decay to 0 unless `--min-lr-ratio` is given (Hägele et al. 2024 end their decay at ~0); cosine keeps 0.1 |
-| warmup_steps | 237 | Steps of linear ramp from 0 to the peak | 2% of the steps |
+| steps | 60,000 | Number of parameter updates | Set when the run started: 4 passes over the data at this batch |
+| micro_batch | 4 | Windows processed together on the GPU | The memory plan of the time; 2 is faster today (Section 3.5) |
+| grad_accum | 66 | Micro-batches whose gradients are summed before one update | tokens_per_step ÷ (micro_batch × ctx) |
+| tokens_per_step | 270,336 | Tokens behind each update: $4 \times 66 \times 1024$ | The 4-pass budget (16.33B tokens) ÷ 60,000 steps = 272,193, rounded down to whole micro-batches |
+| lr | 4.76e-4 | Peak learning rate | Interpolated on a log-log scale from published models (Pythia-160M $6\times10^{-4}$, Pythia-410M $3\times10^{-4}$, ...) at 216M parameters. New runs get twice that table (9.5e-4 at this size; Section 3.4) |
+| min_lr | 4.76e-5 | Learning rate at the very end | 10% of the peak (`--min-lr-ratio 0.1`, the default when this run started). New WSD runs decay to 0 (Hägele et al. 2024 end their decay at ~0); this run can switch with `--resume --min-lr-ratio 0` until step 48,000 |
+| warmup_steps | 1,200 | Steps of linear ramp from 0 to the peak | 2% of the steps |
 | schedule | wsd | Warm-up, stable, decay | Default. It allows a run to be extended, and matches cosine schedules at the end |
-| decay_frac | 0.2 | Share of steps in the final decay | The last 2,374 steps, from step 9,496 |
+| decay_frac | 0.2 | Share of steps in the final decay | The last 12,000 steps, from step 48,000 |
 | decay_shape | 1-sqrt | Shape of the decay: $1-\sqrt{t}$ | The best-performing shape in Hägele et al. (2024) |
-| weight_decay | 0.1 | Each step shrinks weight matrices slightly towards 0 | Standard; not applied to normalisation gains |
+| weight_decay | 0.1 | Each step shrinks weight matrices slightly towards 0 | The default then (new runs: 0.05, to go with the doubled rates); not applied to normalisation gains. Its timescale $1/(\eta\lambda)$ is about 21,000 steps, 35% of the run |
 | betas | 0.9, 0.95 | Adam's averaging factors for the gradient and the squared gradient | Standard for language models; 0.95 reacts faster to loss spikes than 0.999 |
 | grad_clip | 1.0 | If the gradient's overall length exceeds 1, it is scaled down to 1 | Prevents rare huge updates |
-| planned_train_tokens | 777,912,320 | Tokens read in total | 4 passes (`--max-epochs 4`) over 194,493,906 unique training tokens |
+| optimizer | muon | Muon for the block matrices, AdamW for the embedding and norm gains | `--optimizer muon` (Section 3.5) |
+| activation_checkpointing | true | Blocks recomputed in the backward pass | The memory plan of the time, for micro-batch 4; `--resume --batch-size 2 --grad-accum 132 --activation-checkpointing off` is 5-16% faster with the same mathematics |
+| planned_train_tokens | 16,220,160,000 | Tokens read in total | 60,000 × 270,336: just under 4 passes over 4,082,904,162 unique training tokens |
 | mix | null | Weights for sampling between sources | None given, so each source is sampled in proportion to its size |
 
-**What this means for your run:**
+**What this means for the run:**
 
-- **Data per parameter:** 45 tokens per parameter (778M ÷ 17.3M), or 55 per non-embedding parameter. That's more
-  than Chinchilla's 20, which is fine: it trades a little compute for a better small model.
-- **Repetition:** the 4-epoch cap follows Muennighoff et al. (2023). Up to about 4 passes, repeated data is almost as
-  good as fresh data (Section 9.4).
-- **Time:** at 4,826 tokens per second the run takes about 45 hours (Chapter 10 explains why the GPU is slow).
-- **Settings file:** your settings are saved inside every checkpoint and written to experiments.csv, so they are
+- **Data per parameter:** 75 tokens per parameter (16.2B ÷ 216.2M), or 81 per non-embedding parameter. That's more
+  than Chinchilla's 20 because the 8 GB GPU, not the data, caps the size: the data could feed 817M parameters.
+- **Repetition:** 3.97 passes over the data; the 4-epoch cap follows Muennighoff et al. (2023). Up to about 4
+  passes, repeated data is almost as good as fresh data (Section 9.4).
+- **Time:** at about 5,800 tokens per second (55 W, with activation checkpointing) the 60,000 steps take about 32
+  days of training: 153.7 hours had reached step 12,000 (Chapter 10 explains why the GPU is slow).
+- **Settings file:** the settings are saved inside every checkpoint and written to experiments.csv, so they are
   never lost.
+
+**The first run, for comparison (29 September).** `--dataset datasets\bio_v2 --d-model 384 --layers 8`: 17,308,032
+parameters, vocabulary 8,192, ctx 512, 6 heads (ordinary multi-head attention), 32 × 4 × 512 = 65,536 tokens per
+step, AdamW at a peak of 1.017e-3 decaying to 1.017e-4, 11,870 steps and 778 million tokens (45 per parameter), about
+45 hours at 4,826 tokens per second. Its numbers are used where a small example is easier to follow.
 
 ## How the planner chooses a model
 
-`python tiny_gpt.py --dataset datasets\bio_v2 --plan` prints the plan and its reasons without training. The rules:
+`python tiny_gpt.py --dataset datasets\bio_all --plan` prints the plan and its reasons without training. The rules:
 
 1. **Training tokens:** $D = \text{max\_epochs} \times \text{unique tokens}$, unless you give `--train-tokens`,
-   `--epochs` or `--steps`.
+   `--epochs` or `--steps`. For bio_all: $4 \times 4.08\text{B} = 16.3\text{B}$.
 2. **Model size:** the largest shape on a ladder of widths (128 to 3,072, with depth growing with width) whose
-   parameter count satisfies $D \geq r N$, where $r$ is `--tokens-per-param` (default 20). Your `--d-model` and
-   `--layers` override this.
-3. **Batch, learning rate, warm-up and dropout** follow from $N$ and the number of passes (the table above).
-4. **Time budget:** `--time-budget-hours 10` binary-searches the ladder for the largest model that still reads
-   $r$ tokens per parameter in that time. Each size is timed briefly on the GPU, but a laptop GPU runs faster for a
-   few seconds than it does for hours (power and heat limits; 1.7 times on this RTX 3070). So the planner uses the
-   speed your last training run sustained, converted to floating-point operations per second so that it carries
-   over to other sizes; before the first run it slows the short measurement down by 1.6.
-5. **Memory:** for each model it estimates the GPU memory a training step needs and switches on memory savings
-   only when needed (next section). The plan's `memory:` line says what it chose.
+   parameter count satisfies $D \geq r N$, where $r$ is `--tokens-per-param` (default 20), and which fits in memory;
+   if it does not fit, the next smaller one. For bio_all the data allows 817M (the 669M shape, d 1,536), which needs
+   about 10 GiB; the 457M shape does not fit either, so the plan is 216M. Your `--d-model` and `--layers` override
+   this.
+3. **Context** by width: 256 up to $d$ 192, 512 up to 512, 1,024 up to 1,024, 2,048 up to 2,048, 4,096 above
+   (`--ctx`). Attention costs $12 L \cdot ctx \cdot d$ FLOPs per token on top of $6N$, so a longer context costs a
+   growing share, which the plan prints. The RoPE base is 10,000 up to ctx 2,048, then $10{,}000\,(ctx/2048)^2$
+   (Men et al. 2024 show a base below this bound keeps the perplexity but loses long-range retrieval).
+4. **Tokens per step** from the compute $C = 6ND$: half of DeepSeek's fitted optimum $B = 0.292\,C^{0.327}$ (Bi et
+   al. 2024; below the optimum each token is used more efficiently), rounded to a power of two and kept between
+   16,384 and 2,097,152. That is 262,144 at 216M on 16.2B tokens, 524,288 at 1.45B on 29B, 1,048,576 at 3.2B on 64B.
+5. **Learning rate:** a log-log interpolation through 4e-3 at 1M parameters, 2.4e-3 at 10M, 1.2e-3 at 100M and
+   6e-4 at 1B. That is twice the rates of published models (GPT-3, Pythia), with their slope: a 500-step sweep on
+   this data on 5 November found the optimum at four times them or more, and a short run overstates the best rate of
+   a long one by about 1.7 times. The table belongs to the old batch of about $16\sqrt{N}$ tokens; a batch twice as
+   large (or half) moves the rate by $\sqrt{2}$ (Malladi et al. 2022), the ratio rounded to a power of two first and
+   the factor kept within 0.7-1.4. Weight decay 0.05, so $\eta\lambda$, the shrink per step, is where the published
+   0.1 put it; the plan prints its timescale $1/(\eta\lambda)$ in steps.
+6. **Warm-up, decay and dropout:** warm-up 2% of the steps (50-2,000); WSD decays to 0 over the last 20%; dropout 0
+   up to 4 passes over the data, else 0.1.
+7. **Time budget:** `--time-budget-hours 10` binary-searches the ladder for the largest model that still reads
+   $r$ tokens per parameter in that time. Each size is timed briefly on the device (micro-steps and one optimizer
+   update, with the planned optimizer, divided by the measured compile speed-up when the run will be compiled), but
+   a laptop GPU runs faster for a few seconds than it does for hours (power and heat limits; 1.7 times on this RTX
+   3070). So the planner uses the speed your last training run on the same kind of device sustained, converted to
+   floating-point operations per second (counting the recomputation of a checkpointed run) so that it carries over
+   to other sizes; before the first run it slows the short measurement down by 1.6 on CUDA and 1.1 on a Mac or CPU.
+   A shape that runs out of memory in its trial is retried with checkpointing and a halved micro-batch before a
+   smaller model is taken.
+8. **Memory:** for each model it estimates the memory a training step needs and switches on memory savings only
+   when needed (next section). The plan's `memory:` line says what it chose and how much it expects.
+
+The architecture defaults for a new run are QK-norm on, tied embeddings, a dense SwiGLU (no experts), no weight
+average and no document mask; `--qk-norm off`, `--tie-embeddings off`, `--experts N`, `--ema on` and `--doc-mask
+on` change them. A resumed run never re-plans.
 
 ## Larger models: memory and the optimizer
 
 **Where the memory goes.** A training step holds:
 
-- the weights and their gradients (8 bytes per parameter);
-- the optimizer's state (AdamW: 8 bytes per parameter);
+- the weights and their gradients (8 bytes per parameter), and the half-precision copy of the weights that BF16
+  autocast keeps during a step (2 bytes per parameter);
+- the optimizer's state (AdamW: 8 bytes per parameter; Muon: 4 for the block matrices);
 - the *activations*, the values each block computed in the forward pass, kept for the backward pass. They grow
   with micro-batch × context × layers, and for large models they are the biggest part;
 - the output scores of every token against the whole vocabulary, which for a 16,384-token vocabulary are large.
 
+The estimate is calibrated to the measured peak on the RTX 3070 (the 216M shape at micro-batch 2 without
+checkpointing: estimated 5.0 GiB, 4.88 GiB allocated), and the budget is 80% of the free GPU memory (75% of Metal's
+recommended working set on a Mac). Every metrics line records the real peak as `peak_mem_gib`.
+
 **Two savings that leave the mathematics unchanged** (a test checks that the gradients are identical):
 
-| Saving | What it does | Cost | Option |
+| Saving | What it does | Cost (measured) | Option |
 |------------------|------------------------------------------|------------------|--------------------------|
-| Loss in pieces | The output layer and the loss run 4,096 tokens at a time, so the full score table never exists | A few per cent of speed | `--loss-chunk-tokens` (0 = off) |
-| Activation checkpointing | Only each block's input is kept; the block is recomputed in the backward pass (Chen et al. 2016) | About a third more computation | `--activation-checkpointing auto`, `on` or `off` |
+| Loss in pieces | The output layer and the loss run 4,096 tokens at a time, so the full score table never exists | 1-8% of step time; nothing measurable when compiled | `--loss-chunk-tokens` (0 = off) |
+| Activation checkpointing | Only each block's input is kept; the block is recomputed in the backward pass (Chen et al. 2016) | 21-32% of step time | `--activation-checkpointing auto`, `on` or `off` |
 
-- **The rule:** the planner takes the cheapest combination that allows a micro-batch of 4 sequences (or that fits
-  at all), so a model that fits normally pays nothing.
+- **The rule:** the planner takes the cheapest combination that reaches a micro-batch of about 2,048 tokens (2
+  sequences at ctx 1,024, 1 at ctx 2,048 and above), or else the cheapest that fits at all, so a model that fits
+  normally pays nothing. About 2,048 tokens per micro-step already keep a 1,024-wide model's matrix products busy: at
+  the 216M shape a micro-batch of 4 is only about 7% faster than 2 when compiled, far less than checkpointing costs.
+  For the 216M model this means 2 × 132 without checkpointing instead of 4 × 66 with it: 5-16% faster per step,
+  measured on 5 November. On a Mac whose attention kernel keeps the full score matrix, checkpointing comes first at
+  ctx 2,048 and above.
 - **If the first step still runs out of memory,** the run tries, in order: the loss in pieces, a smaller
-  micro-batch down to 4 (with more accumulation, so the tokens per step stay the same), activation checkpointing,
-  then smaller micro-batches down to 1. It never switches on a saving the command line switched off, and the
-  retry trains on the same windows as an uninterrupted run would.
-- **On `--resume`** the run keeps its saved settings; giving either option changes them.
+  micro-batch down to about 2,048 tokens (with more accumulation, so the tokens per step stay the same), activation
+  checkpointing, then smaller micro-batches down to 1. It never switches on a saving the command line switched off,
+  and the retry trains on the same windows as an uninterrupted run would. Later in a run an out-of-memory error
+  replays the same step, twice at most.
+- **On `--resume`** the run keeps its saved settings; giving either option changes them, and so may `--batch-size`
+  with `--grad-accum` as long as the tokens per step stay the same.
 - **experiments.csv** records both settings for every run.
 
 **AdamW or Muon.** AdamW keeps two running averages for every parameter and scales each one's step separately.
@@ -618,15 +719,46 @@ inside the blocks; the embedding and the norm gains stay on AdamW.
   `OPTIMIZER = "muon"` in run_pipeline.py uses it for the pipeline's runs.
 - It keeps half of AdamW's optimizer memory for those matrices.
 - Published runs reach the same loss with noticeably less computation. Whether that holds for tinyGPT is an
-  experiment: train the same shape both ways and compare with compare_models.py.
+  experiment still to run: the 216M run started with Muon without it (TODO.md). Train the same shape both ways and
+  compare with compare_models.py.
 - The dashboard shows each block matrix's momentum size for a Muon run, in place of Adam's update size.
+
+**Optional extras for a new run.**
+
+- **Weight average (`--ema on`, decay 0.999 per step):** a moving average of the weights, kept on the CPU in FP32 and
+  updated every 10 steps, is scored beside the raw weights at each evaluation while the learning rate is above 5%
+  of its peak; the better of the two is saved as `<name>_best.pt`. The average is debiased as Adam debiases its
+  moments, so it never holds the initial weights: the 5 November test without that correction scored 1.1 bits per
+  byte worse at step 300, because 74% of the average was still the starting weights. In 500 steps it never beat the
+  raw weights, so it is off by default; its use is for long runs, where it is still to be measured.
+- **Document mask (`--doc-mask on`):** attention stays within each document of a training window instead of
+  reading across the boundary into an unrelated text. At ctx 512 it changed bits per byte by -0.0016 (noise) for
+  about 8% more time per forward and backward pass; at long contexts it may matter more, and that is unmeasured.
+
+### Mixture of experts (optional)
+
+`--experts N` replaces the SwiGLU of every block (or every `--moe-every`-th) by N smaller experts and a router
+that sends each token to `--experts-per-token` of them (default 2). Each expert's hidden width is the dense one
+divided by the experts per token, so the computation per token stays that of the dense model while the parameters
+grow by about $N/k$ in the feed-forward layers.
+
+- **Balance:** the experts are kept evenly loaded by DeepSeek-V3's routing bias, nudged after every step towards
+  under-used experts (`--balance bias`, default), by the Switch load-balancing loss $E \sum_e f_e P_e$
+  (`--balance loss`, weight `--lb-loss`), or both. A router z-loss keeps the routing logits bounded. The metrics
+  line reports the balance (`moe_lb`, the most loaded expert's share, dead experts).
+- **The planner** counts the *active* parameters (the experts a token visits) for the tokens-per-parameter rule,
+  the batch, the learning rate and the FLOPs, and the *total* for memory.
+- **Measured on 5 November** (99M active, 298M total, 8 experts, 2 per token, 50 steps): memory as estimated
+  (5.02 GiB against 5.3), but 2.2-2.3 times slower per step than the dense model on this GPU and 0.26 nats behind
+  it at step 50. Published gains were measured at 22-700 tokens per *total* parameter; with today's data a dense
+  model is the better use of the laptop. Dense stays the default; an A/B at a size the Mac can train comes first.
 
 ## Hands-on exercises
 
 Each takes minutes to a few hours. Run them only when no other training is running, give each a new `--name` so
 nothing is overwritten, and compare the results with compare_models.py.
 
-1. **Plan versus time:** `python tiny_gpt.py --dataset datasets\bio_v2 --time-budget-hours 3 --plan`. What model does
+1. **Plan versus time:** `python tiny_gpt.py --dataset datasets\bio_all --time-budget-hours 3 --plan`. What model does
    3 hours buy?
 2. **Learning rate:** `--lr 3e-3 --name lr_high --stop-after-steps 1500`, then `--lr 3e-4 --name lr_low`. The first
    can be unstable; the second learns slowly.
@@ -672,8 +804,8 @@ nothing is overwritten, and compare the results with compare_models.py.
 - Folders whose names start with `_` or `.` are skipped.
 - Every file move of 29 September is listed in `_moves_2026-09-29.tsv` (old path, new path), so the reorganisation
   can be undone.
-- The running bio_v2 dataset was built before the reorganisation and is unaffected. Its exact file list can't be
-  rebuilt from the new layout without undoing the moves.
+- The September bio_v2 dataset was built before the reorganisation. Its exact file list can't be rebuilt from the
+  new layout without undoing the moves; bio_all (11 October) was built from the new layout.
 
 ## Converting documents
 
@@ -916,6 +1048,10 @@ split together.
   and a note in `report.md`; rename it.
 
 ## Downloaded data, and the recommended next dataset
+
+This section records the plan of 29 September; the dataset it recommends was built on 11 October as
+`datasets\bio_all` (all Wikipedia articles that pass the keywords, SuperBPE, near-duplicates dropped), with the
+command in HOW_TO_RUN.md, Step 3.
 
 Downloaded on 29 September into `ai_training_data\web` (both are ODC-By licensed, which allows training):
 
@@ -1170,8 +1306,9 @@ order of practicality:
 
 ## Reading the log
 
-Every 200 steps tiny_gpt.py prints a metrics line and a sample, and writes both to log.txt. An example (one line in
-the log, split here to fit the page):
+Every 200 steps tiny_gpt.py prints a metrics line and a sample, and writes both to log.txt. An example from the first
+(17.3M) run (one line in the log, split here to fit the page; today's lines also carry `val(mix)`, the energy and,
+with `--ema`, `val(ema)`):
 
 ```
 step 400/11870 | train 4.912 | val 4.470 @400 [md 4.51 wiki 4.43] | ppl 87.36
@@ -1187,7 +1324,9 @@ step 400/11870 | train 4.912 | val 4.470 @400 [md 4.51 wiki 4.43] | ppl 87.36
 | lr | Current learning rate |
 | tok/s | Training throughput |
 | elapsed | Time since this session started. After `--resume`, `(whole run 7:45:12)` adds the earlier sessions |
-| NEW BEST | Shown only when validation loss improves; the best checkpoint is then saved |
+| val(mix) | The validation loss with the sources weighted as training samples them. Compare it, not `val`, with `train`: `val` weights every source equally, so its gap to the training loss mixes overfitting with the difference between the two mixtures |
+| val(ema) | With `--ema`: the validation loss of the averaged weights |
+| NEW BEST | Shown only when validation loss improves; the best checkpoint is then saved. `(ema weights)` when the average won |
 
 - **Samples:** after each line, a short sample continues "Genetic drift is", so you can watch the text improve.
 - **End of a run:** the last line gives this session's time and the whole run's: total time, how much of it was
@@ -1203,23 +1342,26 @@ step 400/11870 | train 4.912 | val 4.470 @400 [md 4.51 wiki 4.43] | ppl 87.36
 
 ## Checkpoints, pausing and resuming
 
-- **tinyGPT.pt** is the full training state. It is saved every 1,000 steps, every 30 minutes (`--save-minutes`) and
-  on Ctrl+C. A shutdown or crash therefore loses at most about half an hour. It holds:
-  - the weights;
-  - Adam's averages;
+- **`<name>.pt`** (`tinyGPT_muon.pt` for the current run) is the full training state. It is saved every 1,000 steps,
+  every 30 minutes (`--save-minutes`) and on Ctrl+C. A shutdown or crash therefore loses at most about half an hour;
+  a save that fails (disk full, file locked) is retried about a minute later while training goes on. It holds:
+  - the weights (with a mixture of experts, also the router's balancing bias);
+  - the optimizer's state (Adam's averages; Muon's momentum);
   - the step number;
-  - the random-number states;
+  - the random-number states (CPU, and CUDA or MPS);
   - the tokenizer;
-  - the settings.
-- **tinyGPT_best.pt** holds the weights of the best validation loss, for inference only.
+  - the settings;
+  - with `--ema`, the weight average and its update count.
+- **`<name>_best.pt`** holds the weights of the best validation loss, for inference only (`--best-bf16` stores them
+  in half the space, for models of about 1B and more).
 - `python tiny_gpt.py --resume` continues where the run stopped: same windows, schedule and optimizer state. The
   learning-rate schedule is stateless, so it continues at the same step (GPU kernels are not bit-deterministic,
   so a replayed step differs at about 1e-5 in the loss).
 - **Ctrl+C at any moment** is safe. During an update the Ctrl+C is held until the update is complete, so a step is
   applied in full or not at all; a step stopped halfway is rewound, so the resumed run replays the same windows
   as an uninterrupted one.
-- **No training state yet?** If the PC stopped before tinyGPT.pt was first written, `--resume` continues from
-  tinyGPT_best.pt at its step. Weights, schedule position and history are kept. Adam's averages start again from zero,
+- **No training state yet?** If the PC stopped before `<name>.pt` was first written, `--resume` continues from
+  `<name>_best.pt` at its step. Weights, schedule position and history are kept. The optimizer's averages start again from zero,
   so the learning rate is ramped back up over 50 steps. The ramp is saved, so a pause during it resumes inside it.
 - `--resume --steps 20000` extends a finished run. `--init-from other.pt` starts a new run from another checkpoint's
   weights: that's continued pre-training on new data. Without `--steps`, the planned steps come after the step the
@@ -1227,8 +1369,8 @@ step 400/11870 | train 4.912 | val 4.470 @400 [md 4.51 wiki 4.43] | ppl 87.36
 - Existing files are never overwritten unless you pass `--overwrite`. Saves are atomic: written to a temporary file,
   flushed to disk, then renamed.
 - **A locked file** (open in another program) cannot be replaced on Windows. The save then goes to
-  `tinyGPT.HHMMSS.pt` and says so; within a session, a fallback is deleted once a newer save replaces it. `--resume` refuses
-  while such a file is newer than tinyGPT.pt and tells you to rename it, so you never resume from older weights by
+  `<name>.HHMMSS.pt` and says so; within a session, a fallback is deleted once a newer save replaces it. `--resume` refuses
+  while such a file is newer than `<name>.pt` and tells you to rename it, so you never resume from older weights by
   mistake.
 - **One trainer per run:** `<name>.train.lock` stops a second process from training the same run.
 
@@ -1243,15 +1385,16 @@ python run_pipeline.py continue --hours 24
 This does two things:
 
 1. **Builds a new dataset, `datasets\bio_all_v2`, from all of `ai_training_data`** (old and new text) with the
-   *same tokenizer* as the first dataset (`data_prep.py --tokenizer-from datasets\bio_all`). The same tokenizer is
+   *same tokenizer* as the first model (`data_prep.py --tokenizer-from tinyGPT_muon_best.pt`). The same tokenizer is
    essential: the model's weights belong to its vocabulary, and a new tokenizer would give every token a different
    meaning. Keeping the old text in stops the model from forgetting it while it learns the new, and the old
    train/validation split is kept too (`--keep-split-from datasets\bio_all`): a document the first model trained on
    never becomes a validation document, where its loss would look better than the model really is (Section 4.6).
 2. **Trains further from the first model's weights**
-   (`tiny_gpt.py --dataset datasets\bio_all_v2 --init-from tinyGPT_best.pt --name tinyGPT_continued
-   --time-budget-hours 24`): same model size, a fresh learning-rate schedule, and as much of the new dataset as fits
-   in the hours given, counted from the step the first model reached.
+   (`tiny_gpt.py --dataset datasets\bio_all_v2 --init-from tinyGPT_muon_best.pt --name tinyGPT_muon_continued
+   --time-budget-hours 24 --optimizer muon`): the same model (its exact architecture, read from the checkpoint), a
+   fresh learning-rate schedule, and as much of the new dataset as fits in the hours given, counted from the step
+   the first model reached.
 
 Why not LoRA? LoRA freezes the model and trains small add-on matrices. It saves memory when the model has billions
 of parameters (it is the plan for fine-tuning large open models on the Mac Studio), but it limits how much new
@@ -1274,9 +1417,12 @@ benchmark, comparison and fine-tune.
   rate, z-loss, dataset, best and last validation loss, bits per byte, perplexity, benchmark accuracy and floor,
   throughput, training hours (`train_hours`, without evaluations and saving), total hours of the run over all
   sessions (`run_hours`), energy, CO2e, cost and checkpoint.
-- **The recipe:** micro-batch and accumulation, optimizer, minimum learning rate, schedule, warm-up, decay share
-  and shape, weight decay, betas, gradient clipping, dropout, precision, and the memory settings
-  (`activation_checkpointing`, `loss_chunk_tokens`). With these, any row can be trained again.
+- **The recipe:** micro-batch and accumulation, optimizer, learning-rate scale, minimum learning rate, schedule,
+  warm-up, decay share and shape, weight decay, betas, gradient clipping, z-loss, EMA, dropout, precision, the memory
+  settings (`activation_checkpointing`, `loss_chunk_tokens`) and, for a mixture of experts, the expert layout
+  (`moe`, `active_params`) and its balancing settings. With these, any row can be trained again.
+- **Also:** `last_val_mix` (the validation loss weighted like the training mix) and `peak_mem_gib`, the measured
+  peak memory. On a device without nvidia-smi (a Mac) the energy columns stay empty and the notes say why.
 - **Opening it:** it opens directly in Excel. The scripts only ever append, and nothing deletes it. When a newer
   version adds columns, the file is copied to `experiments.csv.before-columns-<date>` and rewritten once with the
   new header; no row is lost.
@@ -1339,7 +1485,7 @@ genetics and in statistics, and 20 in each other category.
 **Format:** each line is a sentence start, the correct continuation and three wrong ones, for example: "Cells that break
 down bone matrix during remodelling are called" → *osteoclasts* (versus *osteoblasts*, *osteocytes*, *chondrocytes*).
 
-**Why it was rebuilt:** the first version (171 items, kept in `backup_v3_2026-09-29`) was too easy.
+**Why it was rebuilt:** the first version (171 items) was too easy.
 
 - Its wrong answers often came from another topic (*germline mutations pass to the → offspring* against *liver /
   environment / neighbours*), so knowing the topic alone gave about 35%.
@@ -1442,7 +1588,7 @@ missing or was rebuilt), it prints a WARNING and gives no verdict, unless you ad
 
 ## The dashboard
 
-`python view_pt.py tinyGPT_best.pt --plot` writes a 4 × 4 dashboard picture, `tinyGPT_best_dashboard.png`.
+`python view_pt.py tinyGPT_muon_best.pt --plot` writes a 4 × 4 dashboard picture, `tinyGPT_muon_best_dashboard.png`.
 
 - **Name:** it's the same every time, so each new dashboard replaces the previous one. The file is written under a
   temporary name and then renamed, so an image viewer never shows half a picture.
@@ -1484,8 +1630,24 @@ Panels that need the model to run are labelled as inference-only. `--html` write
 
 ## Towards standard LLM benchmarks, with a biology bias
 
-The next benchmark step is to score tinyGPT and any open model on the same public tests the field reports, using the
-same method as EleutherAI's *lm-evaluation-harness*:
+`benchmark.py` (11 October) scores tinyGPT and any open model on the public tests the field reports, with the
+method of EleutherAI's *lm-evaluation-harness*. The plan below was written on 29 September; benchmark.py replaced
+its `--eval-suite` idea:
+
+```
+python benchmark.py download                         # 21 benchmarks into benchmarks\ (once), with licences and checksums
+python benchmark.py run --checkpoint tinyGPT_muon_best.pt --limit 200 --device cpu
+python benchmark.py plot                             # PNGs in benchmarks\plots\
+```
+
+- **Multiple choice** (MMLU, MMLU-Pro, MedQA, MedMCQA, PubMedQA, MedXpertQA, SciQ, ARC, LAB-Bench ...): the
+  log-probability of each option per character, with chance and a shuffled-question floor, as the fact benchmark.
+- **MedCalc-Bench** by the first number of a greedy answer; **coding sets** (HumanEval(+), MBPP(+), DS-1000) by
+  running the tests of a greedy completion in a sandbox without network (Docker or WSL with bubblewrap).
+- `--limit N` takes the same N items every time; results go to `results\benchmarks.csv`. Never train on these files.
+- So far only a 50-question trial of the 70M October model was run (all near chance).
+
+The original plan, kept for its table of what each benchmark measures:
 
 - multiple choice by comparing log-likelihoods;
 - accuracy and length-normalised accuracy;
@@ -1502,13 +1664,10 @@ same method as EleutherAI's *lm-evaluation-harness*:
 | BioASQ | Yearly sets | Biomedical question answering | 7B+ |
 | GPQA | 448 (198 "diamond") | Graduate-level, "Google-proof" questions | Frontier models |
 
-**Plan:**
+**Still to add:** per-subject Wilson intervals in the report, and a 13-gram leakage check of the benchmark items
+against the training data before trusting a score.
 
-1. Add a `--eval-suite` option that loads these from Hugging Face and scores them like the probes.
-2. Report per-subject accuracy with Wilson intervals.
-3. Run the 13-gram leakage check against the training data first.
-
-**Expected results:** at 17M parameters, expect chance on MMLU and above chance on SciQ. The suite becomes
+**Expected results:** at 216M parameters, expect chance on MMLU and above chance on SciQ. The suite becomes
 informative for comparing open 1B to 8B models on your biology questions.
 
 # Post-training: SFT, preference tuning and RL
@@ -1531,7 +1690,7 @@ checkpoint, which every other script can read.
 ## Supervised fine-tuning
 
 ```
-python finetune.py sft --base tinyGPT_best.pt --name tinyGPT_sft --device cpu `
+python finetune.py sft --base tinyGPT_muon_best.pt --name tinyGPT_sft --device cpu `
     --data finetune_examples\sft_examples.jsonl
 ```
 
@@ -1588,8 +1747,8 @@ same template.
 
 ```
 python posttrain.py data                                       # build the question data once
-python posttrain.py run --base tinyGPT_best.pt --name tinyGPT  # SFT, then DPO, then evaluation
-python posttrain.py eval tinyGPT_best.pt tinyGPT_sft.pt tinyGPT_dpo.pt
+python posttrain.py run --base tinyGPT_muon_best.pt --name tinyGPT_muon   # SFT, then DPO, then evaluation
+python posttrain.py eval tinyGPT_muon_best.pt tinyGPT_muon_sft.pt tinyGPT_muon_dpo.pt
 ```
 
 `python run_pipeline.py posttrain` does the same for the pipeline's run.
@@ -1657,7 +1816,7 @@ In the tests, 120 marked tokens gave z > 4 and unmarked text z < 3.
 ## Likelihood score: evidence, for any text
 
 ```
-python detect_text.py text.txt --checkpoint tinyGPT_best.pt
+python detect_text.py text.txt --checkpoint tinyGPT_muon_best.pt
 ```
 
 **The idea:** a model's own samples sit in a characteristic range of its probabilities. The analytic Fast-DetectGPT
@@ -1743,17 +1902,25 @@ $$h = x + \mathrm{Attn}(\mathrm{RMSNorm}(x)), \qquad y = h + \mathrm{FFN}(\mathr
 
 $$P_{\text{block}} = \underbrace{2d^2 + 2\,d\,d_{kv}}_{\text{attention}} + \underbrace{3\,d\,h}_{\text{feed-forward}} + \underbrace{2d}_{\text{norms}}$$
 
-The whole model has $N = L\,P_{\text{block}} + d + Vd$ parameters. Your run:
+The whole model has $N = L\,P_{\text{block}} + d + Vd$ parameters. The 216M run ($d = 1024$, $d_{kv} = 4 \times 64 =
+256$, $h = 2752$, $L = 18$, $V = 16{,}384$):
 
-- per block: $2(384^2) + 2(384^2) + 3(384)(1024) + 768 = 1{,}770{,}240$;
-- all blocks: $N = 8 \times 1{,}770{,}240 + 384 + 8192 \times 384 = 17{,}308{,}032$.
+- per block: $2(1024^2) + 2(1024)(256) + 3(1024)(2752) + 2048 = 11{,}077{,}632$;
+- all blocks: $N = 18 \times 11{,}077{,}632 + 1024 + 16{,}384 \times 1024 = 216{,}175{,}616$.
+
+QK-norm (new runs) adds $2d_h$ per block, 128 at $d_h = 64$. The first run, for comparison: $8 \times 1{,}770{,}240 +
+384 + 8192 \times 384 = 17{,}308{,}032$. In a mixture-of-experts block the feed-forward term becomes
+$E\,(3\,d\,h_e + d)$ for $E$ experts of width $h_e$ and the router, of which a token uses $k\,3\,d\,h_e$: the *active*
+parameters.
 
 **Training compute.** Each token costs about $2N$ operations forward and $4N$ backward:
 
-$$C \approx 6ND = 6 \times 1.73\times10^{7} \times 7.78\times10^{8} = 8.1\times10^{16}\ \text{operations}$$
+$$C \approx 6ND = 6 \times 2.16\times10^{8} \times 1.62\times10^{10} = 2.1\times10^{19}\ \text{operations}$$
 
-At your measured 4,826 tokens per second that is $6 \times 1.73\times10^7 \times 4826 \approx 5\times10^{11}$
-operations per second, or 0.5 TFLOPS. That's a small fraction of what the RTX 3070 Laptop can do (Chapter 10).
+At the measured 5,760 tokens per second that is $6 \times 2.16\times10^8 \times 5760 \approx 7.5\times10^{12}$
+useful operations per second, 7.5 TFLOPS. With activation checkpointing the forward pass runs twice ($8N$ per
+token) and attention adds $16 L \cdot ctx \cdot d$, so the GPU executes about 11.7 TFLOPS: roughly 60-70% of what its
+BF16 units can do at the 55 W clock (Chapter 10). The first run reached 0.5 TFLOPS at 20 W.
 
 ## Optimisation
 
@@ -1761,7 +1928,7 @@ operations per second, or 0.5 TFLOPS. That's a small fraction of what the RTX 30
 
 $$g_t \leftarrow g_t \cdot \min\!\left(1, \frac{c}{\lVert g_t\rVert}\right)$$
 
-**AdamW** with $\beta_1 = 0.9$, $\beta_2 = 0.95$ and weight decay $\lambda = 0.1$:
+**AdamW** with $\beta_1 = 0.9$, $\beta_2 = 0.95$ and weight decay $\lambda$ (0.05 for new runs, 0.1 in the 216M run):
 
 $$m_t = \beta_1 m_{t-1} + (1-\beta_1)g_t, \qquad v_t = \beta_2 v_{t-1} + (1-\beta_2)g_t^2$$
 
@@ -1774,8 +1941,23 @@ step size.
 
 $$\eta(s) = \begin{cases} \eta_{\max}\, s/s_w & s \le s_w \\ \eta_{\max} & s_w < s \le s_d \\ \eta_{\min} + (\eta_{\max}-\eta_{\min})\left(1 - \sqrt{\dfrac{s-s_d}{S-s_d}}\right) & s > s_d \end{cases}$$
 
-Your run: $s_w = 237$, $s_d = 9{,}496$, $S = 11{,}870$, $\eta_{\max} = 1.017\times10^{-3}$ and
-$\eta_{\min} = 1.017\times10^{-4}$.
+The 216M run: $s_w = 1{,}200$, $s_d = 48{,}000$, $S = 60{,}000$, $\eta_{\max} = 4.76\times10^{-4}$ and
+$\eta_{\min} = 4.76\times10^{-5}$ ($\eta_{\min} = 0$ for new WSD runs, and for this one after
+`--resume --min-lr-ratio 0`).
+
+**The timescale of weight decay.** Decoupled decay multiplies every matrix by $1 - \eta\lambda$ per step, so a
+weight forgets its past at the rate of an exponential average with timescale $\tau = 1/(\eta\lambda)$ steps (Wang
+and Aitchison 2024): about 21,000 steps for the 216M run, 35% of it. The doubled learning-rate table comes with
+half the weight decay so that $\eta\lambda$, and with it $\tau$, stays where the published settings put it.
+
+**Weight average (EMA), debiased.** With $m_0 = 0$ and $m_n = d\,m_{n-1} + (1-d)\,w_n$, the average
+$a_n = m_n/(1-d^n)$ weights the snapshots it has seen and nothing else. It can be updated in place as
+$a_n = b_n a_{n-1} + (1-b_n) w_n$ with
+
+$$b_n = \frac{d\,(1-d^{\,n-1})}{1-d^{\,n}},$$
+
+so $b_1 = 0$ (the first update copies the weights) and $b_n \to d$ once $d^n$ is small. Without the correction an
+average started as a copy of the initial weights still holds $d^n$ of them: 74% after 30 updates at $d = 0.990$.
 
 **z-loss.** A penalty on the log of the softmax normaliser $Z_t$ keeps the logits from drifting upwards, which
 prevents loss spikes (PaLM):
@@ -1812,7 +1994,8 @@ $$D' = U + U R^{*}\left(1 - e^{-R/R^{*}}\right), \qquad R^{*} \approx 15.4$$
 **Knowledge capacity.** Allen-Zhu and Li (2024) measured about **2 bits of factual knowledge per parameter** in
 well-trained language models.
 
-- Your 17.3M-parameter model can store at most about 35 million bits, roughly 4 MB of facts.
+- The 216M-parameter model can store at most about 430 million bits, roughly 54 MB of facts (the first, 17.3M run
+  about 4 MB).
 - A 1B-parameter model could store about 250 MB.
 - This is the main reason small models hallucinate: they can't *hold* many facts, however well they write.
 
@@ -1939,11 +2122,14 @@ repeat by chance, so a high share signals copied text.
 | Date | Reading |
 |----------------------|------------------------------------------------------------------------------|
 | 26 September | Enforced power limit 55 W, against the 80 W default |
-| 29 September, during your run | The GPU sat in performance state **P8 at 210 MHz** at 100% use, with a 20 W enforced power limit |
+| 29 September, during the first run | The GPU sat in performance state **P8 at 210 MHz** at 100% use, with a 20 W enforced power limit |
+| October to November, the 216M run | At its 55 W cap the GPU runs at about 0.3–0.8 GHz, with bursts at about 85 W and 1.2–1.4 GHz; one step takes 41–49 s throttled and 26–29 s at boost (5 November measurements) |
 
 - **Things checked:** Turbo mode in Armoury Crate didn't change the limit. The NVIDIA Platform Controllers and
   Framework (NVPCF) driver, which handles Dynamic Boost, is installed and working.
-- **Effect on your run:** it trains at about 4,800 tokens per second, which is 0.5 TFLOPS of useful work.
+- **Effect on the first run:** it trained at about 4,800 tokens per second, which is 0.5 TFLOPS of useful work.
+  (The 216M run, at 55 W, does about 7.5 TFLOPS of useful work, roughly 60–70% of what the GPU can execute at that
+  clock; the remaining lever is the power profile, which is your choice.)
   - At full power the same run is estimated to be 5 to 6 times faster: about 8 hours instead of 45.
   - This is an estimate; measure it after a fix.
 
@@ -2008,14 +2194,16 @@ All figures use $C = 6ND$ and $N_{\text{opt}} \approx \sqrt{C/120}$ (20 tokens p
 
 | Machine | Useful speed | Sensible model | Notes |
 |--------------------|--------------------|------------------------|------------------------------------|
-| This laptop, throttled (20 W, P8) | 0.5 TFLOPS (measured) | 17M on 0.8B tokens: 45 h | The current run |
-| This laptop at full power | About 3–8 TFLOPS (estimated) | 100–200M on 2–4B tokens in a week | 8 GB of GPU memory limits the model to a few hundred million parameters |
-| 1 × H100 for $100 | About 250 TFLOPS (estimated) | About 450M on 9B tokens | Needs at least 2.3B *unique* tokens (4 passes). Your run would take under half an hour there |
+| This laptop, throttled (20 W, P8, September) | 0.5 TFLOPS (measured) | 17M on 0.8B tokens: 45 h | The first run |
+| This laptop at 55 W (since October) | About 7.5 TFLOPS of useful work (measured: 5,800 tokens/s at 216M) | 216M on 16.2B tokens: about 32 days | The current run. 8 GB of GPU memory limits the model to about 216M parameters |
+| This laptop at full power (about 85 W) | About 1.2–1.4 times the 55 W speed (measured in short bursts) | 216M on 16B tokens in about 3.5 weeks | The 55 W profile is your setting |
+| 1 × H100 for $100 | About 250 TFLOPS (estimated) | About 450M on 9B tokens | Needs at least 2.3B *unique* tokens (4 passes). The 216M run ($2.1\times10^{19}$ operations) would take about a day there |
 | 8 × H100, a day | About 3,000 TFLOPS | 1B on 20B tokens in about 11 h | Needs multi-GPU training (DDP), not yet in tiny_gpt.py |
-| Mac Studio M5 Ultra 256 GB | About 20–40 TFLOPS with PyTorch MPS (assumed) | 0.5–1B from scratch in a month | Compute-bound: memory would hold about 8B parameters, but training one would take years |
+| Mac Studio M5 Ultra 96 GB | About 20–40 TFLOPS with PyTorch MPS (assumed) | 0.5–1.5B from scratch in weeks to months | Compute-bound: the planner's ~54 GiB budget holds a 3.2B model with activation checkpointing, but training one well would take far longer |
 
-**Right now, data limits you more than hardware.** bio_v2 has 194.5M unique training tokens, which supports about 40M
-parameters at 4 passes. Keyword-filtered FineWeb-Edu and peS2o can add billions (Chapter 4).
+**Right now, on the laptop, memory limits you more than data.** bio_all has 4.08B unique training tokens, which
+support about 817M parameters at 4 passes; the 8 GB GPU stops at 216M. On the Mac the balance turns: a 1.45B model
+wants 29B tokens, about 7B unique, so the data has to grow 2-3 times first (Chapter 4).
 
 ## Renting an H100 (Lambda Cloud)
 
@@ -2041,11 +2229,11 @@ operations, about 6 hours ($20).
 
 **Steps with tiny_gpt.py:**
 
-1. Build the dataset at home. Only the token files are needed: bio_v2 is about 400 MB.
+1. Build the dataset at home. Only the token files are needed: bio_all's are about 8 GB.
 2. Rent one H100 with Linux, where `torch.compile` works out of the box (on Windows it needs the `triton-windows`
    package).
 3. Upload the dataset and scripts.
-4. Run `python tiny_gpt.py --dataset datasets\bio_v3 --time-budget-hours 25`.
+4. Run `python tiny_gpt.py --dataset datasets/bio_all --time-budget-hours 25`.
 5. Download the best checkpoint and experiments.csv.
 6. **Terminate the instance.**
 
@@ -2079,7 +2267,8 @@ It depends on the job.
 
 - 1B from scratch is an excellent learning project and a useful domain autocomplete.
 - For an assistant you'd rely on, adapt an open model and add search over your papers and tools. That model can be
-  anything from 1–8B for fine-tuning up to a 235–355B mixture of experts for running on the Mac.
+  anything from 1–8B for fine-tuning up to a 70B dense or about 120B mixture-of-experts model at 4-bit for running
+  on the 96 GB Mac; larger ones run on rented GPUs.
 - You don't need to train 10B or 100B models yourself: a 70B model from scratch costs millions of pounds of compute.
 
 ## Continued pre-training of an open model: do the weights match?
@@ -2088,7 +2277,7 @@ They don't have to. Continued pre-training uses the **open model's own architect
 your text, and its weights keep their shapes.
 
 - **Shapes differ from tinyGPT.** Llama 3.2 1B has width 2,048, 16 layers, 32 query heads, 8 key/value heads and a
-  128,256-token vocabulary. tinyGPT's current weights (width 384, vocabulary 8,192) can't be merged into it.
+  128,256-token vocabulary. tinyGPT's current weights (width 1,024, 16,384 SuperBPE pieces) can't be merged into it.
 - **The design family is the same:** RoPE, RMSNorm, SwiGLU and GQA. A converter could load such a model into
   tiny_gpt.py's code. It would need to:
   - use the open model's tokenizer instead of yours;
@@ -2106,17 +2295,18 @@ your text, and its weights keep their shapes.
   - LoRA or QLoRA of a 1B model fits in the laptop's 8 GB.
 - **Cost:** about $6\times10^{18}$ operations per billion tokens at 1B parameters, or about 6 H100-hours (about $20).
 
-## The Mac Studio plan (from GUIDE.md)
+## The Mac Studio plan
 
-This section keeps the plan written on 27 September for a Mac Studio M5 Ultra with 256 GB. Numbers marked
-*(assumed)* must be re-measured on the real machine, and model names re-checked in February 2027.
+This section keeps the plan written on 27 September, updated on 5 November for the machine actually ordered: a Mac
+Studio M5 Ultra with **96 GB** of unified memory (the September plan assumed 256 GB). Numbers marked *(assumed)* must
+be re-measured on the real machine, and model names re-checked in February 2027.
 
 ### The best setup
 
 The best setup combines four parts:
 
-- **A model:** the strongest open mixture-of-experts model that fits, about 235–355B parameters in total with
-  20–35B active, at 4-bit.
+- **A model:** the strongest open model that fits in about 72 GB at 4-bit: a 70B dense model or a mixture of
+  experts of about 120B in total (5–20B active). Larger mixtures of experts (235B and up) run on rented GPUs.
 - **Search:** an index over your papers.
 - **Tools:** tools that run R and Python.
 - **A fine-tune:** your own LoRA for editing and your conventions.
@@ -2134,35 +2324,38 @@ The best setup combines four parts:
 - Fine-tuning at that scale changes *how the model writes*, not *how well it reasons*.
 - Facts learnt by fine-tuning are recalled unreliably, so they belong in the search index.
 
-### What fits in 256 GB
+### What fits in 96 GB
 
-At 4-bit a parameter takes about 0.56 bytes. macOS lets the GPU use about 75% of memory by default; raise it with
-`sudo sysctl iogpu.wired_limit_mb=235000`.
+At 4-bit a parameter takes about 0.56 bytes. macOS lets the GPU use about 75% of memory by default, about 72 GB of
+96; `sudo sysctl iogpu.wired_limit_mb=88000` raises it to at most about 88 GB, leaving the rest to macOS (the setting
+is lost at a restart).
 
 | Model | Memory at 4-bit | Runs? | QLoRA training? |
 |----------------------------|------------------|------------------------------|------------------------|
-| 70B dense | 39 GB | Yes | Yes |
-| 120B MoE (5B active) | 67 GB | Yes, very fast | Yes |
-| 235B MoE (22B active) | 132 GB | Yes, with room for long papers | Yes (about 170 GB) |
-| 355B MoE (32B active) | 199 GB | Yes, about 35 GB left for context | No (about 238 GB) |
-| 400B MoE | 224 GB | Only just, short context | No |
-| 671B MoE | 376 GB | No | No |
+| 70B dense | 39 GB | Yes | Yes (about 50 GB) |
+| 120B MoE (5B active) | 67 GB | Yes, very fast, with little room for long context | Only with the raised limit, short sequences (about 86 GB) |
+| 235B MoE and larger | 132 GB and more | No: rented GPUs only | No: rented GPUs only |
 
 **Speed:** it depends on the *active* parameters. Words per second ≈ memory bandwidth (about 800 GB/s, assumed) ÷
-bytes read per word. A 235B MoE therefore writes about 25–35 words per second, faster than a 70B dense model (12–15).
+bytes read per word. The 120B MoE, reading about 3 GB per word, therefore writes several times faster than a 70B
+dense model (12–15 words per second).
 
-**512 GB would matter** only for running 400B+ models or QLoRA of 355B. It doesn't matter for tinyGPT-style training
-from scratch, which is limited by compute.
+**More memory (256 or 512 GB)** would matter only for running 235B+ models locally or for QLoRA of them. It doesn't
+matter for tinyGPT-style training from scratch, which is limited by compute: the planner's budget on the 96 GB machine
+(75% of Metal's recommended working set, about 54 GiB) already holds, with Muon and the 16,384-piece vocabulary,
+the 1.45B ladder shape (d 2,048, ctx 2,048) without checkpointing at about 25 GiB, the 2.25B shape (d 2,560, ctx
+4,096) with checkpointing at about 32 GiB, and the 3.2B shape (d 3,072, ctx 4,096) with checkpointing at about 45
+GiB. The first-day checklist for training on the Mac is in HOW_TO_RUN.md (Mac Studio).
 
 **Candidates in September 2026** (memory at 4-bit):
 
 | Model | Memory | Fits? |
 |--------------------------------------------------|--------------------|------------------------------|
-| GLM-5.3-Flash (320B/18B) | 179 GB | Fits |
-| Qwen3.8-Flash-Next (176B/6B) | 99 GB | Fits |
-| MiMo-V2.6-Flash (310B/15B) | 174 GB | Fits |
-| DeepSeek-V4-Flash (284B/13B) | 159 GB | Fits |
-| DeepSeek-V4.1-Flash (552B/16B) | 309 GB | Only at about 3-bit |
+| GLM-5.3-Flash (320B/18B) | 179 GB | No: rented GPUs |
+| Qwen3.8-Flash-Next (176B/6B) | 99 GB | Only at about 3-bit (about 75 GB), with the raised limit |
+| MiMo-V2.6-Flash (310B/15B) | 174 GB | No: rented GPUs |
+| DeepSeek-V4-Flash (284B/13B) | 159 GB | No: rented GPUs |
+| DeepSeek-V4.1-Flash (552B/16B) | 309 GB | No: rented GPUs |
 
 ### LoRA training time on the Mac
 
@@ -2172,7 +2365,7 @@ Assuming about 30 TFLOPS (assumed) and LoRA compute of about $4 \times \text{act
 |----------------------------------|---------------------------------|---------------------------------|
 | 8B dense | About 9 h | About 2 days |
 | 70B dense | About 3 days | About 17 days |
-| 235B MoE (22B active) | About 2–3 days | About 2–3 weeks |
+| 235B MoE (22B active), on rented GPUs only | About 2–3 days | About 2–3 weeks |
 
 Use the time for several shorter experiments, not one long run: many passes over the same data make a model
 memorise.
@@ -2211,10 +2404,12 @@ memorise.
 **Phase B: the Mac's first week.**
 
 1. Install Homebrew, uv, Python 3.12, mlx-lm, LM Studio and R.
-2. Raise the GPU memory limit.
+2. Raise the GPU memory limit (`sudo sysctl iogpu.wired_limit_mb=88000` at most).
 3. Download the shortlisted models in MLX 4-bit.
 4. Measure speed and memory, and run the evaluation set.
 5. Benchmark LoRA speed and redo the time table.
+6. Run tinyGPT's first-day checklist (HOW_TO_RUN.md, Mac Studio): the 216M kernel benchmark, the plan with its
+   attention-memory probe, `--compile on` against `off`, and `peak_mem_gib` against the estimate.
 
 **Phase C: useful without training (weeks 2–4).**
 
@@ -2235,7 +2430,8 @@ memorise.
    ```
 
 2. Read the curves and the samples.
-3. Run the main job on the chosen MoE, on the Mac or on rented GPUs.
+3. Run the main job on the chosen model: on the Mac up to a 70B dense model (QLoRA), a larger mixture of experts
+   on rented GPUs.
 4. Keep the fine-tune only if the evaluation improves.
 5. Retrain every few months with your own corrections, the most valuable training data you will ever have.
 
@@ -2290,7 +2486,7 @@ whether to downgrade. The log should make the decision.
 Status of the technique catalogue (the former *tinyGPT_advanced_techniques.docx*). **Gain** is the expected effect for
 a 5–50M model: S (a few percent), M (noticeable) or L (large). **Effort:** S is hours, M days, L weeks.
 
-## Done on 29 September
+## Done
 
 | Technique | Where |
 |---------------------------------------------|-------------------------------------------------------|
@@ -2302,20 +2498,30 @@ a 5–50M model: S (a few percent), M (noticeable) or L (large). **Effort:** S i
 | Permanent experiments table | experiments.csv |
 | Muon optimizer (1 October) | tiny_gpt.py `--optimizer muon` |
 | Chunked cross-entropy and activation checkpointing (8 October) | tiny_gpt.py, finetune.py; chosen by the planner |
+| Standard benchmark suite (11 October) | benchmark.py (Section 6.5) |
+| Planner rules: context by width, compute-based batch, learning rate following the batch, decay to 0, RoPE base by context (5 November) | tiny_gpt.py plan_run (Section 3.4) |
+| Learning-rate sweep: table doubled, weight decay 0.05 (5 November) | heuristic_lr; results/ab_2026-11-05.md |
+| QK-norm, on for new runs (5 November) | `--qk-norm` |
+| Weight averaging (EMA), debiased, opt-in (5 November) | `--ema` |
+| Document masking, opt-in (5 November) | `--doc-mask` |
+| Mixture of experts, opt-in (5 November) | `--experts` (Section 3.5) |
+| Mac / MPS readiness: budget and hard cap, attention-memory probe, fused AdamW, MPS random state (5 November) | tiny_gpt.py; HOW_TO_RUN.md, Mac Studio |
+| Key/value cache for generation (5 November) | tiny_gpt.py, finetune.py, benchmark.py |
 | Earlier: AdamW, WSD, clipping, BF16, RoPE, RMSNorm, SwiGLU, GQA, tied embeddings, data-aware planner, MinHash deduplication, document split, leakage audit, fixed validation windows, calibration, Wilson intervals | tiny_gpt.py, data_prep.py |
 
 ## Recommended next, in order
 
 | Technique | What it does | Gain | Effort | Where |
 |----------------------|----------------------------------------------------|--------|--------|----------|
-| Learning-rate sweep | Five log-spaced rates, 500-step runs. The heuristic can be off by 2–3 times | M | S | Laptop |
+| Muon against AdamW | The same shape both ways, 500-step runs at 2–3 rates; the 216M run started with Muon without it | M | S | Laptop |
+| Check the doubled learning rate at real size | Stop the first long run on the new table at 2,000 steps if it trails an old-table run | M | S | Laptop |
+| SuperBPE against BPE at this size | The only test (20.5M) favoured BPE; bio_all uses SuperBPE | M | M | Laptop |
 | Your own scaling law | Fit $L(N,D)$ to 6–10 short runs to find the best size for *your* data | L | M | Laptop |
-| QK-norm | Normalise queries and keys; allows higher learning rates stably | S | S | Laptop |
-| Weight averaging (EMA) | Average recent weights; often a free drop in loss | S | S | Laptop |
-| Mixture grid | Short runs over `--mix` weights, judged by per-source bits per byte | M | S | Laptop |
+| EMA on a long run | Its stable-phase gain is untested; 500 steps could not show it | S | S | Laptop |
+| Mixture grid | Short runs over `--mix` and `--mix-alpha`, judged by per-source bits per byte | M | S | Laptop |
 | Several seeds | Measure run-to-run noise before trusting a gain | M | S | Laptop |
-| Standard benchmark suite | Section 6.5 | M | M | Laptop |
-| Document masking | Attention never crosses a document boundary inside a window | S | M | Laptop |
+| Document masking at ctx 2,048 and above | Measured only at ctx 512 (noise) | S | S | Mac |
+| Mixture of experts against dense | At a size the Mac trains, with 500+ steps; 2.2–2.3x slower per step on the laptop | M | M | Mac |
 | Multi-GPU (DDP) | Needed for 8-GPU cloud runs | L | M | Cloud |
 | Continued pre-training of an open model | Section 11.5 | L | M | Mac/cloud |
 | Distillation from an open teacher | Learn a larger model's full distributions, or its written explanations | L | M | Mac |
@@ -2325,7 +2531,7 @@ a 5–50M model: S (a few percent), M (noticeable) or L (large). **Effort:** S i
 
 - **Optimisers:** µP (learning rates that transfer across widths), schedule-free AdamW and critical-batch-size
   estimation (Muon is done).
-- **Architecture:** multi-token prediction, RoPE context extension and mixture of experts.
+- **Architecture:** multi-token prediction and RoPE context extension (mixture of experts is done, opt-in).
 - **Data:** quality classifiers, suffix-array deduplication and synthetic textbook data.
 - **Efficiency:** 8-bit optimisers and FlashAttention kernels (`torch.compile`, chunked cross-entropy and
   activation checkpointing are done).
@@ -2339,7 +2545,7 @@ a 5–50M model: S (a few percent), M (noticeable) or L (large). **Effort:** S i
 - label smoothing;
 - dropout without heavy repetition;
 - treating 20 tokens per parameter as a law;
-- much larger vocabularies (each extra 8,192 tokens costs 3.1M parameters at width 384).
+- much larger vocabularies (each extra 16,384 tokens costs 16.8M parameters at width 1,024).
 
 # Tools, safety and naming
 
@@ -2368,18 +2574,20 @@ a 5–50M model: S (a few percent), M (noticeable) or L (large). **Effort:** S i
   - New names are required; `--overwrite` is always explicit.
   - Saves are atomic, and flushed to disk before the rename.
   - Lock files allow one trainer per run (`<name>.train.lock`) and one build per dataset folder (`_build.lock`).
-  - The earlier scripts are kept in `backup_v3_2026-09-29`.
   - Dataset folders are never reused with different settings.
 - **Data is never executed.** Code files are read as text. Spreadsheets and Word files are parsed as XML without
   macros.
-- **One GPU job at a time.** gpu_check.py, finetune.py and posttrain.py refuse the GPU while it is busy, unless you
-  pass `--force`; run_pipeline.py refuses plan, train, resume, continue and posttrain.
+- **One GPU job at a time.** gpu_check.py, finetune.py, posttrain.py, benchmark.py and calibrate_probes.py refuse
+  the GPU while another job is training (a live `<name>.train.lock`, or nvidia-smi showing the GPU in use; on a Mac
+  the lock files alone), unless you pass `--force`; run_pipeline.py refuses plan, train, resume, continue and
+  posttrain.
 - **No user name in shared files.** The dashboard, the GitHub copy of experiments.csv and an export's `config.json`
   show your home folder as `~`.
 - **No installs.** Every package in requirements.txt is already installed. On a new machine:
   `python -m pip install -r requirements.txt`, with PyTorch installed first from pytorch.org for the right CUDA
   version.
-- **Tests.** `python -m unittest test_tiny_gpt.py` runs about 30 tests on the CPU in a few minutes.
+- **Tests.** `python -m unittest test_tiny_gpt` runs the fast set (117 of the 125 tests) on the CPU in about 4-5
+  minutes; with `TINYGPT_SLOW_TESTS=1` the six integration tests run too (about 15-20 minutes in all).
 
 ## A name for the model
 
@@ -2424,6 +2632,16 @@ file names. Old checkpoints keep working, because the loader recognises them by 
 | RLHF, DPO | Training on preferences, with or without a reward model |
 | GRPO | RL that standardises rewards within a group of attempts |
 | MoE | Mixture of experts: only some weights run for each token |
+| expert, router | In an MoE block, one of several small feed-forward networks, and the layer that scores them for each token |
+| top-k routing | Sending each token to the $k$ best-scored experts (tinyGPT: 2) |
+| load balancing | Keeping the experts evenly used: a loss term (Switch) or a routing bias (DeepSeek-V3) |
+| active parameters | The parameters one token's forward pass uses; equal to all parameters in a dense model |
+| QK-norm | RMSNorm applied to queries and keys before attention, for stability at high learning rates |
+| EMA | Exponential moving average of the weights over training steps |
+| document mask | An attention mask that stops tokens attending across the boundary between two documents in one window |
+| KV cache | The stored keys and values of earlier tokens, so generation computes only the newest token |
+| activation checkpointing | Recomputing each block in the backward pass instead of storing its activations |
+| MPS, unified memory | Apple's GPU backend for PyTorch; the memory the Mac's CPU and GPU share |
 | distillation | Training a small model to imitate a big one |
 | quantisation | Storing weights in fewer bits |
 | LoRA, QLoRA | Low-rank fine-tuning (on a 4-bit model) |

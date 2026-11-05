@@ -10,24 +10,28 @@ free memory (see --plan).
 Workflow
 --------
 1. Build a dataset once (text cleaning, keyword filters, dedup, split, tokenizer):
-       python data_prep.py --out datasets\bio_v1 --md-dir %USERPROFILE%\ai_training_data ^
-           --wiki-dir %USERPROFILE%\ai_training_data\wikipedia --wiki-max-docs 100000 ^
-           --include-keywords keywords.txt --keyword-min-distinct 3
+       python run_pipeline.py build        (the data_prep.py command it runs: HOW_TO_RUN.md, Step 3)
 2. Look at the automatic plan, then train (the time budget measures the real
    speed on this device and picks the largest model the data AND the time allow):
-       python tiny_gpt.py --dataset datasets\bio_v1 --plan --time-budget-hours 8
-       python tiny_gpt.py --dataset datasets\bio_v1 --name bio_v1 --time-budget-hours 8
-       python tiny_gpt.py --dataset datasets\bio_v1 --name bio_small --d-model 256 --layers 6 --steps 5000
+       python tiny_gpt.py --dataset datasets\bio_all --plan --time-budget-hours 48
+       python tiny_gpt.py --dataset datasets\bio_all --name bio_48h --time-budget-hours 48
+       python tiny_gpt.py --dataset datasets\bio_all --name bio_small --d-model 256 --layers 6 --steps 5000
 3. Resume after Ctrl+C (same name; the dataset path is stored in the checkpoint):
-       python tiny_gpt.py --name bio_v1 --resume
-       python tiny_gpt.py --name bio_v1 --resume --steps 30000     # extend the run
-4. Generate:
-       python tiny_gpt.py --name bio_v1 --generate "Genetic drift is" --length 200
-       python tiny_gpt.py --checkpoint tiny_gpt_bpe_best.pt --generate "Genetic drift"   (checkpoints from the original script work too)
+       python tiny_gpt.py --name tinyGPT_muon --resume
+       python tiny_gpt.py --name tinyGPT_muon --resume --steps 70000     # extend the run
+4. Generate (the default --name is tinyGPT; give the run's name or a --checkpoint):
+       python tiny_gpt.py --name tinyGPT_muon --generate "Genetic drift is" --length 200
+       python tiny_gpt.py --checkpoint tinyGPT_muon_best.pt --generate "Genetic drift"
 
 Output: <name>.pt (training checkpoint), <name>_best.pt (inference-only, best
 validation loss), <name>_metrics.jsonl, and log.txt (everything printed to the
 terminal, including errors, is appended to it).
+
+Defaults of a new run (a resumed run keeps what its checkpoint recorded):
+AdamW (--optimizer muon for Muon), QK-norm on, a WSD schedule decaying to 0,
+the planner's learning-rate table (heuristic_lr) with weight decay 0.05, no
+weight average (--ema on), no document mask (--doc-mask on), and a dense
+SwiGLU in every block (--experts N for a mixture of experts).
 
 Portability: CUDA (BF16/FP16 autocast, fused AdamW), Apple MPS (BF16 autocast
 and fused AdamW when this PyTorch supports them; the run caps itself at Metal's
@@ -2751,8 +2755,9 @@ def estimate_train_bytes(cfg, micro_batch, amp=True, checkpointing=False, loss_c
 
 def memory_options(checkpointing="auto", loss_chunk=None):
     """(activation checkpointing, loss chunk tokens) choices allowed by the
-    command line, cheapest first: the chunked loss costs a few per cent more
-    compute, activation checkpointing about a third."""
+    command line, cheapest first: the chunked loss costs 1-8 % of step time
+    (nothing measurable when compiled), activation checkpointing 21-32 %
+    (measured on the RTX 3070 at the 216M shape)."""
     ck = [False, True] if checkpointing == "auto" else [checkpointing == "on"]
     lc = [0, LOSS_CHUNK_TOKENS] if loss_chunk is None else [loss_chunk]
     return sorted(((c, l) for c in ck for l in lc), key=lambda o: (o[0], o[1] != 0))
@@ -3425,12 +3430,17 @@ def parse_args(argv=None):
     g.add_argument("--trust-checkpoint", action="store_true",
                    help="allow full unpickling of a checkpoint that fails the safe loader (only your own files)")
     g = p.add_argument_group("model (unset = planned from data)")
-    g.add_argument("--d-model", type=int)
-    g.add_argument("--layers", type=int)
-    g.add_argument("--heads", type=int)
-    g.add_argument("--kv-heads", type=int)
-    g.add_argument("--ctx", type=int)
-    g.add_argument("--ffn-hidden", type=int)
+    g.add_argument("--d-model", type=int, help="model width (default: the largest ladder shape the data supports)")
+    g.add_argument("--layers", type=int, help="transformer blocks (default: d_model / 64 + 2, between 4 and 32)")
+    g.add_argument("--heads", type=int, help="query heads (default: heads of width 32, 64 or 128 by d_model)")
+    g.add_argument("--kv-heads", type=int,
+                   help="key/value heads (default: heads / 4 from 8 heads on, grouped-query attention); equal to "
+                        "--heads gives ordinary multi-head attention, about 10 %% slower for about 10 %% more "
+                        "parameters")
+    g.add_argument("--ctx", type=int,
+                   help="context length in tokens (default by width: 256 up to d 192, 512 up to d 512, 1024 up to "
+                        "d 1024, 2048 up to d 2048, 4096 above)")
+    g.add_argument("--ffn-hidden", type=int, help="SwiGLU hidden width (default: 8 d_model / 3 rounded up to 64)")
     g.add_argument("--rope-base", type=float, help="default: 10,000 up to ctx 2048, then 10,000 x (ctx/2048)^2")
     g.add_argument("--tie-embeddings", choices=("on", "off"), default="on",
                    help="share the input embedding with the output layer (default on, as Llama 3.2, Qwen2.5 and "
@@ -3439,7 +3449,7 @@ def parse_args(argv=None):
                    help="RMSNorm over each query and key head before RoPE (QK-norm, as in Gemma 3, Qwen3 and OLMo 2; "
                         "keeps high learning rates stable): default on for new runs; a checkpoint keeps its own "
                         "setting on --resume and --init-from")
-    g.add_argument("--dropout", type=float)
+    g.add_argument("--dropout", type=float, help="default: 0 up to 4 epochs, else 0.1")
     g = p.add_argument_group("mixture of experts (default: none, a dense SwiGLU in every block)")
     g.add_argument("--experts", type=int, default=0,
                    help="replace the SwiGLU of every block (or every --moe-every-th) by this many smaller experts "
@@ -3488,7 +3498,9 @@ def parse_args(argv=None):
     g = p.add_argument_group("batch and optimizer")
     g.add_argument("--batch-size", type=int, help="sequences per micro-batch")
     g.add_argument("--grad-accum", type=int, help="micro-batches per optimizer step")
-    g.add_argument("--tokens-per-step", type=int)
+    g.add_argument("--tokens-per-step", type=int,
+                   help="tokens per optimizer step (default: half of DeepSeek's B_opt = 0.292 C^0.327 for C = 6 N D, "
+                        "a power of two between 16,384 and 2,097,152)")
     g.add_argument("--lr", type=float, help="peak learning rate")
     g.add_argument("--lr-scale", type=float, default=1.0,
                    help="multiply the planner's heuristic peak learning rate by this (for LR sweeps; no effect with "
@@ -3496,7 +3508,8 @@ def parse_args(argv=None):
     g.add_argument("--min-lr-ratio", type=float,
                    help="learning rate at the end of the run as a share of the peak (default: 0 for wsd, 0.1 for "
                         "cosine); on --resume it may still be changed before the decay phase begins")
-    g.add_argument("--warmup-steps", type=int)
+    g.add_argument("--warmup-steps", type=int,
+                   help="default: 2 %% of the steps, between 50 and 2,000 and at most a tenth of the steps")
     g.add_argument("--schedule", choices=("wsd", "cosine"), default="wsd")
     g.add_argument("--decay-frac", type=float, default=0.2, help="WSD: share of steps in the final decay")
     g.add_argument("--decay-shape", choices=("1-sqrt", "cosine", "linear"), default="1-sqrt")
@@ -3509,8 +3522,8 @@ def parse_args(argv=None):
     g.add_argument("--grad-clip", type=float, default=1.0, help="clip the gradient norm to this (0 = off)")
     g.add_argument("--activation-checkpointing", choices=("auto", "on", "off"), default="auto",
                    help="recompute each block in the backward pass instead of storing its activations: much less "
-                        "memory, about a third more compute (auto: only when the model would not otherwise fit "
-                        "with a micro-batch of 4); may be changed on --resume")
+                        "memory, 21-32 %% more step time (auto: only when the model would not otherwise fit with a "
+                        "micro-batch of about 2,048 tokens, 2 sequences at ctx 1024); may be changed on --resume")
     g.add_argument("--loss-chunk-tokens", type=int,
                    help="compute the output layer and loss this many tokens at a time, so the full tokens x "
                         "vocabulary table never exists (0 = off; default: auto, %d when it is needed to fit); may be "
@@ -3570,11 +3583,18 @@ def parse_args(argv=None):
                         "code) or a price in pence per kWh, e.g. 24.5")
     g.add_argument("--region", default="H",
                    help="Octopus region letter of your supply (A to P, as on your bill; H = Southern Electric)")
-    g.add_argument("--device", choices=("auto", "cuda", "mps", "cpu"), default="auto")
-    g.add_argument("--precision", choices=("auto", "bf16", "fp16", "fp32"), default="auto")
-    g.add_argument("--compile", nargs="?", const="on", choices=("auto", "on", "off"), default="auto")
-    g.add_argument("--no-compile", dest="compile", action="store_const", const="off")
-    g.add_argument("--attn", choices=("auto", "gqa_native", "repeat_kv"), default="auto")
+    g.add_argument("--device", choices=("auto", "cuda", "mps", "cpu"), default="auto",
+                   help="auto: CUDA, else Apple MPS, else the CPU")
+    g.add_argument("--precision", choices=("auto", "bf16", "fp16", "fp32"), default="auto",
+                   help="auto: BF16 autocast on CUDA (FP16 with gradient scaling on a GPU without BF16) and on MPS "
+                        "where this PyTorch supports it, FP32 on the CPU")
+    g.add_argument("--compile", nargs="?", const="on", choices=("auto", "on", "off"), default="auto",
+                   help="torch.compile (auto: on CUDA when Triton is installed, about 1.45x faster; on MPS only with "
+                        "--compile on, falling back to eager when the graph fails)")
+    g.add_argument("--no-compile", dest="compile", action="store_const", const="off", help="same as --compile off")
+    g.add_argument("--attn", choices=("auto", "gqa_native", "repeat_kv"), default="auto",
+                   help="grouped-query attention path (auto: on CUDA the faster of the two, timed once per head shape; "
+                        "repeat_kv elsewhere)")
     g.add_argument("--threads", type=int, help="CPU threads for PyTorch")
     g.add_argument("--suppress", action="store_true", help=argparse.SUPPRESS)  # old script's option: accepted, no effect
     g = p.add_argument_group("generation")

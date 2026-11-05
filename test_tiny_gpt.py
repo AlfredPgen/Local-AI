@@ -35,7 +35,7 @@ PY = sys.executable
 # the integration tests (child training processes, minutes each) are opt-in, so everyday edits get a fast suite;
 # they launch real processes on purpose (Ctrl+C, the run lock and the fault injection below need them)
 SLOW = unittest.skipUnless(os.environ.get("TINYGPT_SLOW_TESTS"),
-                           "integration test: set TINYGPT_SLOW_TESTS=1 to run it (the full suite takes 8-14 min)")
+                           "integration test: set TINYGPT_SLOW_TESTS=1 to run it (the full suite takes about 15-20 min)")
 PATCHED_RUN = r'''
 import gc
 import signal

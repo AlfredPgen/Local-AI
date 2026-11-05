@@ -14,7 +14,6 @@ experiments.csv.*
 *_benchmark_*.csv
 compare_*.csv
 benchmarks/
-backup_v3_2026-09-29/
 tinyGPT_advanced_techniques.docx
 
 # regenerable

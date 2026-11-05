@@ -1,6 +1,6 @@
 # tinyGPT: to do
 
-Last updated 27 October 2026.
+Last updated 5 November 2026.
 
 ## Data
 
@@ -10,8 +10,11 @@ Last updated 27 October 2026.
 - [ ] **PMC by keywords:** `python download_pmc.py --out $HOME\ai_training_data\pmc --keywords keywords.txt
       --max-papers 300000` (harvest about 13 h once; best overnight UK time, as NCBI asks).
 
-- [ ] **Rebuild the dataset.** `datasets\` is empty (bio_all is gone). Rebuild with `python run_pipeline.py build`
-      (about 2 h) once the downloads below have added more text. It picks up the 22,650-term `keywords.txt`.
+- [ ] **Rebuild the dataset** once the downloads below have added text: `datasets\bio_all` (built 11 October,
+      4.08B training tokens, SuperBPE 16,384) is what tinyGPT_muon trains on. A rebuild (about 3 h) picks up the
+      22,650-term `keywords.txt`; for this model it must keep its tokenizer and split
+      (`python run_pipeline.py continue` does: `--tokenizer-from tinyGPT_muon_best.pt --keep-split-from
+      datasets\bio_all`), otherwise the vocabulary rule gives 32,768 pieces and needs a fresh model.
 - [ ] **arXiv download** is running (21 subject areas, `--wait 8-12`). Rerun the same command to continue;
       add `--update` for new papers.
 - [ ] **bioRxiv and medRxiv** downloads are running. After the 27 October keyword update, rerun each with
@@ -31,39 +34,51 @@ Last updated 27 October 2026.
 - [ ] **Code data** (planned): Stack-Edu (Python, R) first, then The Stack v2 subsets, Bioconductor/CRAN,
       nf-core/Snakemake, statistical-genetics tools, Stack Exchange dumps. Target about 5-10% of training tokens,
       into the `codes` folder; keep each file's licence. A downloader script is still to be written.
-- [ ] **Tokenizer sample (after the current SuperBPE build finishes):** draw it uniformly from all training text in
-      pieces of about 4,000 characters, with no per-source weights (`--tokenizer-weights` no longer needed). Today it
-      samples whole documents, so a source of a few long documents can drop out entirely: in the 2026-10-11 SuperBPE
-      build all 94 books (and the slides) were missing from the tokenizer sample (about a 37% chance with 84 books).
-- [ ] **Train/validation split per source:** every source with 2+ documents gets at least one validation document
-      (slides and synthetic had none); sources of a few large documents (books) may put whole large documents in
-      validation (today a book above 25% of the source's validation budget is forced into training); report.md
-      shows each source's validation share against its target and warns when a source has none.
-- [ ] **Protect equations from boilerplate removal** in `data_prep.py`: a line that looks like maths (`$...$`,
-      `\begin{equation}`, `\frac` and similar) should never count as boilerplate. Today a standard equation on its
-      own line that appears in 20+ documents of a source is removed from all of them.
+- [x] **Tokenizer sample (5 November):** drawn in 4,000-character windows from all training text, so every source
+      takes part in proportion (in the 2026-10-11 SuperBPE build all 89 books and the slides were missing from the
+      sample). Takes effect at the next build; bio_all keeps its tokenizer.
+- [ ] **Train/validation split per source:** report.md now warns when a source of 2+ documents has no validation
+      document (slides and synthetic had none); the split rule itself is unchanged (a 1-2 document source cannot
+      have a meaningful validation loss). Still open: sources of a few large documents (books), where a book above
+      25% of the source's validation budget is forced into training.
+- [x] **Protect equations from boilerplate removal (5 November):** lines with `$$`, `\begin{` or `\end{` and
+      headings followed by a paragraph are never boilerplate. Takes effect at the next build.
 - [ ] **Licences for commercial use:** if a model might ever be sold, train it only on permissively licensed text
       (arXiv's default licence, CC BY-NC PMC articles, SciQ, YouTube transcripts and many bioRxiv preprints are
       not). The downloaders record each document's licence.
 
 ## Training
 
-- [ ] **SuperBPE tokenizer** on the rebuilt dataset: set `SUPERBPE = True` in `run_pipeline.py` (or
-      `data_prep.py --superbpe`). Compare against ordinary BPE with `compare_models.py` on bits per byte (not loss
-      per token, since the tokenizers differ). The small 2026-09-30 test favoured ordinary BPE, but the paper's gains
-      grow with data size.
+- [ ] **SuperBPE against ordinary BPE at this size:** bio_all IS SuperBPE (16,384 pieces) and `SUPERBPE = True`
+      in `run_pipeline.py` now says so. The comparison is still to run: the same model on a BPE and a SuperBPE
+      build of the same text, judged by bits per byte with `compare_models.py` (not loss per token, since the
+      tokenizers differ). The only test (2026-09-30, 20.5M parameters) favoured ordinary BPE by 3.1%; the paper's
+      gains grow with model and data size.
 - [ ] **Check for new optimization strategies** before each big run: new optimizers, learning-rate schedules,
       memory and speed tricks for PyTorch/MPS, tokenizer and data-mixing results. Search recent papers and release
       notes; try only what can be tested with short A/B runs.
-- [ ] **Muon test** before the next big run: a few short runs (about 500 steps), AdamW against `--optimizer muon`
-      at 2-3 learning rates; keep Muon only if its loss is clearly lower at the same step.
+- [ ] **Muon test, still owed** (the 216M run started with Muon without it): a few short runs (about 500 steps),
+      AdamW against `--optimizer muon` at 2-3 learning rates; keep Muon only if its loss is clearly lower at the same
+      step. The 5 November learning-rate sweep was Muon only.
+- [ ] **Check the doubled learning-rate table at real size:** stop the first long run planned with the new table at
+      2,000 steps if its bits per byte is worse than an old-table run at the same step (`--lr-scale 0.5
+      --weight-decay 0.1` gives the old setting). The sweep that doubled it ran 500 steps at 20.5M and 36.6M
+      parameters (`results\ab_2026-11-05.md`).
+- [ ] **Resume tinyGPT_muon with the new code** (each needs your approval; HOW_TO_RUN.md, Step 4): `--batch-size 2
+      --grad-accum 132 --activation-checkpointing off` (5-16% faster, same mathematics), `--min-lr-ratio 0` (decay to
+      zero; nothing changes before step 48,001), `--ema 0.999` (+1.7 GB RAM; a better stable-phase `_best.pt`).
+- [ ] **EMA on a long run:** its stable-phase gain is untested (the 500-step A/B could not show it).
+- [ ] **Mixture of experts:** 2.2-2.3x slower than dense per step on this GPU in the 5 November smoke test. Profile
+      the loop implementation under compile (a host sync per MoE block), try `--moe-impl grouped`, and judge expert
+      balance after 500+ steps. Dense stays the default until an A/B at a size the Mac can train says otherwise.
 - [ ] **8-bit optimizer** (`bitsandbytes`) would let models above about 300M parameters fit on the 8 GB GPU.
       Needs approval to install: `python -m pip install bitsandbytes`.
 - [x] **Dashboard for big models:** use fewer text windows for the CPU forward-pass panels in `view_pt.py`
       when the model has 1B+ parameters.
 - [ ] **Benchmark suite** (`benchmark.py`, 21 free benchmarks in `benchmarks\`): only a 50-question trial of
-      tinyGPT_best.pt was run (all near chance). Still to do: run the coding benchmarks end to end through the WSL
-      sandbox (or Docker when Docker Desktop is running), and run the full suite on the next, larger model.
+      tinyGPT_best.pt (the 70M October run) was run (all near chance). Still to do: run the coding benchmarks end
+      to end through the WSL sandbox (or Docker when Docker Desktop is running), and run the full suite on the
+      216M model.
 - [ ] **Post-training at the real size:** `python run_pipeline.py posttrain` once a new pre-trained model exists
       (fine-tuning now accumulates micro-batches, so it fits).
 
@@ -72,7 +87,9 @@ Last updated 27 October 2026.
 - [ ] Order: M5 Ultra 36/80, 96 GB, 1 TB (£6,269 with education pricing); keep the box for resale.
 - [ ] External drive: ACASIS TB501Pro-SL Thunderbolt 5 case + a 4 TB PCIe 4.0 NVMe without heatsink
       (Samsung 990 Pro or a cheaper Crucial P3 Plus); buy shortly before delivery; format as APFS.
-- [ ] First checks on the Mac: training on MPS (BF16, compile), the planner's memory choice, one Blender frame
+- [ ] First checks on the Mac: the checklist in HOW_TO_RUN.md (Mac Studio): `gpu_check.py`, the 216M kernel
+      benchmark, `--plan` with the attention-memory probe, one short run with `--compile on` and `off`, `peak_mem_gib`
+      against the estimate; then raise the MPS budget from 75% to 80% if the estimate holds. Also one Blender frame
       timed against the laptop (expected about 6x faster).
 - [ ] Pre-training size on the Mac: about 1B parameters is practical (a few weeks per run); 3-5B needs rented
       GPUs or continued training of an open model.
@@ -81,7 +98,7 @@ Last updated 27 October 2026.
 
 - [ ] Organise the local-ai scripts into folders (asked for earlier; moving files must not break running jobs).
 - [ ] Rename "tinyGPT" (pending).
-- [ ] `AUDIT_2026-10-01.md` (local, not committed) contains a home-folder path; delete it or keep it local.
+- [x] `AUDIT_2026-10-01.md` (local, not committed) contained a home-folder path; it has been deleted.
 
 ## Ideas
 

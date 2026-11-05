@@ -16,14 +16,17 @@ what it did and why, and the learning guide explains the methods behind it.
 ```
 python -m pip install -r requirements.txt       # after installing PyTorch for your GPU
 python run_pipeline.py estimate                 # optional: how many tokens, which model sizes (~7 min)
-python run_pipeline.py build                    # build the dataset from ~/ai_training_data (~2 hours)
+python run_pipeline.py build                    # build the dataset from ~/ai_training_data (~2-3 hours)
 python run_pipeline.py plan --hours 48          # which model fits in 48 hours (trains nothing)
 python run_pipeline.py train --hours 48         # train it; Ctrl+C pauses
 python run_pipeline.py resume                   # continue after a pause or a shutdown
-python tiny_gpt.py --generate "Genetic drift is"
+python tiny_gpt.py --name tinyGPT_muon --generate "Genetic drift is"
 ```
 
 `run_pipeline.py` prints every command it runs; its settings (data folder, dataset and run names) are at the top.
+They describe the current run: dataset `datasets/bio_all`, run name `tinyGPT_muon` (files `tinyGPT_muon.pt` and
+`tinyGPT_muon_best.pt`), SuperBPE and Muon. `tiny_gpt.py` on its own uses the name `tinyGPT` unless `--name` or
+`--checkpoint` says otherwise.
 
 ## What is in the repository
 
@@ -39,7 +42,8 @@ python tiny_gpt.py --generate "Genetic drift is"
 | `youtube_transcripts.py` | On-topic lecture transcripts from YouTube channels (captions, or Whisper speech recognition) |
 | `estimate_dataset.py` | Tokens per source and the model sizes they support, without building anything |
 | `data_prep.py` | Cleaning, filtering, deduplication, validation split, tokenizer and token files, with a full report |
-| `tiny_gpt.py` | Model, planner, training, evaluation, text generation, fact benchmark, export |
+| `tiny_gpt.py` | Model, planner, training, evaluation, text generation (with a key/value cache), fact benchmark, export |
+| `benchmark.py` | 21 open benchmarks (MMLU, MedQA, PubMedQA, SciQ, HumanEval ...): download, score a checkpoint, plot |
 | `view_pt.py` | Dashboard of a checkpoint: losses, calibration, embeddings, attention, weights |
 | `compare_models.py` | Is model A really better than B? Paired bootstrap over documents |
 | `finetune.py` | Supervised fine-tuning (SFT) and preference tuning (DPO) |
@@ -47,10 +51,11 @@ python tiny_gpt.py --generate "Genetic drift is"
 | `detect_text.py` | Watermark and likelihood tests for text written by the model |
 | `calibrate_probes.py` | Difficulty labels for the fact benchmark, from open reference models |
 | `gpu_check.py` | GPU clocks, power limits and a short training benchmark |
-| `test_tiny_gpt.py` | Test suite: `python -m unittest test_tiny_gpt.py` (CPU only, a few minutes) |
+| `test_tiny_gpt.py` | Test suite: `python -m unittest test_tiny_gpt` (CPU only; see Tests) |
 | `keywords.txt` | 22,650 terms in 80 categories (biology, genetics and gene symbols, proteins, microbes, diseases, chemistry and drugs, nutrition, species, statistics, causal inference, machine learning, GWAS and sequencing software, cross-ancestry methods, HLA, drug discovery, pharmacogenomics, biomechanics, pipelines and reporting, visual explanation, 3D modelling, databases, biobanks, companies, scientists' names) that decide which web, Wikipedia, arXiv, bioRxiv, medRxiv and YouTube documents are on topic |
 | `doc_sources.tsv` | The documentation sources for `download_docs.py` (tool, kind, url, licence, notes) |
 | `tools/` | Keyword-list checks (`kw_check.py`, `kw_covered.py`, `term_evidence.py`) and a link check for `doc_sources.tsv` (`url_check.py`) |
+| `tools/edit_weights.py`, `tools/compare_edit.py` | Find the neurons or the direction that drive repetition loops, remove them in a COPY of a checkpoint, and compare the copy with the original (loops, bits per byte, fact benchmark, a picture) |
 | `probes_biology.tsv` | The 336-question fact benchmark (16 categories, difficulty-labelled) |
 | `youtube_channels.txt` | Channels for `youtube_transcripts.py` |
 | `finetune_examples/` | Example SFT and DPO data |
@@ -65,7 +70,10 @@ automatically for runs in this folder: the experiments table as `results/experim
 - Python 3.10 or newer (developed on 3.12), PyTorch 2.6 or newer (tested with 2.10, see Safety).
 - For about 1.45 times faster training on an NVIDIA GPU: Triton, used by `torch.compile` (on Windows the
   `triton-windows` package matching your PyTorch version; see `requirements.txt`).
-- An NVIDIA GPU for training in reasonable time; Apple silicon (MPS) and CPU also work, more slowly.
+- An NVIDIA GPU for training in reasonable time; the CPU also works, slowly.
+- Apple silicon (MPS): PyTorch 2.9 or newer (Muon needs it). The planner budgets 75 % of Metal's recommended
+  working set and the run caps itself there; `torch.compile` is tried only with `--compile on`. A first-run
+  checklist is in HOW_TO_RUN.md (Mac Studio).
 - The packages in `requirements.txt`. Optional tools (yt-dlp, faster-whisper, Tesseract OCR, pandoc) are listed
   there with what needs them.
 
@@ -95,23 +103,29 @@ damaged text; a keyword filter for the web sources (a fast C++ prefilter that ne
 would keep, then the exact check); exact deduplication and near-duplicate detection (one-permutation MinHash with
 locality-sensitive hashing); removal of boilerplate lines that repeat across documents (headings are kept); a
 train/validation split by document, so no text leaks across; a SentencePiece BPE tokenizer trained on the training
-split only (optionally SuperBPE, whose tokens can span words: 12-15% fewer tokens); and a train-versus-validation
-leakage audit. Heavy steps run on all CPU cores, with byte-identical
-results for any number of worker processes. `report.md` records every decision.
+split only, sampled in 4,000-character windows from every source (SuperBPE, whose tokens can span words, gives
+12-15% fewer tokens; the current dataset `bio_all` uses it); and a train-versus-validation leakage audit, whose
+leaked validation documents move to training. Heavy steps run on all CPU cores, with byte-identical results for any
+number of worker processes. `report.md` records every decision.
 
 **2. Choosing the model size (`tiny_gpt.py`).** The planner follows two rules of thumb from published scaling
-studies: reread text at most 4 times, and train on about 20 tokens per parameter. With a time budget
-(`--time-budget-hours`) it picks the largest model that still reaches that ratio in the time, using the speed
-this computer sustained in its last run. `--plan` shows the choice and the reasons without training.
+studies: reread text at most 4 times, and train on about 20 tokens per parameter. The context length follows the
+width, the batch follows the compute budget (DeepSeek's batch-size fit) and the learning rate a table of published
+rates (doubled after a sweep on this data). With a time budget (`--time-budget-hours`) it picks the largest model
+that still reaches that ratio in the time, using the speed this computer sustained in its last run. `--plan` shows
+the choice and the reasons without training.
 
 **3. The model.** A decoder-only transformer, as in GPT and Llama: rotary position embeddings, RMSNorm, SwiGLU
-feed-forward layers, grouped-query attention and tied input/output embeddings. Training uses AdamW (or Muon for
-the block matrices, `--optimizer muon`), a warmup-stable-decay learning-rate schedule, z-loss, gradient clipping and
+feed-forward layers, grouped-query attention, QK-norm (new runs) and tied input/output embeddings; optionally a
+mixture of experts (`--experts N`; dense is the default). Training uses AdamW (or Muon for the block matrices,
+`--optimizer muon`), a warmup-stable-decay learning-rate schedule that decays to zero, z-loss, gradient clipping and
 BF16 mixed precision, with resumption after Ctrl+C or a shutdown on the same windows, schedule and optimizer state
-(GPU kernels are not bit-deterministic, so a replayed step differs at about 1e-5 in the loss). For models too big
-for the GPU's memory the planner switches on two savings that leave the mathematics unchanged: the loss computed a
-few thousand tokens at a time, and activation checkpointing (blocks recomputed in the backward pass). An
-out-of-memory error at the first step is recovered automatically.
+(GPU kernels are not bit-deterministic, so a replayed step differs at about 1e-5 in the loss). Optional: a debiased
+moving average of the weights (`--ema on`) and attention kept within each document (`--doc-mask on`). For models too
+big for the GPU's memory the planner switches on two savings that leave the mathematics unchanged: the loss computed
+a few thousand tokens at a time, and activation checkpointing (blocks recomputed in the backward pass). An
+out-of-memory error at the first step is recovered automatically; a later one replays the step, and a step with a
+non-finite gradient is skipped instead of poisoning the weights.
 
 **4. Evaluation.** Validation loss per source on fixed windows, bits per byte (comparable across tokenizers), a
 biology fact benchmark scored against a shuffled-question floor, calibration of the model's confidence, a
@@ -145,7 +159,9 @@ Check the licences before sharing a model trained on this data.
   (CVE-2025-32434): with an older PyTorch, load only checkpoints you made yourself.
 - Downloaded and converted data is parsed as data only; nothing in it is executed.
 - Only one job should use a laptop GPU at a time. `run_pipeline.py` (plan, train, resume, continue, posttrain),
-  `finetune.py` and `posttrain.py` refuse the GPU while it is busy (`--force` overrides in the last two).
+  `finetune.py`, `posttrain.py`, `benchmark.py`, `calibrate_probes.py` and `gpu_check.py` refuse the GPU while another
+  job is training (a live `<name>.train.lock`, or nvidia-smi showing the GPU in use; on a Mac the lock files alone);
+  `--force` overrides where the script has it.
 - Existing checkpoints and datasets are never overwritten without `--overwrite` (old files are renamed). Saves are
   written to a temporary file, flushed to disk, then renamed.
 - Lock files stop two processes from training the same run (`<name>.train.lock`) or building the same dataset
@@ -154,11 +170,16 @@ Check the licences before sharing a model trained on this data.
 ## Tests
 
 ```
-python -m unittest test_tiny_gpt.py
+python -m unittest test_tiny_gpt                              # the fast set
+$env:TINYGPT_SLOW_TESTS = "1"; python -m unittest test_tiny_gpt   # everything (PowerShell)
 ```
 
-About 30 tests on the CPU: data preparation (filters, duplicates, splits, identical results for any number of
-workers), converters, the model and training loop (resumption on the same windows and state, Muon, the memory savings), the planner,
+125 tests on the CPU. The fast set (117) takes about 4-5 minutes; the six integration tests, which launch real
+training runs as child processes, run only with `TINYGPT_SLOW_TESTS=1` (the full suite then takes about 15-20
+minutes). Two GPU checks also need `TINYGPT_GPU_TESTS=1` and are never run while a training run uses the GPU. They
+cover data preparation (filters, duplicates, splits, identical results for any number of workers), converters, the
+model and training loop (resumption on the same windows and state, Muon, mixture of experts, the memory savings,
+skipped non-finite steps), the planner (shape ladder, learning rate, batch, time budget, Mac and CPU devices),
 evaluation, fine-tuning, detection and checkpoint safety.
 
 ## Licence
