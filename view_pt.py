@@ -170,7 +170,14 @@ class Checkpoint:
         gqa = f"GQA {self.cfg.n_heads}/{self.cfg.n_kv_heads}" if self.cfg.n_kv_heads < self.cfg.n_heads else "MHA"
         tied = "tied embeddings" if self.cfg.tie_embeddings else "untied embeddings"
         qk = ", QK-norm" if getattr(self.cfg, "qk_norm", False) else ""
-        return f"decoder-only Transformer: RoPE, RMSNorm, SwiGLU, {gqa}{qk}, {tied}"
+        moe = (f", MoE {self.cfg.n_experts} experts x {self.cfg.experts_per_token} per token"
+               if getattr(self.cfg, "n_experts", 0) else "")
+        return f"decoder-only Transformer: RoPE, RMSNorm, SwiGLU{moe}, {gqa}{qk}, {tied}"
+
+    @property
+    def moe(self):
+        """Whether the architecture has mixture-of-experts blocks."""
+        return bool(self.cfg is not None and getattr(self.cfg, "n_experts", 0))
 
     def pieces(self):
         if self.tok is not None:
@@ -295,9 +302,19 @@ def print_summary(ck):
     if ck.cfg is not None:
         c = ck.cfg
         n_total = sum(t.numel() for t in {t.data_ptr(): t for t in ck.weights.values()}.values())
+        moe = ""
+        if ck.moe:
+            # the parameter tensors include the router bias buffers (E per MoE block), hence the count from the
+            # architecture; active = what one token's forward pass touches (count_params)
+            n_total, _, n_active, _ = tiny_gpt.count_params(c)
+            moe = (f" | experts {c.n_experts} x hidden {c.expert_hidden}, {c.experts_per_token} per token in "
+                   f"{c.n_moe_blocks} of {c.n_layers} blocks, {c.router} router, balance {c.balance}"
+                   + (f", shared SwiGLU {c.shared_hidden}" if c.shared_hidden else "")
+                   + f" | parameters {n_total:,} total, {n_active:,} active per token")
         print(f"architecture: vocab {c.vocab_size:,} | ctx {c.ctx} | d_model {c.d_model} | layers {c.n_layers} | "
               f"query heads {c.n_heads} / key-value heads {c.n_kv_heads} (head size {c.head_dim}) | SwiGLU hidden "
-              f"{c.ffn_hidden} | RoPE base {c.rope_base:g} | dropout {c.dropout} | parameters {n_total:,}")
+              f"{c.ffn_hidden} | RoPE base {c.rope_base:g} | dropout {c.dropout}"
+              + (moe if moe else f" | parameters {n_total:,}"))
     if ck.tok is not None:
         comp = {}
         for i in range(ck.tok.vocab_size):
@@ -529,6 +546,8 @@ def attention_entropy(model, window, device, budget=2 ** 25):
         ent = torch.cat(ent)  # (H, T)
         out.append((ent[:, 1:] / denom[1:]).mean(-1).cpu().numpy())
         h = block(h, model.rope)
+        if isinstance(h, tuple):  # a mixture-of-experts block returns (residual stream, aux terms)
+            h = h[0]
     return np.stack(out)  # (layers, heads), 0 = attends to one token, 1 = uniform over the prefix
 
 
@@ -695,11 +714,13 @@ def create_dashboard(ck, args):
     div = LinearSegmentedColormap.from_list("div_blue_red", DIVERGING)
 
     # One sub-figure per row: panels align within a row only, so a colorbar or
-    # long tick labels in one panel do not shrink the whole column.
-    fig = plt.figure(figsize=(26, 23), layout="constrained")
+    # long tick labels in one panel do not shrink the whole column. A mixture-of-experts
+    # checkpoint gets a fifth row (expert balance, load per block, router bias).
+    n_rows = 5 if ck.moe else 4
+    fig = plt.figure(figsize=(26, 23 * n_rows / 4), layout="constrained")
     fig.get_layout_engine().set(w_pad=0.1, h_pad=0.12)
     axs = []
-    for row in fig.subfigures(4, 1, hspace=0.015):
+    for row in fig.subfigures(n_rows, 1, hspace=0.015):
         row.set_facecolor(SURFACE)
         axs.extend(row.subplots(1, 4, gridspec_kw={"wspace": 0.08}))
     for ax in axs:
@@ -761,6 +782,14 @@ def create_dashboard(ck, args):
         ("Attention entropy", lambda ax: panel_attention(ax, fig, model, windows, device, seq, fnote)),
         ("Adam update size", lambda ax: panel_adam(ax, fig, ck, seq)),
     ]
+    if ck.moe:
+        panels += [
+            ("Expert balance", lambda ax: panel_moe_balance(ax, history, ck)),
+            ("Expert load per block", lambda ax: panel_moe_load(ax, fig, ck, history, seq)),
+            ("Router bias", lambda ax: panel_router_bias(ax, fig, ck, div)),
+        ]
+    for ax in axs[len(panels):]:
+        ax.set_axis_off()
     for ax, (title, draw) in zip(axs, panels):
         try:
             draw(ax)
@@ -1210,19 +1239,52 @@ def _layers(ck):
     return sorted(blocks)
 
 
+def components(ck):
+    """The rows of the per-block panels as (label, [tensor names relative to
+    blocks.N.]): the dense set (COMPONENTS), or for a mixture-of-experts checkpoint
+    the attention projections, the router and one row per expert (its gate_up and
+    down matrices together), the shared SwiGLU if there is one, and the dense FFN
+    rows when only every m-th block has experts. Rows that no block has are left
+    out, so the heat maps draw no all-NaN rows."""
+    rows = [(c, [rel]) for c, rel in COMPONENTS]
+    cfg = ck.cfg
+    if ck.moe:
+        rows = rows[:4] + [("ffn.router", ["ffn.router.weight"])]
+        rows += [(f"expert {e}", [f"ffn.experts.gate_up.{e}", f"ffn.experts.down.{e}"]) for e in range(cfg.n_experts)]
+        if cfg.shared_hidden:
+            rows.append(("ffn.shared", ["ffn.shared.gate.weight", "ffn.shared.up.weight", "ffn.shared.down.weight"]))
+        if cfg.n_moe_blocks < cfg.n_layers:
+            rows += [(c, [rel]) for c, rel in COMPONENTS[4:]]
+    layers = _layers(ck)
+    return [(c, rels) for c, rels in rows
+            if any(f"blocks.{b}.{r}" in ck.weights for b in layers for r in rels)]
+
+
+def _rms_of(ck, b, rels):
+    """RMS over all of block b's tensors named in rels (NaN when none is present)."""
+    sq, n = 0.0, 0
+    for r in rels:
+        t = ck.weights.get(f"blocks.{b}.{r}")
+        if t is not None:
+            sq += t.float().square().sum().item()
+            n += t.numel()
+    return math.sqrt(sq / n) if n else np.nan
+
+
 def panel_components(ax, fig, ck, cmap):
     title = "Weight scale per block"
     layers = _layers(ck)
     if not layers:
         return message(ax, "no Transformer blocks found", title)
-    m = np.full((len(COMPONENTS), len(layers)), np.nan)
+    comps = components(ck)
+    m = np.full((len(comps), len(layers)), np.nan)
     for j, b in enumerate(layers):
-        for i, (_, rel) in enumerate(COMPONENTS):
-            t = ck.weights.get(f"blocks.{b}.{rel}")
-            if t is not None:
-                m[i, j] = t.float().square().mean().sqrt().item()
-    heatmap(ax, fig, m, [c for c, _ in COMPONENTS], [f"block {b}" for b in layers], cmap, "RMS of weights")
-    titled(ax, title, "RMS of each weight matrix")
+        for i, (_, rels) in enumerate(comps):
+            m[i, j] = _rms_of(ck, b, rels)
+    heatmap(ax, fig, m, [c for c, _ in comps], [f"block {b}" for b in layers], cmap, "RMS of weights",
+            annotate=m.size <= 160)
+    titled(ax, title, "RMS of each weight matrix" + ("; an expert row is its gate_up and down together" if ck.moe
+                                                    else ""))
 
 
 def panel_norm_gains(ax, ck):
@@ -1256,8 +1318,8 @@ def panel_spectra(ax, ck):
     layers = _layers(ck)
     mid = layers[len(layers) // 2] if layers else None
     targets = [("token embedding", ck.embedding)] + [
-        (f"block {mid} / {c}", ck.weights.get(f"blocks.{mid}.{rel}")) for c, rel in COMPONENTS] if mid is not None \
-        else [("token embedding", ck.embedding)]
+        (f"block {mid} / {c}", ck.weights.get(f"blocks.{mid}.{rels[0]}")) for c, rels in components(ck)] \
+        if mid is not None else [("token embedding", ck.embedding)]
     drew = 0
     for k, (label, m) in enumerate(targets):
         if m is None or m.ndim != 2:
@@ -1414,25 +1476,91 @@ def panel_adam(ax, fig, ck, cmap):
         elif idx < len(names) and isinstance(st, dict) and "momentum_buffer" in st:  # Muon
             momentum[names[idx]] = st["momentum_buffer"].float().pow(2).mean().sqrt().item()
     layers = _layers(ck)
-    # AdamW also trains the norm gains in a Muon run, so decide from the block matrices only
-    matrices = {f"blocks.{b}.{rel}" for b in layers for _, rel in COMPONENTS}
+    comps = components(ck)
+    # AdamW also trains the norm gains (and the MoE routers) in a Muon run, so decide from the block matrices only
+    matrices = {f"blocks.{b}.{rel}" for b in layers for _, rels in comps for rel in rels}
     tc = (ck.obj.get("train_config") if isinstance(ck.obj, dict) else None) or {}
     muon = bool(momentum) and (tc.get("optimizer") == "muon" or not matrices & set(size))
     values = momentum if muon else size
     if not values or not layers:
         return message(ax, "optimizer state could not be matched to parameter names", title)
-    grid = np.full((len(COMPONENTS), len(layers)), np.nan)
+    grid = np.full((len(comps), len(layers)), np.nan)
     for j, b in enumerate(layers):
-        for i, (_, rel) in enumerate(COMPONENTS):
-            grid[i, j] = values.get(f"blocks.{b}.{rel}", np.nan)
+        for i, (_, rels) in enumerate(comps):
+            # a row of several matrices (an expert): the mean of what the optimizer holds for them
+            got = [values[f"blocks.{b}.{rel}"] for rel in rels if f"blocks.{b}.{rel}" in values]
+            grid[i, j] = float(np.mean(got)) if got else np.nan
     if muon:
-        heatmap(ax, fig, grid, [c for c, _ in COMPONENTS], [f"block {b}" for b in layers], cmap,
-                "RMS of the momentum", fmt_spec=".2g")
-        titled(ax, "Muon momentum size", "RMS of each matrix's averaged gradient")
+        heatmap(ax, fig, grid, [c for c, _ in comps], [f"block {b}" for b in layers], cmap,
+                "RMS of the momentum", fmt_spec=".2g", annotate=grid.size <= 160)
+        titled(ax, "Muon momentum size", "RMS of each matrix's averaged gradient"
+               + ("; the routers are on AdamW and show blank" if ck.moe else ""))
         return
-    heatmap(ax, fig, grid, [c for c, _ in COMPONENTS], [f"block {b}" for b in layers], cmap,
-            "mean |m| / (sqrt(v) + eps)")
+    heatmap(ax, fig, grid, [c for c, _ in comps], [f"block {b}" for b in layers], cmap,
+            "mean |m| / (sqrt(v) + eps)", annotate=grid.size <= 160)
     titled(ax, title, "near 1 = gradient sign consistent across steps")
+
+
+# ---- row 5 (mixture of experts only) -----------------------------------------------
+def _moe_blocks(ck):
+    return [i for i in range(ck.cfg.n_layers) if ck.cfg.is_moe_block(i)]
+
+
+def panel_moe_balance(ax, history, ck):
+    """moe_lb (the Switch load-balancing loss, 1.0 = even routing), the busiest
+    expert's load (tokens / mean tokens of its block) and the dead experts, at every
+    evaluation (from the training history)."""
+    title = "Expert balance"
+    rows = [h for h in history or [] if h.get("moe_lb") is not None]
+    if not rows:
+        return _no_history(ax, ck, title) if not history else message(
+            ax, "this history has no mixture-of-experts figures (moe_lb)", title)
+    steps = [h["step"] for h in rows]
+    ax.plot(steps, [h["moe_lb"] for h in rows], color=SERIES[0], lw=1.6, marker="o", ms=3, label="load-balancing loss")
+    ax.axhline(1.0, color=MUTED, lw=0.8)
+    ax.set_xlabel("optimizer step")
+    ax.set_ylabel("E x sum f_e P_e (1.0 = even)")
+    ax2 = ax.twinx()
+    style_axes(ax2, grid=False)
+    ax2.plot(steps, [h.get("moe_load_max") for h in rows], color=SERIES[1], lw=1.4, marker="s", ms=3,
+             label="busiest expert / mean")
+    dead = [(s, h.get("dead_experts")) for s, h in zip(steps, rows) if h.get("dead_experts")]
+    if dead:
+        ax2.plot(*zip(*dead), color=CRITICAL, lw=0, marker="x", ms=6, label="dead experts (count)")
+    ax2.set_ylabel("load of the busiest expert (1.0 = even)")
+    lines = ax.get_legend_handles_labels()
+    lines2 = ax2.get_legend_handles_labels()
+    ax.legend(lines[0] + lines2[0], lines[1] + lines2[1], loc="upper right", fontsize=7)
+    titled(ax, title, _history_sub(ck, "blue: Switch loss; orange: busiest expert's tokens / mean; red x: experts "
+                                       "that saw no token"))
+
+
+def panel_moe_load(ax, fig, ck, history, cmap):
+    """Tokens per expert relative to the block's mean since the last evaluation, per MoE block (last history row)."""
+    title = "Expert load per block"
+    rows = [h for h in history or [] if h.get("moe_load")]
+    if not rows:
+        return message(ax, "no per-block expert load in the history yet", title)
+    load = np.array(rows[-1]["moe_load"], dtype=float)
+    blocks = _moe_blocks(ck)
+    cols = [f"block {b}" for b in blocks[:load.shape[0]]]
+    heatmap(ax, fig, load.T, [f"expert {e}" for e in range(load.shape[1])], cols, cmap, "tokens / mean tokens",
+            vmin=0.0, annotate=load.size <= 160)
+    titled(ax, title, f"at step {rows[-1]['step']:,}: 1.0 = even; 0 = a dead expert")
+
+
+def panel_router_bias(ax, fig, ck, cmap):
+    """DeepSeek-V3's balancing bias per expert and MoE block (a buffer in the weights)."""
+    title = "Router bias"
+    items = [(b, ck.weights.get(f"blocks.{b}.ffn.router.bias")) for b in _moe_blocks(ck)]
+    items = [(b, t) for b, t in items if t is not None]
+    if not items:
+        return message(ax, "no router bias buffers in this file", title)
+    grid = np.stack([t.float().numpy() for _, t in items], axis=1)  # (E, blocks)
+    lim = max(float(np.abs(grid).max()), 1e-6)
+    heatmap(ax, fig, grid, [f"expert {e}" for e in range(grid.shape[0])], [f"block {b}" for b, _ in items], cmap,
+            "bias added to the routing score", vmin=-lim, vmax=lim, annotate=grid.size <= 160, fmt_spec=".2g")
+    titled(ax, title, "negative = the expert was overloaded and is now chosen less (auxiliary-loss-free balancing)")
 
 
 # ---------------------------------------------------------------------------

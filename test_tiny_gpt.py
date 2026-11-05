@@ -426,8 +426,9 @@ class TestPipeline(unittest.TestCase):
         w = model.blocks[0].attn.attention_weights(model.blocks[0].attn_norm(model.token_embedding(x)), model.rope)
         self.assertTrue(torch.allclose(w.sum(-1), torch.ones_like(w.sum(-1)), atol=1e-5))
         self.assertEqual(float(w[0, 0, 0, 1:].sum()), 0.0, "attention must be causal")
-        total, _ = model.param_counts()
+        total = model.param_counts()[0]
         self.assertEqual(total, tiny_gpt.count_params(cfg)[0])
+        self.assertEqual(model.param_counts(), tiny_gpt.count_params(cfg), "dense: active equals total")
 
     def test_invalid_model_settings_fail_clearly(self):
         with self.assertRaises(SystemExit) as ctx:
@@ -467,7 +468,7 @@ class TestPipeline(unittest.TestCase):
             args = tiny_gpt.parse_args(["--name", "x"] + extra)
             with unittest.mock.patch.object(tiny_gpt, "device_memory_budget", return_value=fixed_budget):
                 cfg, settings, lines = tiny_gpt.plan_run(args, manifest, torch.device("cpu"), None)
-            n, _ = tiny_gpt.count_params(cfg)
+            n = tiny_gpt.count_params(cfg)[0]
             epochs = settings["steps"] * settings["tokens_per_step"] / 67e6
             self.assertLessEqual(epochs, 4.0 + 1e-6, f"planner exceeded the epoch cap with {extra}")
             self.assertLessEqual(n * 20, 4 * 67e6, f"model too large for the data with {extra}")
@@ -1155,24 +1156,49 @@ class TestPipeline(unittest.TestCase):
         model = tiny_gpt.TinyGPT(cfg)
         x = torch.randint(0, 300, (3, 33))
 
-        def loss_and_grads(checkpointing, chunk):
+        def loss_and_grads(checkpointing, chunk, moe=False):
             model.zero_grad()
             model.grad_checkpoint = checkpointing
+            aux = None
             if chunk:
-                ce, z, n = tiny_gpt.chunked_lm_loss(model(x[:, :-1], return_hidden=True), model.lm_head.weight,
-                                                    x[:, 1:], chunk)
+                hidden = model(x[:, :-1], return_hidden=True, return_aux=True)
+                hidden, aux = hidden if moe else (hidden[0], None)
+                ce, z, n = tiny_gpt.chunked_lm_loss(hidden, model.lm_head.weight, x[:, 1:], chunk)
                 loss = ce / n + 1e-4 * z / n
             else:
-                flat = model(x[:, :-1]).float().view(-1, 300)
+                logits, aux = model(x[:, :-1], return_aux=True)
+                flat = logits.float().view(-1, 300)
                 loss = torch.nn.functional.cross_entropy(flat, x[:, 1:].reshape(-1)) + 1e-4 * torch.logsumexp(flat, -1).pow(2).mean()
+            if aux is not None:  # the mixture-of-experts terms: recomputed under checkpointing like everything else
+                loss = loss + 0.01 * aux["lb"] + 1e-3 * aux["z"]
             loss.backward()
-            return loss.item(), torch.cat([p.grad.flatten() for p in model.parameters()])
+            counts = aux["counts"].clone() if aux is not None else None
+            return loss.item(), torch.cat([p.grad.flatten() for p in model.parameters()]), counts
 
-        base_loss, base_grad = loss_and_grads(False, 0)
+        base_loss, base_grad, _ = loss_and_grads(False, 0)
         for checkpointing, chunk in ((True, 0), (False, 20), (True, 7)):
-            loss, grad = loss_and_grads(checkpointing, chunk)
+            loss, grad, _ = loss_and_grads(checkpointing, chunk)
             self.assertAlmostEqual(loss, base_loss, places=5)
             self.assertLess((grad - base_grad).abs().max().item(), 1e-6)
+        # the same with mixture-of-experts blocks (every second block; the sort inside the experts has
+        # data-dependent sizes, which the non-reentrant recompute handles): loss, gradients and the routing counts
+        # are unchanged by checkpointing and the loss in pieces
+        dense_model = model
+        torch.manual_seed(0)
+        moe_cfg = tiny_gpt.ModelConfig(vocab_size=300, ctx=32, d_model=64, n_layers=3, n_heads=4, n_kv_heads=2,
+                                       n_experts=4, experts_per_token=2, moe_every=2, shared_hidden=64)
+        model = tiny_gpt.TinyGPT(moe_cfg)
+        self.assertEqual([b.moe for b in model.blocks], [False, True, False])
+        base_loss, base_grad, base_counts = loss_and_grads(False, 0, moe=True)
+        self.assertEqual(tuple(base_counts.shape), (1, 4))
+        self.assertEqual(int(base_counts.sum()), 3 * 32 * 2)
+        for checkpointing, chunk in ((True, 0), (False, 20), (True, 7)):
+            loss, grad, counts = loss_and_grads(checkpointing, chunk, moe=True)
+            self.assertAlmostEqual(loss, base_loss, places=5)
+            self.assertLess((grad - base_grad).abs().max().item(), 1e-6)
+            self.assertTrue(torch.equal(counts, base_counts))
+        model = dense_model
+        model.grad_checkpoint = False
         y = x[:, 1:].clone()
         y[0, :5] = -100
         with torch.no_grad():
@@ -1181,6 +1207,12 @@ class TestPipeline(unittest.TestCase):
         self.assertLess(((want * (y != -100)) - got).abs().max().item(), 1e-5)
         # planner: nothing switched on when it fits; savings when it does not
         big = tiny_gpt.ModelConfig(vocab_size=16384, ctx=1024, d_model=1024, n_layers=18, n_heads=16, n_kv_heads=4)
+        # the same shape with 8 experts: 687M parameters in total, 220M active; the estimate (weights, gradients,
+        # optimizer state over the total) no longer fits this laptop's budget, as the audit's table says
+        big_moe = tiny_gpt.ModelConfig(**{**dataclasses.asdict(big), "n_experts": 8, "experts_per_token": 2})
+        self.assertEqual(round(tiny_gpt.count_params(big_moe)[0] / 1e6), 687)
+        self.assertEqual(round(tiny_gpt.count_params(big_moe)[2] / 1e6), 220)
+        self.assertGreater(tiny_gpt.estimate_train_bytes(big_moe, 2, True, True, 4096, "muon"), 6.0 * 2 ** 30)
         self.assertEqual(tiny_gpt.choose_memory_plan(big, 262_144, 64 * 2 ** 30, True)[2:], (False, 0))
         micro, _, ckpt, _ = tiny_gpt.choose_memory_plan(big, 262_144, int(5.6 * 2 ** 30), True)
         self.assertTrue(ckpt)
@@ -1286,6 +1318,96 @@ class TestPipeline(unittest.TestCase):
         self.assertEqual(code, 0, out_v)
         self.assertIn("optimizer: Muon + AdamW state for 24 tensors", out_v)
         self.assertNotIn("panel failed", out_v)
+
+    def test_moe_run_resume_export_viewer_and_finetune(self):
+        """A mixture-of-experts run (2 layers, 4 experts, 2 per token, Muon): the experts' 2-D matrices are on Muon
+        and the routers on AdamW; the metrics lines carry the balance figures; a stopped run resumes exactly (with
+        the grouped experts where the probe passes); the checkpoint, the experiments table, --export, the viewer,
+        finetune --freeze-router and tools/edit_weights.py (refused) all know the architecture."""
+        import csv
+        log = os.path.join(self.runs, "log.txt")
+        moe = self.common + ["--optimizer", "muon", "--no-probes", "--experts", "4"]
+        code, out = run(moe + ["--name", "X", "--steps", "16"])
+        self.assertEqual(code, 0, out)
+        # 2 blocks x (4 attention projections + 4 experts x 2 matrices) on Muon; the embedding and the 2 routers on AdamW
+        self.assertIn("Muon for 24 block matrices", out)
+        self.assertIn("AdamW for the embedding (3 matrices)", out)
+        self.assertIn("experts: 4 per MoE block (2 of 2 blocks), 2 per token, hidden 128", out)
+        self.assertRegex(out, r"parameters: [\d,]+ total, [\d,]+ non-embedding, [\d,]+ active per token")
+        self.assertRegex(out, r"step +16/16 \| train .*\| moe lb [\d.]+ z [\d.]+ load max [\d.]+ dead \d+ \|")
+        code, out_s = run(moe + ["--name", "Y", "--steps", "16", "--stop-after-steps", "8"])
+        self.assertEqual(code, 0, out_s)
+        code, out_r = run(["tiny_gpt.py", "--name", "Y", "--out-dir", self.runs, "--log-file", log, "--device", "cpu",
+                           "--resume", "--eval-every", "8", "--eval-tokens", "2048", "--sample-tokens", "8",
+                           "--no-probes", "--moe-impl", "grouped", "--experts", "8"])
+        self.assertEqual(code, 0, out_r)
+        self.assertIn("optimizer state 36/36 tensors", out_r)
+        self.assertIn("--experts 8 (the architecture is the checkpoint's)", out_r)
+        if tiny_gpt.grouped_mm_available(torch.device("cpu"))[0]:
+            self.assertIn("experts run as grouped", out_r)
+
+        def val16(text):
+            return re.findall(r"step +16/16 \| train ([\d.]+) \| val ([\d.]+)", text)
+
+        self.assertTrue(val16(out))
+        self.assertEqual(val16(out), val16(out_r), "a resumed MoE run must reproduce the uninterrupted run")
+        ck = torch.load(os.path.join(self.runs, "Y.pt"), map_location="cpu", weights_only=True)
+        self.assertEqual(ck["format_version"], tiny_gpt.FORMAT_VERSION)
+        self.assertEqual((ck["model_config"]["n_experts"], ck["model_config"]["experts_per_token"],
+                          ck["model_config"]["expert_hidden"]), (4, 2, 128))
+        self.assertIn("blocks.1.ffn.router.bias", ck["model"])
+        self.assertIn("blocks.1.ffn.experts.gate_up.3", ck["model"])
+        self.assertEqual(tuple(ck["model"]["blocks.0.ffn.experts.down.0"].shape), (64, 128))
+        self.assertEqual((ck["train_config"]["lb_loss"], ck["train_config"]["bias_rate"]), (0.01, 1e-3))
+        self.assertFalse(torch.equal(ck["model"]["blocks.0.ffn.router.bias"], torch.zeros(4)),
+                         "the balancing bias moved after 16 steps")
+        kinds = [sorted(k for k in st if k != "step") for st in ck["optimizer"]["state"].values()]
+        self.assertEqual(sum(k == ["momentum_buffer"] for k in kinds), 24)
+        with open(os.path.join(self.runs, "Y_metrics.jsonl"), encoding="utf-8") as handle:
+            rows = [json.loads(line) for line in handle]
+        self.assertEqual([len(r["moe_load"]) for r in rows if "moe_load" in r], [2, 2], "per-block load for view_pt")
+        self.assertTrue(all(r["dead_experts"] == 0 for r in rows if "moe_lb" in r))
+        with open(os.path.join(self.runs, "results", "experiments.csv"), encoding="utf-8-sig", newline="") as handle:
+            row = [r for r in csv.DictReader(handle) if r["name"] == "Y" and r["event"] == "training run"][-1]
+        self.assertEqual((row["moe"], row["balance"], row["lb_loss"]), ("4x2/1", "bias", "0.0"))
+        self.assertLess(int(row["active_params"]), int(row["params"]))
+        self.assertEqual(int(row["params"]), tiny_gpt.count_params(tiny_gpt.ModelConfig(**ck["model_config"]))[0])
+        # safetensors export (router bias buffers included), generation from it, the viewer, fine-tuning
+        export = os.path.join(self.runs, "export_moe")
+        code, out_e = run(["tiny_gpt.py", "--name", "Y", "--out-dir", self.runs, "--log-file", log, "--export", export])
+        self.assertEqual(code, 0, out_e)
+        tensors, meta = tiny_gpt.read_safetensors(os.path.join(export, "model.safetensors"))
+        self.assertEqual(meta.get("n_experts"), "4")
+        self.assertIn("blocks.0.ffn.router.bias", tensors)
+        with open(os.path.join(export, "config.json"), encoding="utf-8") as handle:
+            self.assertIn("mixture of experts (4 SwiGLU experts", json.load(handle)["architecture"])
+        code, out_g = run(["tiny_gpt.py", "--checkpoint", export, "--log-file", log, "--device", "cpu",
+                           "--generate", "Genetic drift", "--length", "5"])
+        self.assertEqual(code, 0, out_g)
+        png = os.path.join(self.runs, "Y.png")
+        code, out_v = run(["view_pt.py", os.path.join(self.runs, "Y.pt"), "--plot", "--out", png, "--dpi", "50",
+                           "--dataset", self.ds])
+        self.assertEqual(code, 0, out_v)
+        self.assertIn("experts 4 x hidden 128, 2 per token in 2 of 2 blocks", out_v)
+        self.assertRegex(out_v, r"parameters [\d,]+ total, [\d,]+ active per token")
+        self.assertNotIn("panel failed", out_v)
+        self.assertGreater(os.path.getsize(png), 50_000)
+        code, out_f = run(["finetune.py", "sft", "--base", os.path.join(self.runs, "X_best.pt"), "--data",
+                           os.path.join(HERE, "finetune_examples", "sft_examples.jsonl"), "--name", "X_sft",
+                           "--out-dir", self.runs, "--epochs", "1", "--batch", "4", "--device", "cpu", "--log-file",
+                           log, "--freeze-router"])
+        self.assertEqual(code, 0, out_f)
+        self.assertIn("router frozen: 2 routing matrices", out_f)
+        sft = torch.load(os.path.join(self.runs, "X_sft.pt"), map_location="cpu", weights_only=True)
+        best = torch.load(os.path.join(self.runs, "X_best.pt"), map_location="cpu", weights_only=True)
+        self.assertTrue(torch.equal(sft["model"]["blocks.0.ffn.router.weight"],
+                                    best["model"]["blocks.0.ffn.router.weight"]))
+        self.assertFalse(torch.equal(sft["model"]["blocks.0.ffn.experts.down.0"],
+                                     best["model"]["blocks.0.ffn.experts.down.0"]))
+        code, out_w = run([os.path.join("tools", "edit_weights.py"), os.path.join(self.runs, "X_best.pt"),
+                           os.path.join(self.runs, "X_edit.pt"), "--device", "cpu"])
+        self.assertNotEqual(code, 0)
+        self.assertIn("this checkpoint has mixture-of-experts blocks", out_w)
 
     # ---------------- interrupted steps, first-step out-of-memory, resume refusals ----------------
     def patched_run(self, mode, n, args):
@@ -3212,9 +3334,15 @@ class TestFixes(unittest.TestCase):
             cfg_u, _, lines = tiny_gpt.plan_run(args, manifest, torch.device("cpu"), None)
         self.assertFalse(cfg_u.tie_embeddings)
         self.assertIn("excluding the (untied) embedding", "\n".join(lines))
-        # --init-from plans with the checkpoint's shape, the tying included
-        self.assertEqual(tiny_gpt._args_with_shape(args, untied_cfg).tie_embeddings, "off")
-        self.assertEqual(tiny_gpt._args_with_shape(args, model.cfg).tie_embeddings, "on")
+        # --init-from plans with the checkpoint's architecture (fixed_cfg), the tying included, whatever the flags say
+        tied_args = tiny_gpt.parse_args(["--name", "x", "--tie-embeddings", "on", "--d-model", "128"])
+        with unittest.mock.patch.object(tiny_gpt, "device_memory_budget", return_value=(4 * 2 ** 30, "4 GiB (test)")):
+            cfg_f, _, lines_f = tiny_gpt.plan_run(tied_args, manifest, torch.device("cpu"), None, fixed_cfg=untied_cfg)
+            cfg_t, _, _ = tiny_gpt.plan_run(args, manifest, torch.device("cpu"), None, fixed_cfg=model.cfg)
+        self.assertEqual(dataclasses.asdict(cfg_f), dataclasses.asdict(untied_cfg))
+        self.assertIn("excluding the (untied) embedding", "\n".join(lines_f))
+        self.assertIn("the architecture of the --init-from checkpoint", "\n".join(lines_f))
+        self.assertTrue(cfg_t.tie_embeddings)
 
     def test_qk_norm_model_cache_config_and_export(self):
         """QK-norm (quality-3): one gain vector per query and key norm per layer, counted by count_params; the
@@ -3267,10 +3395,16 @@ class TestFixes(unittest.TestCase):
         again.load_state_dict(back, strict=False)
         with torch.no_grad():
             torch.testing.assert_close(again(x), full)
-        args = tiny_gpt.parse_args(["--name", "x"])
-        self.assertIsNone(args.qk_norm, "unset: on for new runs, the checkpoint's on --resume/--init-from")
-        self.assertEqual(tiny_gpt._args_with_shape(args, cfg).qk_norm, "on")
-        self.assertEqual(tiny_gpt._args_with_shape(args, plain).qk_norm, "off")
+        args = tiny_gpt.parse_args(["--name", "x", "--qk-norm", "off"])
+        self.assertEqual(tiny_gpt.parse_args(["--name", "x"]).qk_norm, None,
+                         "unset: on for new runs, the checkpoint's on --resume/--init-from")
+        manifest = {"tokenizer": {"vocab_size": 50},
+                    "sources": {"md": {"train": {"tokens": 5_000_000}, "doc_tokens_percentiles": {"50": 300}}}}
+        with unittest.mock.patch.object(tiny_gpt, "device_memory_budget", return_value=(4 * 2 ** 30, "4 GiB (test)")):
+            on, _, _ = tiny_gpt.plan_run(args, manifest, torch.device("cpu"), None, fixed_cfg=cfg)
+            off, _, _ = tiny_gpt.plan_run(args, manifest, torch.device("cpu"), None, fixed_cfg=plain)
+        self.assertTrue(on.qk_norm, "--init-from: the checkpoint's setting, not the flag's")
+        self.assertFalse(off.qk_norm)
 
     def test_quality_flags_in_the_plan(self):
         """--qk-norm (default on), --lr-scale (multiplies the heuristic rate, printed, recorded; no effect with --lr;
@@ -3436,6 +3570,257 @@ class TestFixes(unittest.TestCase):
                          - tiny_gpt.estimate_train_bytes(cfg, 3, True), 3 * cfg.ctx * cfg.ctx)
         self.assertEqual(tiny_gpt.estimate_train_bytes(cfg, 3, True, checkpointing=True, doc_mask=True)
                          - tiny_gpt.estimate_train_bytes(cfg, 3, True, checkpointing=True), 3 * cfg.ctx * cfg.ctx)
+
+    # ---------------- mixture of experts ----------------
+    def moe_model(self, seed=0, vocab=50, **fields):
+        torch.manual_seed(seed)
+        cfg = tiny_gpt.ModelConfig(**{"vocab_size": vocab, "ctx": 16, "d_model": 32, "n_layers": 2, "n_heads": 4,
+                                      "n_kv_heads": 2, "n_experts": 4, "experts_per_token": 2, **fields})
+        return tiny_gpt.TinyGPT(cfg)
+
+    def test_moe_ffn_matches_masked_reference(self):
+        """MoEFFN (moe-1, moe-3, moe-6): the sorted per-expert loop equals every expert run on every token and
+        masked by the routing weights, in fp32 and under bf16 autocast; the grouped kernel gives the loop's
+        gradients where the probe passes; param_counts and count_params agree on all four numbers; the module names
+        and shapes are the documented ones; the dense model's forward is untouched."""
+        import torch.nn.functional as F
+        model = self.moe_model(seed=1).eval()
+        ffn = model.blocks[0].ffn
+        x = torch.randn(40, 32)
+
+        def reference(x2):
+            w, ids, _, _ = ffn.router(x2)
+            mix = torch.zeros(x2.size(0), 4).scatter(1, ids, w)
+            out = torch.zeros_like(x2)
+            for e in range(4):
+                gate, up = F.linear(x2, ffn.experts.gate_up[e]).chunk(2, dim=-1)
+                out = out + mix[:, e:e + 1] * F.linear(F.silu(gate) * up, ffn.experts.down[e])
+            return out
+
+        with torch.no_grad():
+            ref = reference(x)
+            got, (lb, z, counts) = ffn(x)
+            torch.testing.assert_close(got, ref, rtol=1e-5, atol=1e-7)
+            self.assertEqual(int(counts.sum()), 40 * 2)
+            self.assertEqual(tuple(counts.shape), (4,))
+            with torch.autocast("cpu", dtype=torch.bfloat16):
+                got_bf, (lb_bf, _, counts_bf) = ffn(x)
+            self.assertEqual(got_bf.dtype, torch.float32, "accumulated into the residual stream's dtype")
+            self.assertLess((got_bf - ref).abs().max().item(), 0.03 * ref.abs().max().item())
+            self.assertTrue(torch.equal(counts_bf, counts), "the router decides in fp32 under autocast")
+            self.assertAlmostEqual(lb_bf.item(), lb.item(), places=5)
+        ok, why = tiny_gpt.grouped_mm_available(torch.device("cpu"))
+        if ok:
+            grads = {}
+            for impl in ("grouped", "loop"):
+                ffn.experts.impl = impl
+                ffn.zero_grad()
+                out, (lb, z, _) = ffn(x)
+                (out.pow(2).sum() * 1e3 + lb + z).backward()
+                grads[impl] = torch.cat([p.grad.flatten() for p in ffn.parameters()])
+            torch.testing.assert_close(grads["grouped"], grads["loop"], rtol=1e-4, atol=1e-7)
+            with torch.no_grad():  # the cached probe answers inside no_grad as well (model build may sit in one)
+                self.assertTrue(tiny_gpt.grouped_mm_available(torch.device("cpu"))[0])
+        else:
+            self.assertIn("using the per-expert loop", why)
+        cfg = model.cfg
+        self.assertEqual(cfg.expert_hidden, 64, "SwiGLU 128 / 2 experts per token, rounded to 64")
+        self.assertEqual(model.param_counts(), tiny_gpt.count_params(cfg))
+        total, non_embed, active, non_embed_active = tiny_gpt.count_params(cfg)
+        self.assertEqual(total - active, 2 * 3 * 32 * 64 * (4 - 2))
+        self.assertEqual(total - non_embed, 50 * 32)
+        self.assertEqual(non_embed - non_embed_active, total - active)
+        for fields in ({"moe_every": 2}, {"shared_hidden": 32}, {"tie_embeddings": False, "n_experts": 3,
+                                                                  "experts_per_token": 1}):
+            m = self.moe_model(**fields)
+            self.assertEqual(m.param_counts(), tiny_gpt.count_params(m.cfg), fields)
+        self.assertEqual([b.moe for b in self.moe_model(moe_every=2).blocks], [False, True])
+        names = dict(model.named_parameters())
+        self.assertEqual(tuple(names["blocks.0.ffn.router.weight"].shape), (4, 32))
+        self.assertEqual(tuple(names["blocks.0.ffn.experts.gate_up.3"].shape), (128, 32))
+        self.assertEqual(tuple(names["blocks.1.ffn.experts.down.0"].shape), (32, 64))
+        self.assertIn("blocks.0.ffn.router.bias", model.state_dict(), "the bias is a persistent buffer")
+        self.assertNotIn("blocks.0.ffn.router.bias", names, "never a parameter")
+        self.assertEqual(tiny_gpt.ModelConfig(**dataclasses.asdict(cfg)).n_experts, 4)
+        tokens = torch.randint(0, 50, (2, 16))
+        with torch.no_grad():
+            logits, aux = model(tokens, return_aux=True)
+            self.assertEqual(tuple(logits.shape), (2, 16, 50))
+            self.assertEqual(tuple(aux["counts"].shape), (2, 4))
+            self.assertTrue(torch.is_tensor(model(tokens)), "without return_aux: the single tensor it always was")
+            dense = self.small_model(seed=1)
+            self.assertIsNone(dense(tokens, return_aux=True)[1])
+            torch.testing.assert_close(dense(tokens, return_aux=True)[0], dense(tokens))
+        # the experts' down matrices and the shared SwiGLU's down get the residual scaling at initialisation
+        torch.manual_seed(0)
+        fresh = self.moe_model(shared_hidden=32)
+        self.assertLess(fresh.blocks[0].ffn.experts.down[0].std().item(), 0.015)
+        self.assertLess(fresh.blocks[0].ffn.shared.down.weight.std().item(), 0.015)
+        self.assertGreater(fresh.blocks[0].ffn.experts.gate_up[0].std().item(), 0.015)
+
+    def test_moe_balance_terms_and_bias_update(self):
+        """The aux terms (moe-5, moe-4): the Switch loss is exactly 1.0 at uniform routing and above 1 when the
+        router collapses; the counts sum to tokens x k from a static-shape scatter; the router z-loss is
+        (log E)^2 at zero logits; update_router_bias lowers the overloaded expert's bias and raises the others, and
+        the bias changes which experts are chosen but not the mixing weights."""
+        model = self.moe_model(seed=2).eval()
+        ffn = model.blocks[0].ffn
+        x = torch.randn(64, 32)
+        with torch.no_grad():
+            ffn.router.weight.zero_()  # every token: uniform probabilities over the 4 experts
+            _, (lb, z, counts) = ffn(x)
+            self.assertAlmostEqual(lb.item(), 1.0, places=6)
+            self.assertAlmostEqual(z.item(), math.log(4) ** 2, places=5)
+            self.assertEqual(int(counts.sum()), 64 * 2)
+            # collapse: logits (10, 5, 0, 0) for every token (a constant input feature times fixed weights)
+            x[:, 0] = 1.0
+            ffn.router.weight[0, 0], ffn.router.weight[1, 0] = 10.0, 5.0
+            _, (lb_c, _, counts_c) = ffn(x)
+            self.assertEqual(counts_c.tolist(), [64, 64, 0, 0])
+            self.assertGreater(lb_c.item(), 1.9)
+            # the bias: expert 0 overloaded in the step's counts -> its bias falls by the rate, the others rise
+            model.update_router_bias(torch.tensor([[100, 10, 10, 8], [1, 1, 1, 1]]), 0.1)
+            torch.testing.assert_close(ffn.router.bias, torch.tensor([-0.1, 0.1, 0.1, 0.1]))
+            torch.testing.assert_close(model.blocks[1].ffn.router.bias, torch.zeros(4), msg="no expert above the mean")
+            # a bias large enough reroutes the tokens away from expert 0; the mixing weights still come from the
+            # scores alone (renormalised over the chosen experts)
+            ffn.router.bias[0] = -100.0
+            w, ids, logits, counts_b = ffn.router(x)
+            self.assertEqual(counts_b[0].item(), 0)
+            self.assertEqual(ids[0].tolist(), [1, 2])
+            probs = logits.softmax(-1)[0]
+            torch.testing.assert_close(w[0], probs[[1, 2]] / probs[[1, 2]].sum())
+            ffn.router.bias.zero_()
+            # the sigmoid router
+            sig = self.moe_model(seed=2, router="sigmoid").eval()
+            out, (lb_s, _, counts_s) = sig.blocks[0].ffn(x)
+            self.assertEqual(int(counts_s.sum()), 128)
+            self.assertGreater(lb_s.item(), 0.0)
+        # the dense model has no router: update_router_bias is a no-op and the balance settings are plain fields
+        dense = self.small_model()
+        dense.update_router_bias(torch.zeros(0, 4), 0.1)
+        self.assertEqual(dense.cfg.balance, "bias")
+
+    def test_moe_planner_memory_counts_and_validation(self):
+        """The planner (moe-6, moe-7, moe-10, moe-15): dense by default (E = 0); --experts N sizes the experts
+        from the SwiGLU hidden, records the balance terms and plans the learning rate and batch from the ACTIVE
+        count while the memory estimate grows with the number of experts (the total); flops_per_token uses the
+        active count; the validation refuses bad expert settings; a checkpoint written with unknown config fields
+        or by a newer script is refused with a clear message; the router stays off Muon."""
+        manifest = {"tokenizer": {"vocab_size": 700},
+                    "sources": {"md": {"train": {"tokens": 20_000_000}, "doc_tokens_percentiles": {"50": 300}}}}
+        budget = (4 * 2 ** 30, "4 GiB (test)")
+
+        def plan(argv):
+            args = tiny_gpt.parse_args(["--name", "x", "--d-model", "128", "--layers", "4"] + argv)
+            with unittest.mock.patch.object(tiny_gpt, "device_memory_budget", return_value=budget):
+                return tiny_gpt.plan_run(args, manifest, torch.device("cpu"), None)
+
+        dense_cfg, dense_st, dense_lines = plan([])
+        self.assertEqual((dense_cfg.n_experts, dense_cfg.expert_hidden), (0, 0), "dense is the default")
+        self.assertNotIn("lb_loss", dense_st)
+        self.assertNotIn("MoE", "\n".join(dense_lines))
+        cfg, st, lines = plan(["--experts", "8", "--balance", "both", "--lb-loss", "0.02", "--tokens-per-total-param",
+                               "50"])
+        text = "\n".join(lines)
+        self.assertEqual((cfg.n_experts, cfg.experts_per_token, cfg.expert_hidden, cfg.balance),
+                         (8, 2, tiny_gpt.expert_hidden_for(cfg.ffn_hidden, 2), "both"))
+        self.assertEqual((st["lb_loss"], st["router_z_loss"], st["bias_rate"]), (0.02, 1e-3, 1e-3))
+        self.assertIn("MoE: 8 experts of hidden", text)
+        self.assertRegex(text, r"parameters [\d,]+ total, [\d,]+ active per token")
+        self.assertIn("tokens per TOTAL parameter is below the --tokens-per-total-param floor 50", text)
+        self.assertNotIn("floor", "\n".join(plan(["--experts", "8", "--tokens-per-total-param", "20"])[2]))
+        total, _, active, _ = tiny_gpt.count_params(cfg)
+        self.assertLess(active, total)
+        self.assertAlmostEqual(st["lr"], tiny_gpt.heuristic_lr(active) * tiny_gpt.lr_batch_factor(
+            active, st["tokens_per_step"]), places=12, msg="the learning rate follows the active count")
+        self.assertEqual(tiny_gpt.flops_per_token(cfg), 6 * active + 12 * cfg.n_layers * cfg.ctx * cfg.d_model)
+        est = [tiny_gpt.estimate_train_bytes(tiny_gpt.ModelConfig(**{**dataclasses.asdict(cfg), "n_experts": e,
+                                                                     "expert_hidden": cfg.expert_hidden}), 4, True,
+                                             optimizer="muon") for e in (0, 4, 8, 16)]
+        self.assertEqual(est, sorted(est), "memory grows with the number of experts")
+        self.assertLess(est[0], est[1])
+        # the experiments-table label round-trips into a configuration
+        self.assertEqual(cfg.moe_label(), "8x2/1")
+        self.assertEqual(tiny_gpt.parse_moe_label("8x2/1"), {"n_experts": 8, "experts_per_token": 2, "moe_every": 1})
+        self.assertEqual(tiny_gpt.parse_moe_label(""), {})
+        self.assertEqual(tiny_gpt.expert_hidden_for(2816, 2), 1408)
+        self.assertEqual(tiny_gpt.expert_hidden_for(192, 2), 128)
+        for bad in ({"n_experts": 1}, {"n_experts": 100}, {"n_experts": 4, "experts_per_token": 5},
+                    {"n_experts": 4, "moe_every": 0}, {"n_experts": 4, "router": "argmax"},
+                    {"n_experts": 4, "balance": "none"}, {"n_experts": 4, "expert_hidden": -1}):
+            with self.assertRaises(SystemExit, msg=bad):
+                tiny_gpt.ModelConfig(vocab_size=50, d_model=32, n_heads=4, n_kv_heads=2, **bad)
+        for argv in (["--experts", "1"], ["--experts", "4", "--experts-per-token", "5"], ["--moe-every", "0"]):
+            with self.assertRaises(SystemExit, msg=argv), redirect_stdout(io.StringIO()):
+                with unittest.mock.patch("sys.stderr", io.StringIO()):
+                    tiny_gpt.parse_args(["--name", "x"] + argv)
+        # checkpoints: every old one loads (the fields default to dense); unknown fields are a clear refusal
+        self.assertEqual(tiny_gpt.FORMAT_VERSION, 5)
+        model = self.moe_model(seed=3)
+        obj = {"format": tiny_gpt.CHECKPOINT_FORMAT, "checkpoint_type": "inference", "format_version": 5,
+               "model_config": dataclasses.asdict(model.cfg), "model": model.state_dict()}
+        self.assertEqual(tiny_gpt.config_from_checkpoint(obj).n_experts, 4)
+        old = {k: v for k, v in obj["model_config"].items() if k not in ("n_experts", "experts_per_token",
+                                                                          "expert_hidden", "shared_hidden",
+                                                                          "moe_every", "router", "balance")}
+        self.assertEqual(tiny_gpt.config_from_checkpoint({**obj, "model_config": old}).n_experts, 0)
+        with self.assertRaises(SystemExit) as ctx:
+            tiny_gpt.config_from_checkpoint({**obj, "model_config": {**old, "n_galaxies": 3}})
+        self.assertIn("['n_galaxies']", str(ctx.exception.code))
+        self.assertNotIn("newer", str(ctx.exception.code))
+        with self.assertRaises(SystemExit) as ctx:
+            tiny_gpt.config_from_checkpoint({**obj, "format_version": 99, "model_config": {**old, "n_galaxies": 3}})
+        self.assertIn("written by a newer tiny_gpt.py", str(ctx.exception.code))
+        again = tiny_gpt.TinyGPT(tiny_gpt.config_from_checkpoint(obj)).eval()
+        self.assertEqual(again.load_state_dict(obj["model"], strict=False).unexpected_keys, [])
+        x = torch.randint(0, 50, (1, 16))
+        with torch.no_grad():
+            torch.testing.assert_close(again(x), model.eval()(x))
+        # optimizer groups: the experts' matrices on Muon, the router on AdamW with decay, the bias nowhere
+        settings = {"optimizer": "muon", "lr": 1e-3, "betas": [0.9, 0.95], "weight_decay": 0.1}
+        _, _, names, note = tiny_gpt.build_optimizer(model, settings, torch.device("cpu"))
+        self.assertIn("blocks.0.ffn.router.weight", names[0])
+        self.assertNotIn("blocks.0.ffn.router.weight", names[2])
+        self.assertIn("blocks.1.ffn.experts.gate_up.3", names[2])
+        self.assertIn("blocks.1.ffn.experts.down.0", names[2])
+        self.assertEqual(len(names[2]), 2 * (4 + 4 * 2))
+        self.assertIn("Muon for 24 block matrices", note)
+        # the dense regression (moe-14 item 7): a dense Muon run's groups and log line are what they were
+        _, _, dense_names, dense_note = tiny_gpt.build_optimizer(self.small_model(), settings, torch.device("cpu"))
+        self.assertEqual(len(dense_names[2]), 14)
+        self.assertEqual(dense_names[0], ["token_embedding.weight"])
+        self.assertIn("Muon for 14 block matrices, its step scaled to AdamW's update size; AdamW for the embedding "
+                      "(1 matrix) and 5 norm gains; weight decay on all matrices", dense_note)
+        self.assertEqual(sum(len(g) for g in dense_names), 20, "optimizer state 20/20 tensors on resume")
+
+    def test_moe_kv_cache_matches_full_recompute(self):
+        """KV-cached decoding of a mixture-of-experts model (moe-16): the experts act per token, so the cache
+        needs nothing; a prompt, one token at a time and several tokens after a prefix give the full logits; the
+        decode steps skip the experts nobody chose."""
+        model = self.moe_model(seed=3).eval()
+        gen = torch.Generator().manual_seed(0)
+        seq = torch.randint(0, 50, (2, 16), generator=gen)
+        with torch.no_grad():
+            full = model(seq)
+            cache = model.new_cache()
+            parts = [model(seq[:, :5], cache=cache)]
+            parts += [model(seq[:, i:i + 1], cache=cache) for i in range(5, 9)]
+            parts.append(model(seq[:, 9:16], cache=cache))
+            torch.testing.assert_close(torch.cat(parts, dim=1), full, rtol=1e-4, atol=1e-5)
+            with self.assertRaises(ValueError):
+                model(seq[:, :1], cache=cache)
+            _, aux = model(seq[:, :1], return_aux=True)
+            self.assertEqual(int(aux["counts"].sum()), 2 * 2 * 2, "2 blocks x 2 sequences of one token x 2 experts")
+        dec = tiny_gpt.IncrementalDecoder(model, torch.device("cpu"))
+        ids = seq[0].tolist()[:3]
+        for _ in range(20):
+            got = dec.next_logits(ids)
+            if dec.base == max(0, len(ids) - 16):
+                want = model(torch.tensor([ids[-16:]]))[0, -1]
+                torch.testing.assert_close(want, got, rtol=1e-4, atol=1e-5)
+            ids.append(int(got.argmax()))
+        self.assertEqual(len(ids), 23)
 
 
 class TestRxiv(unittest.TestCase):

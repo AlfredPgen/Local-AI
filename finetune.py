@@ -206,8 +206,19 @@ def train(args):
     model.train()
     model.grad_checkpoint = args.activation_checkpointing
     mem = {"micro": min(args.micro_batch or args.batch, args.batch)}  # halved, or checkpointing added, on OOM
-    decay = [p for p in model.parameters() if p.dim() >= 2]
-    other = [p for p in model.parameters() if p.dim() < 2]
+    # --freeze-router: a mixture-of-experts model keeps its pre-trained routing (the router matrices get no
+    # gradient; the balancing bias buffers are never updated here in any case). Off by default: OLMoE's released
+    # SFT trained the router along with the experts, without a balance loss.
+    frozen = 0
+    if getattr(args, "freeze_router", False):
+        for name, p in model.named_parameters():
+            if name.endswith("router.weight"):
+                p.requires_grad_(False)
+                frozen += 1
+        print(f"router frozen: {frozen} routing matri{'x' if frozen == 1 else 'ces'} keep their pre-trained weights"
+              if frozen else "note: --freeze-router has no effect, this model has no mixture-of-experts router")
+    decay = [p for p in model.parameters() if p.dim() >= 2 and p.requires_grad]
+    other = [p for p in model.parameters() if p.dim() < 2 and p.requires_grad]
     opt, _ = tiny_gpt.make_adamw([{"params": decay, "weight_decay": args.weight_decay},
                                   {"params": other, "weight_decay": 0.0}], device, lr=args.lr, betas=(0.9, 0.95))
     steps_per_epoch = math.ceil(len(train_rows) / args.batch)
@@ -415,6 +426,8 @@ def main(argv=None):
         s.add_argument("--no-length-grouping", action="store_true",
                        help="plain shuffled batches (default: batches of examples of similar length, so less "
                             "compute goes into padding)")
+        s.add_argument("--freeze-router", action="store_true",
+                       help="mixture-of-experts models: keep the routers as pre-trained (default: they train too)")
         s.add_argument("--overwrite", action="store_true")
     a = sub.add_parser("ask")
     a.add_argument("question")

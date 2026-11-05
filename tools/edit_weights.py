@@ -193,6 +193,13 @@ def collect(model, seqs, start, eos, device, amp, batch):
     return resid, neur, {"loop_positions": counts[1], "fresh_positions": counts[0]}
 
 
+def require_dense(model):
+    """The edits address the dense SwiGLU's down matrix of a block; a mixture-of-experts
+    block has several experts and a router instead, and no single 'loop neuron'."""
+    if any(not hasattr(b.ffn, "down") for b in model.blocks):
+        raise SystemExit("edit_weights works on dense SwiGLU blocks; this checkpoint has mixture-of-experts blocks")
+
+
 def apply_edit(model, edit):
     """Change the model in place; returns an undo function."""
     blk = model.blocks[edit["layer"]]
@@ -261,6 +268,7 @@ def main(argv=None):
     device = tg.select_device(args.device)
     amp, amp_name, _ = tg.choose_precision(device, "auto", training=False)
     model, tok, cfg, obj = tg.load_for_inference(src, device)
+    require_dense(model)
     room = model.ctx - args.prompt_tokens - 1  # prompt (+ start token) and continuation must fit the context
     if args.new_tokens > room:
         print(f"Context is {model.ctx} tokens: generating {room} new tokens instead of {args.new_tokens}.")

@@ -69,7 +69,7 @@ import data_prep
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CHECKPOINT_FORMAT = "tiny_gpt_checkpoint"
-FORMAT_VERSION = 4
+FORMAT_VERSION = 5  # 5: mixture-of-experts fields in model_config and router.bias buffers
 DEFAULT_NAME = "tinyGPT"
 DEFAULT_PROBES = os.path.join(HERE, "probes_biology.tsv")
 NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,80}")
@@ -487,10 +487,26 @@ class ModelConfig:
     # QK-norm (an RMSNorm over each query and key head before RoPE). False is the dense default every checkpoint
     # written before the field existed loads with; the planner turns it on for new runs.
     qk_norm: bool = False
+    # Mixture of experts (n_experts 0 = the dense SwiGLU every checkpoint written before these fields existed
+    # has). In an MoE block the SwiGLU is replaced by n_experts smaller SwiGLUs of expert_hidden (0 = auto:
+    # ffn_hidden / experts_per_token rounded to 64, so the FLOPs per token equal the dense FFN) and a router that
+    # sends each token to experts_per_token of them; shared_hidden > 0 adds a SwiGLU every token goes through.
+    # moe_every m makes every m-th block an MoE block (1: all). router: "softmax" (Mixtral) or "sigmoid"
+    # (DeepSeek-V3) scores. balance: "loss" (the Switch load-balancing loss), "bias" (DeepSeek-V3's
+    # auxiliary-loss-free bias on the routing scores, updated after each step) or "both".
+    n_experts: int = 0
+    experts_per_token: int = 2
+    expert_hidden: int = 0
+    shared_hidden: int = 0
+    moe_every: int = 1
+    router: str = "softmax"
+    balance: str = "bias"
 
     def __post_init__(self):
         if not self.ffn_hidden:
             self.ffn_hidden = swiglu_hidden(self.d_model)
+        if self.n_experts and not self.expert_hidden:
+            self.expert_hidden = expert_hidden_for(self.ffn_hidden, self.experts_per_token)
         self.validate()
 
     def validate(self):
@@ -509,6 +525,21 @@ class ModelConfig:
             problems.append("n_layers must be between 1 and 256")
         if not 0.0 <= self.dropout < 0.9:
             problems.append("dropout must be in [0, 0.9)")
+        if self.n_experts and not 2 <= self.n_experts <= 64:
+            problems.append(f"n_experts must be 0 (dense) or between 2 and 64, not {self.n_experts}")
+        if self.n_experts and not 1 <= self.experts_per_token <= self.n_experts:
+            problems.append(f"experts_per_token {self.experts_per_token} must be between 1 and n_experts "
+                            f"{self.n_experts}")
+        if self.n_experts and self.expert_hidden < 1:
+            problems.append("expert_hidden must be positive")
+        if self.n_experts and self.moe_every < 1:
+            problems.append("moe_every must be at least 1")
+        if self.shared_hidden < 0:
+            problems.append("shared_hidden must be >= 0")
+        if self.router not in ("softmax", "sigmoid"):
+            problems.append(f"router must be softmax or sigmoid, not {self.router!r}")
+        if self.balance not in ("loss", "bias", "both"):
+            problems.append(f"balance must be loss, bias or both, not {self.balance!r}")
         if problems:
             raise SystemExit("Invalid model settings: " + "; ".join(problems))
 
@@ -516,11 +547,30 @@ class ModelConfig:
     def head_dim(self):
         return self.d_model // self.n_heads
 
+    def is_moe_block(self, index):
+        """Whether block `index` (0-based) is a mixture-of-experts block."""
+        return bool(self.n_experts) and (index + 1) % self.moe_every == 0
+
+    @property
+    def n_moe_blocks(self):
+        return sum(self.is_moe_block(i) for i in range(self.n_layers))
+
+    def moe_label(self):
+        """'8x2/1' (experts x per token / every), the experiments-table form; '' for a dense model."""
+        return f"{self.n_experts}x{self.experts_per_token}/{self.moe_every}" if self.n_experts else ""
+
 
 def swiglu_hidden(d_model, multiple=64):
     """8/3 * d rounded up to a multiple of 64 (keeps parameters ~ a 4x GELU MLP
     and gives tensor-core friendly shapes)."""
     return int(multiple * math.ceil((8 * d_model / 3) / multiple))
+
+
+def expert_hidden_for(ffn_hidden, experts_per_token, multiple=64):
+    """Hidden size of one expert so that the experts_per_token experts a token
+    goes through do the dense FFN's work: ffn_hidden / k rounded to a multiple of
+    64 (at least 64)."""
+    return int(max(multiple, multiple * round(ffn_hidden / max(experts_per_token, 1) / multiple)))
 
 
 class RMSNorm(nn.Module):
@@ -572,6 +622,157 @@ class SwiGLU(nn.Module):
 
     def forward(self, x):
         return self.dropout(self.down(F.silu(self.gate(x)) * self.up(x)))
+
+
+class Router(nn.Module):
+    """Chooses experts_per_token experts for every token. `weight` (E, d) is the
+    trained routing matrix; `bias` (E,) is DeepSeek-V3's auxiliary-loss-free
+    balancing term (Wang et al. 2024): a buffer, never a parameter, added to the
+    scores for the choice of experts only (not to the weights the chosen
+    experts' outputs are mixed with), moved by TinyGPT.update_router_bias after
+    each optimizer step so that overloaded experts are chosen less. The logits
+    are computed in fp32 whatever autocast says: routing decisions and the
+    load-balancing loss are too sensitive to bf16 rounding."""
+
+    def __init__(self, dim, n_experts, experts_per_token, kind="softmax"):
+        super().__init__()
+        self.n_experts, self.k, self.kind = n_experts, experts_per_token, kind
+        self.weight = nn.Parameter(torch.empty(n_experts, dim))
+        nn.init.normal_(self.weight, mean=0.0, std=0.02)
+        self.register_buffer("bias", torch.zeros(n_experts))
+
+    def forward(self, x2):
+        """x2 (T, d) -> normalised top-k weights (T, k), expert ids (T, k), fp32 logits (T, E) and the number of
+        tokens per expert (E,). The count is a scatter_add_ of static shape (bincount's data-dependent output
+        shape would break a torch.compile graph)."""
+        with torch.autocast(device_type=x2.device.type, enabled=False):
+            logits = F.linear(x2.float(), self.weight.float())
+            scores = logits.softmax(-1) if self.kind == "softmax" else torch.sigmoid(logits)
+            _, ids = (scores + self.bias).topk(self.k, dim=-1)
+            w = scores.gather(-1, ids)
+            w = w / w.sum(-1, keepdim=True)
+        flat = ids.reshape(-1)
+        counts = torch.zeros(self.n_experts, dtype=torch.long, device=x2.device).scatter_add_(
+            0, flat, torch.ones_like(flat))
+        return w, ids, logits, counts
+
+
+class Experts(nn.Module):
+    """n_experts SwiGLUs of hidden size h, each a 2-D gate_up (2h, d) and down
+    (d, h) matrix. Kept as separate 2-D parameters (an nn.ParameterList) rather
+    than one (E, 2h, d) tensor, so torch.optim.Muon (2-D only), build_optimizer's
+    p.dim() == 2 rule and the by-name optimizer-state reload all work unchanged.
+    impl "loop": the tokens are sorted by expert and each expert with work runs
+    one matmul (the general implementation, every device); "grouped": the same
+    sort feeding torch._grouped_mm (one kernel for all experts; a gain only for a
+    compiled CUDA graph, and used only when the probe at model build passed)."""
+
+    def __init__(self, dim, hidden, n_experts, experts_per_token):
+        super().__init__()
+        self.dim, self.hidden, self.k = dim, hidden, experts_per_token
+        self.impl = "loop"
+        self.gate_up = nn.ParameterList([nn.Parameter(torch.empty(2 * hidden, dim)) for _ in range(n_experts)])
+        self.down = nn.ParameterList([nn.Parameter(torch.empty(dim, hidden)) for _ in range(n_experts)])
+        for p in list(self.gate_up) + list(self.down):
+            nn.init.normal_(p, mean=0.0, std=0.02)  # down is rescaled by TinyGPT like every residual projection
+
+    def forward(self, x2, w, ids, counts):
+        """x2 (T, d), the router's weights, ids and counts -> (T, d): each token's chosen experts' outputs, mixed
+        with its routing weights and summed."""
+        flat = ids.reshape(-1)
+        order = flat.argsort(stable=True)  # slots sorted by expert; stable, so a token's slots keep their order
+        token_of = order // self.k
+        xs = x2[token_of]
+        ys = self._grouped(xs, counts) if self.impl == "grouped" else self._loop(xs, counts)
+        ys = ys * w.reshape(-1)[order].unsqueeze(-1).to(ys.dtype)
+        return torch.zeros_like(x2).index_add_(0, token_of, ys.to(x2.dtype))
+
+    def _loop(self, xs, counts):
+        outs, start = [], 0
+        for e, n in enumerate(counts.tolist()):
+            if n == 0:  # an expert nobody chose (common when decoding one token) launches nothing
+                continue
+            xe = xs[start:start + n]
+            gate, up = F.linear(xe, self.gate_up[e]).chunk(2, dim=-1)
+            outs.append(F.linear(F.silu(gate) * up, self.down[e]))
+            start += n
+        return torch.cat(outs) if outs else xs[:0]
+
+    def _grouped(self, xs, counts):
+        # autocast does not cover _grouped_mm, so the inputs are cast to its dtype by hand; offsets are the
+        # int32 cumulative counts the kernel expects
+        kind = xs.device.type
+        dtype = torch.get_autocast_dtype(kind) if torch.is_autocast_enabled(kind) else xs.dtype
+        offs = counts.cumsum(0).to(torch.int32)
+        gate_up = torch.stack(list(self.gate_up)).transpose(1, 2).to(dtype)  # (E, d, 2h)
+        down = torch.stack(list(self.down)).transpose(1, 2).to(dtype)  # (E, h, d)
+        gate, up = torch._grouped_mm(xs.to(dtype), gate_up, offs=offs).chunk(2, dim=-1)
+        return torch._grouped_mm(F.silu(gate) * up, down, offs=offs)
+
+
+_GROUPED_MM_PROBE = {}
+
+
+def grouped_mm_available(device):
+    """Whether torch._grouped_mm runs forward AND backward on this device: a
+    3-expert toy problem with a strided loss (y.pow(2).mean(); a .sum() hands the
+    backward a stride-0 gradient some kernels reject, which is not a failure of the
+    real training loss). Returns (ok, reason); cached per device type."""
+    key = device.type
+    if key not in _GROUPED_MM_PROBE:
+        try:
+            if not hasattr(torch, "_grouped_mm"):
+                raise RuntimeError("this PyTorch has no torch._grouped_mm")
+            dtype = torch.bfloat16 if key in ("cuda", "mps") else torch.float32
+            with torch.enable_grad():  # the probe may be called from inside a no_grad block
+                # fixed inputs (no random draw, so the run's RNG state is untouched)
+                x = (torch.arange(96, device=device, dtype=dtype).reshape(12, 8) / 96 - 0.5).requires_grad_()
+                w = (torch.arange(384, device=device, dtype=dtype).reshape(3, 8, 16) / 384 - 0.5).requires_grad_()
+                offs = torch.tensor([5, 7, 12], dtype=torch.int32, device=device)
+                y = torch._grouped_mm(x, w, offs=offs)
+                y.pow(2).mean().backward()
+            if x.grad is None or w.grad is None or not torch.isfinite(w.grad).all():
+                raise RuntimeError("the backward pass produced no gradient")
+            _GROUPED_MM_PROBE[key] = (True, f"torch._grouped_mm probe passed on {key}")
+        except Exception as exc:  # noqa: BLE001 - any failure means the per-expert loop is used
+            _GROUPED_MM_PROBE[key] = (False, f"torch._grouped_mm probe failed on {key} ({type(exc).__name__}: "
+                                             f"{str(exc)[:100]}); using the per-expert loop")
+    return _GROUPED_MM_PROBE[key]
+
+
+class MoEFFN(nn.Module):
+    """A mixture-of-experts feed-forward layer: Router + Experts (+ an optional
+    shared SwiGLU every token goes through). forward returns (output, aux) with
+    aux = (lb, z, counts): the Switch load-balancing loss lb = E x sum_e f_e P_e
+    (Fedus et al. 2022; f_e = share of the routed token-slots that went to expert
+    e, no gradient; P_e = mean routing probability of e; exactly 1.0 at uniform
+    routing, larger when the router collapses onto few experts), the router
+    z-loss z = mean over tokens of (log sum_e exp logit_e)^2 (Zoph et al. 2022,
+    keeps the routing logits from growing without bound), and the tokens per
+    expert (E,). The terms are returned, never accumulated on the module: under
+    non-reentrant activation checkpointing the recompute may run fully, partly or
+    not at all, and torch.compile treats attribute writes as side effects."""
+
+    def __init__(self, cfg):
+        super().__init__()
+        self.n_experts, self.k = cfg.n_experts, cfg.experts_per_token
+        self.router = Router(cfg.d_model, cfg.n_experts, cfg.experts_per_token, cfg.router)
+        self.experts = Experts(cfg.d_model, cfg.expert_hidden, cfg.n_experts, cfg.experts_per_token)
+        self.shared = SwiGLU(cfg.d_model, cfg.shared_hidden, 0.0) if cfg.shared_hidden else None
+        self.dropout = nn.Dropout(cfg.dropout)
+
+    def forward(self, x):
+        shape = x.shape
+        x2 = x.reshape(-1, shape[-1])
+        w, ids, logits, counts = self.router(x2)
+        out = self.experts(x2, w, ids, counts)
+        if self.shared is not None:
+            out = out + self.shared(x2).to(out.dtype)
+        f = counts.to(logits.dtype) / (x2.size(0) * self.k)
+        p = logits.softmax(-1).mean(0)
+        lb = self.n_experts * (f * p).sum()
+        z = torch.logsumexp(logits, dim=-1).pow(2).mean()
+        return self.dropout(out).view(shape), (lb, z, counts)
 
 
 class GroupedQueryAttention(nn.Module):
@@ -669,17 +870,25 @@ class GroupedQueryAttention(nn.Module):
 
 
 class TransformerBlock(nn.Module):
-    def __init__(self, cfg):
+    """One pre-norm block. A dense block returns the residual stream; a
+    mixture-of-experts block (self.moe) returns (residual stream, aux) with the
+    MoEFFN's (lb, z, counts) terms."""
+
+    def __init__(self, cfg, index=0):
         super().__init__()
         self.attn_norm = RMSNorm(cfg.d_model, cfg.norm_eps)
         self.ffn_norm = RMSNorm(cfg.d_model, cfg.norm_eps)
         self.attn = GroupedQueryAttention(cfg.d_model, cfg.n_heads, cfg.n_kv_heads, cfg.dropout, cfg.qk_norm,
                                           cfg.norm_eps)
-        self.ffn = SwiGLU(cfg.d_model, cfg.ffn_hidden, cfg.dropout)
+        self.moe = cfg.is_moe_block(index)
+        self.ffn = MoEFFN(cfg) if self.moe else SwiGLU(cfg.d_model, cfg.ffn_hidden, cfg.dropout)
         self.resid_dropout = nn.Dropout(cfg.dropout)
 
     def forward(self, x, rope, cache=None, mask=None):
         x = x + self.resid_dropout(self.attn(self.attn_norm(x), rope, cache, mask))
+        if self.moe:
+            y, aux = self.ffn(self.ffn_norm(x))
+            return x + y, aux
         return x + self.ffn(self.ffn_norm(x))
 
 
@@ -706,13 +915,15 @@ class TinyGPT(nn.Module):
         self.token_embedding = nn.Embedding(cfg.vocab_size, cfg.d_model)
         self.embedding_dropout = nn.Dropout(cfg.dropout)
         self.rope = RotaryEmbedding(cfg.head_dim, cfg.ctx, cfg.rope_base)
-        self.blocks = nn.ModuleList(TransformerBlock(cfg) for _ in range(cfg.n_layers))
+        self.blocks = nn.ModuleList(TransformerBlock(cfg, i) for i in range(cfg.n_layers))
         self.norm = RMSNorm(cfg.d_model, cfg.norm_eps)
         self.lm_head = nn.Linear(cfg.d_model, cfg.vocab_size, bias=False)
         self.apply(self._init_weights)
         resid_std = 0.02 / math.sqrt(2 * cfg.n_layers)
         for name, p in self.named_parameters():
-            if name.endswith("o_proj.weight") or name.endswith("down.weight"):
+            # every projection that writes into the residual stream: o_proj, the dense (and shared) SwiGLU's down,
+            # and each expert's down ("...experts.down.<e>", a ParameterList entry)
+            if name.endswith("o_proj.weight") or name.endswith("down.weight") or ".down." in name:
                 nn.init.normal_(p, mean=0.0, std=resid_std)
         if cfg.tie_embeddings:
             self.lm_head.weight = self.token_embedding.weight
@@ -736,6 +947,26 @@ class TinyGPT(nn.Module):
         for block in self.blocks:
             block.attn.impl = impl
 
+    def set_moe_impl(self, impl):
+        """How the experts run: "loop" or "grouped" (see Experts)."""
+        for block in self.blocks:
+            if block.moe:
+                block.ffn.experts.impl = impl
+
+    def moe_blocks(self):
+        return [block for block in self.blocks if block.moe]
+
+    @torch.no_grad()
+    def update_router_bias(self, counts, rate):
+        """DeepSeek-V3's auxiliary-loss-free balancing (Wang et al. 2024): after each
+        optimizer step, every expert that received more than the mean number of tokens
+        in a layer has its routing bias lowered by `rate`, every expert below the mean
+        has it raised: bias -= rate x sign(c - mean(c)). counts: (n_moe_blocks, E), the
+        tokens per expert over the step."""
+        for block, c in zip(self.moe_blocks(), counts):
+            c = c.to(block.ffn.router.bias.dtype)
+            block.ffn.router.bias.sub_(rate * torch.sign(c - c.mean()))
+
     def new_cache(self):
         """An empty KV cache (one dict per layer) for forward(..., cache=...)."""
         return [{} for _ in self.blocks]
@@ -744,11 +975,15 @@ class TinyGPT(nn.Module):
     def cache_length(cache):
         return cache[0]["k"].size(-2) if cache and "k" in cache[0] else 0
 
-    def forward(self, tokens, return_hidden=False, cache=None):
+    def forward(self, tokens, return_hidden=False, cache=None, return_aux=False):
         """Logits, or (return_hidden=True) the final normalised hidden states, from
         which chunked_lm_loss computes the loss without all logits at once.
         cache (from new_cache): KV-cached decoding; `tokens` are then only the new
-        tokens, after those already in the cache (at most ctx in total)."""
+        tokens, after those already in the cache (at most ctx in total).
+        return_aux=True returns (output, aux) instead, aux the mixture-of-experts
+        terms summed over the MoE blocks, {"lb", "z", "counts" (n_moe_blocks, E)},
+        or None for a dense model; without it the output is the single tensor it
+        always was (the experts act per token, so the KV cache needs nothing)."""
         if cache is not None and self.cache_length(cache) + tokens.size(1) > self.ctx:
             raise ValueError(f"KV cache full: {self.cache_length(cache)} + {tokens.size(1)} tokens > ctx {self.ctx}")
         x = self.embedding_dropout(self.token_embedding(tokens))
@@ -756,6 +991,8 @@ class TinyGPT(nn.Module):
         # the document mask applies to whole windows (training, evaluation, scoring); KV-cached decoding
         # continues one text and keeps plain causal attention
         mask = document_mask(tokens, self.doc_sep_id) if self.doc_sep_id is not None and cache is None else None
+        lb = z = None
+        counts = []
         for i, block in enumerate(self.blocks):
             if recompute:
                 x = torch.utils.checkpoint.checkpoint(block, x, self.rope, None, mask, use_reentrant=False)
@@ -763,18 +1000,36 @@ class TinyGPT(nn.Module):
                 x = block(x, self.rope, cache[i])
             else:
                 x = block(x, self.rope, None, mask)
+            if block.moe:
+                x, (b_lb, b_z, b_counts) = x
+                lb = b_lb if lb is None else lb + b_lb
+                z = b_z if z is None else z + b_z
+                counts.append(b_counts)
         x = self.norm(x)
-        return x if return_hidden else self.lm_head(x)
+        out = x if return_hidden else self.lm_head(x)
+        if not return_aux:
+            return out
+        return out, ({"lb": lb, "z": z, "counts": torch.stack(counts)} if counts else None)
 
     def param_counts(self):
+        """(total, non-embedding total, active per token, non-embedding active): the
+        same four numbers as count_params(cfg), from the built model."""
         total = sum(p.numel() for p in self.parameters())
         embed = self.token_embedding.weight.numel()
         if not self.cfg.tie_embeddings:
             embed += self.lm_head.weight.numel()
-        return total, total - embed
+        cfg = self.cfg
+        idle = cfg.n_moe_blocks * 3 * cfg.d_model * cfg.expert_hidden * (cfg.n_experts - cfg.experts_per_token)
+        return total, total - embed, total - idle, total - idle - embed
 
 
 LOSS_CHUNK_TOKENS = 4096  # tokens per piece when the loss is computed in pieces
+# mixture-of-experts training terms (see MoEFFN and the training loop): the Switch load-balancing loss weight
+# (Fedus et al. 2022 use 0.01), the router z-loss weight (Zoph et al. 2022 use 1e-3) and the per-step movement of
+# DeepSeek-V3's balancing bias (Wang et al. 2024 use 1e-3)
+LB_LOSS_DEFAULT = 0.01
+ROUTER_Z_LOSS_DEFAULT = 1e-3
+BIAS_RATE_DEFAULT = 1e-3
 EMA_DECAY_DEFAULT = 0.999  # per-step decay of the weight average new runs keep (--ema)
 EMA_EVERY = 10  # steps between EMA updates; the per-step decay is compounded over them (0.999^10 ~ 0.990)
 # FP16 updates the GradScaler may skip in a row (overflowing gradients) before the run counts as diverged; a fresh
@@ -852,14 +1107,26 @@ def target_logprobs(model, x, y, chunk_tokens=LOSS_CHUNK_TOKENS):
 
 
 def count_params(cfg):
-    """Parameter count without building the model (unique, tied counted once)."""
+    """(total, non-embedding total, active per token, non-embedding active)
+    without building the model (unique, tied counted once). Active = the
+    parameters a token's forward pass touches: in a mixture-of-experts block
+    experts_per_token of the n_experts experts, so active = total - n_moe_blocks x
+    3 d h_e (E - k); for a dense model active equals total. [0] is the total, as
+    every caller that indexes the result expects. The planner's compute rules
+    (FLOPs, tokens per step, learning rate, the tokens-per-parameter fit) take the
+    active count; memory and the parameter column take the total."""
     d, h = cfg.d_model, cfg.ffn_hidden
     kv = cfg.n_kv_heads * cfg.head_dim
-    per_layer = d * d * 2 + d * kv * 2 + 3 * d * h + 2 * d
+    per_layer = d * d * 2 + d * kv * 2 + 2 * d  # attention and the two norms
     if getattr(cfg, "qk_norm", False):
         per_layer += 2 * cfg.head_dim  # the query and key norm gains, shared across heads
+    n_moe = getattr(cfg, "n_moe_blocks", 0)
+    e, k, h_e, shared = cfg.n_experts, cfg.experts_per_token, cfg.expert_hidden, cfg.shared_hidden
+    moe_ffn = e * 3 * d * h_e + e * d + 3 * d * shared if n_moe else 0  # experts, router, shared SwiGLU
+    body = per_layer * cfg.n_layers + 3 * d * h * (cfg.n_layers - n_moe) + moe_ffn * n_moe + d
     embed = cfg.vocab_size * d * (1 if cfg.tie_embeddings else 2)
-    return per_layer * cfg.n_layers + d + embed, per_layer * cfg.n_layers + d
+    idle = n_moe * 3 * d * h_e * (e - k) if n_moe else 0
+    return body + embed, body, body + embed - idle, body - idle
 
 
 # ---------------------------------------------------------------------------
@@ -961,7 +1228,17 @@ def config_from_checkpoint(obj, ctx=None):
     cfg.ctx, so the checkpoint's tensors load unchanged."""
     family, _ = checkpoint_info(obj)
     if family == "tinygpt":
-        cfg = ModelConfig(**obj["model_config"])
+        try:
+            cfg = ModelConfig(**obj["model_config"])
+        except TypeError as exc:  # a field this version of the script has never heard of
+            known = {f.name for f in dataclasses.fields(ModelConfig)}
+            unknown = sorted(set(obj["model_config"]) - known)
+            version = int(obj.get("format_version", 0) or 0)
+            raise SystemExit(
+                f"This checkpoint's model settings use fields this tiny_gpt.py does not know: {unknown} "
+                f"(checkpoint format_version {version}, this script reads up to {FORMAT_VERSION}"
+                + ("; written by a newer tiny_gpt.py" if version > FORMAT_VERSION else "")
+                + "). Update tiny_gpt.py to open it.") from exc
     elif family in ("legacy-v3", "legacy-v2"):
         s = obj["settings"]
         weights = obj["model"]
@@ -1282,7 +1559,10 @@ class CombinedOptimizer:
 
 
 OPTIMIZER_LABELS = {"adamw": "AdamW", "muon": "Muon + AdamW"}
-MUON_EXCLUDED = ("token_embedding.weight", "lm_head.weight")  # embedding and output layer stay on AdamW
+# name suffixes that stay on AdamW in a Muon run: the embedding and output layer (the split Muon is designed for)
+# and the mixture-of-experts routers (a Muon update would orthogonalise the routing matrix; the router z-loss is
+# the one control on its logit scale, so it trains like any other AdamW matrix, decayed)
+MUON_EXCLUDED = ("token_embedding.weight", "lm_head.weight", "router.weight")
 STATE_KEYS = {"AdamW": "exp_avg", "Muon": "momentum_buffer"}  # the state each optimizer keeps per parameter
 
 
@@ -1296,7 +1576,7 @@ def build_optimizer(model, settings, device):
     description)."""
     named = list(model.named_parameters())
     use_muon = settings.get("optimizer", "adamw") == "muon"
-    muon = [(n, p) for n, p in named if use_muon and p.dim() == 2 and n not in MUON_EXCLUDED]
+    muon = [(n, p) for n, p in named if use_muon and p.dim() == 2 and not n.endswith(MUON_EXCLUDED)]
     taken = {n for n, _ in muon}
     # an untied input embedding is a lookup table (each row trained only when its token occurs), so like the norm
     # gains it is not decayed; tied, the one matrix is also the output layer and keeps its decay
@@ -2070,7 +2350,7 @@ def attention_flop_share(cfg):
     """Share of the training FLOPs per token spent on attention scores:
     12 L ctx d / (6 N + 12 L ctx d) (see flops_per_token)."""
     attn = 12 * cfg.n_layers * cfg.ctx * cfg.d_model
-    return attn / (6 * count_params(cfg)[0] + attn)
+    return attn / (6 * count_params(cfg)[2] + attn)
 
 
 def default_head_dim(d_model):
@@ -2301,18 +2581,30 @@ def estimate_train_bytes(cfg, micro_batch, amp=True, checkpointing=False, loss_c
     scores: n_heads x ctx x 6 bytes per token (the bf16 cast copy, 2, and the fp32
     softmax output, 4); with checkpointing the `+ t * per_token_layer` term already
     charges them for the one block being recomputed. doc_mask adds the boolean
-    (B, 1, T, T) document mask, one byte per entry."""
-    n_total, n_nonembed = count_params(cfg)
+    (B, 1, T, T) document mask, one byte per entry. In a mixture-of-experts block
+    the FFN keeps activations for the experts_per_token experts a token visits
+    (k x h_e + the shared hidden instead of ffn_hidden) plus the routing: the
+    gathered inputs and the expert outputs (2 k d b), the fp32 scores, logits and
+    probabilities (3 E x 4) and the int64 ids and sort order (2 k x 8); weights,
+    gradients, the half-precision copies and the optimizer state count every
+    expert (the TOTAL parameter count), the experts in the Muon body."""
+    n_total, n_nonembed = count_params(cfg)[:2]
     t = micro_batch * cfg.ctx
     b = 2 if amp else 4
     kv = cfg.n_kv_heads * cfg.head_dim
-    per_token_layer = 4 * cfg.d_model + b * (7 * cfg.d_model + 4 * kv + 4 * cfg.ffn_hidden) + 3 * cfg.n_heads
+    per_token_attn = 4 * cfg.d_model + b * (7 * cfg.d_model + 4 * kv) + 3 * cfg.n_heads
     if device is not None and attention_keeps_scores(device):
-        per_token_layer += cfg.n_heads * cfg.ctx * 6
+        per_token_attn += cfg.n_heads * cfg.ctx * 6
+    per_token_dense = per_token_attn + b * 4 * cfg.ffn_hidden
+    n_moe = cfg.n_moe_blocks
+    k, e = cfg.experts_per_token, cfg.n_experts
+    per_token_moe = (per_token_attn + b * 4 * (k * cfg.expert_hidden + cfg.shared_hidden)
+                     + 2 * k * cfg.d_model * b + 3 * e * 4 + 2 * k * 8) if n_moe else per_token_dense
+    per_token_layer = max(per_token_dense, per_token_moe)  # the one block being recomputed under checkpointing
     if checkpointing:
         activations = t * cfg.n_layers * 4 * cfg.d_model + t * per_token_layer  # the residual stream is FP32
     else:
-        activations = t * cfg.n_layers * per_token_layer
+        activations = t * ((cfg.n_layers - n_moe) * per_token_dense + n_moe * per_token_moe)
     if doc_mask:
         activations += t * cfg.ctx  # B x T x T bytes
     logits = (min(t, loss_chunk) if loss_chunk else t) * cfg.vocab_size * (b + 4 + 4)
@@ -2389,10 +2681,15 @@ def choose_micro_batch(cfg, tokens_per_step, budget_bytes, amp):
     return micro, accum
 
 
-def plan_run(args, manifest, device, amp_dtype, token_cap=None):
+def plan_run(args, manifest, device, amp_dtype, token_cap=None, fixed_cfg=None):
     """Fill every unset hyper-parameter from the dataset and device.
 
     token_cap limits the training-token budget (used by --time-budget-hours).
+    fixed_cfg: an architecture that is not up for planning (--init-from: the
+    checkpoint's ModelConfig, experts included); memory, batch, steps and the
+    learning rate are then sized for exactly it. The compute rules (tokens per
+    step, learning rate, FLOPs, the tokens-per-parameter fit) use the ACTIVE
+    parameter count, memory the TOTAL (count_params).
     Returns (ModelConfig, train settings dict, explanation lines)."""
     vocab = int(manifest["tokenizer"]["vocab_size"])
     train_by_source = {n: int(s["train"]["tokens"]) for n, s in manifest["sources"].items() if s.get("train")}
@@ -2425,11 +2722,14 @@ def plan_run(args, manifest, device, amp_dtype, token_cap=None):
     # --- model shape ---
     # Largest ladder shape whose parameter count N satisfies D >= r * N.
     ladder = shape_ladder(vocab)
-    fitting = [c for c in ladder if count_params(c)[0] * r <= planned]
+    fitting = [c for c in ladder if count_params(c)[2] * r <= planned]
     target = planned / r
     explicit_shape = any(v is not None for v in (args.d_model, args.layers, args.heads, args.kv_heads))
+    n_experts = int(getattr(args, "experts", 0) or 0)
 
     def shaped(base):
+        if fixed_cfg is not None:
+            return ModelConfig(**dataclasses.asdict(fixed_cfg))
         cfg = ModelConfig(**dataclasses.asdict(base))
         if explicit_shape:
             if args.d_model is not None:
@@ -2447,6 +2747,15 @@ def plan_run(args, manifest, device, amp_dtype, token_cap=None):
         cfg.rope_base = args.rope_base if args.rope_base else default_rope_base(cfg.ctx)
         cfg.tie_embeddings = getattr(args, "tie_embeddings", "on") != "off"
         cfg.qk_norm = getattr(args, "qk_norm", None) != "off"  # new runs get QK-norm unless told otherwise
+        # mixture of experts only when asked (--experts N); dense stays the default
+        cfg.n_experts = n_experts
+        cfg.experts_per_token = int(getattr(args, "experts_per_token", 2) or 2)
+        cfg.expert_hidden = (int(getattr(args, "expert_hidden", 0) or 0)
+                             or expert_hidden_for(cfg.ffn_hidden, cfg.experts_per_token)) if n_experts else 0
+        cfg.shared_hidden = int(getattr(args, "shared_hidden", 0) or 0) if n_experts else 0
+        cfg.moe_every = int(getattr(args, "moe_every", 1) or 1)
+        cfg.router = getattr(args, "router", None) or "softmax"
+        cfg.balance = getattr(args, "balance", None) or "bias"
         cfg.validate()
         return cfg
 
@@ -2456,7 +2765,7 @@ def plan_run(args, manifest, device, amp_dtype, token_cap=None):
             return args.tokens_per_step
         if args.steps:
             return max(cfg.ctx, planned // args.steps)
-        return tokens_per_step_for(count_params(cfg)[0], planned)
+        return tokens_per_step_for(count_params(cfg)[2], planned)
 
     def batch_for(cfg):
         tps = target_tps(cfg)
@@ -2478,7 +2787,11 @@ def plan_run(args, manifest, device, amp_dtype, token_cap=None):
                                                   device=device, doc_mask=doc_mask)
         return micro, (args.grad_accum or accum), ck, lc
 
-    if explicit_shape:
+    if fixed_cfg is not None:
+        cfg = shaped(None)
+        shape_why = "the architecture of the --init-from checkpoint"
+        micro, accum, ckpt, chunk = batch_for(cfg)
+    elif explicit_shape:
         cfg = shaped(fitting[-1] if fitting else ladder[0])  # options given override the data-chosen shape
         shape_why = "command-line values, ladder defaults for the rest"
         micro, accum, ckpt, chunk = batch_for(cfg)
@@ -2498,7 +2811,7 @@ def plan_run(args, manifest, device, amp_dtype, token_cap=None):
                 shape_why += (f"; the larger {count_params(shaped(candidates[0]))[0] / 1e6:,.1f}M shape does not fit "
                               f"in memory, so the largest that fits")
             break
-    n_total, n_nonembed = count_params(cfg)
+    n_total, n_nonembed, n_active, _ = count_params(cfg)
     tokens_per_step = micro * accum * cfg.ctx
 
     steps = args.steps or max(1, planned // tokens_per_step)  # round down: never exceed the epoch cap
@@ -2509,14 +2822,14 @@ def plan_run(args, manifest, device, amp_dtype, token_cap=None):
     # the LR table was calibrated at the old batch rule; a doubled or halved batch moves the rate by sqrt(2). The
     # factor follows the batch the run will use (micro x accumulation x ctx: --batch-size and --grad-accum may fix it
     # far from the planner's target), and its power-of-two rounding leaves accumulation rounding alone
-    lr_factor = 1.0 if args.lr else lr_batch_factor(n_total, tokens_per_step)
+    lr_factor = 1.0 if args.lr else lr_batch_factor(n_active, tokens_per_step)
     # --lr-scale: the sweep knob on the heuristic rate (LR_TABLE itself changes only once a sweep has shown a factor
     # that two sizes agree on; keep lr x weight_decay constant when it does)
     lr_scale = float(getattr(args, "lr_scale", 1.0) or 1.0)
     if args.lr and lr_scale != 1.0:  # recorded as the factor the run's rate actually carries
         lines.append(f"--lr-scale {lr_scale:g} has no effect: --lr sets the peak learning rate (recorded as 1)")
         lr_scale = 1.0
-    lr = args.lr or heuristic_lr(n_total) * lr_factor * lr_scale
+    lr = args.lr or heuristic_lr(n_active) * lr_factor * lr_scale
     min_lr_ratio = resolve_min_lr_ratio(args.min_lr_ratio, args.schedule)
     warmup = args.warmup_steps if args.warmup_steps is not None else int(min(max(round(0.02 * steps), 50), 2000, max(1, steps // 10)))
     mix_alpha = getattr(args, "mix_alpha", None)
@@ -2533,27 +2846,40 @@ def plan_run(args, manifest, device, amp_dtype, token_cap=None):
         "optimizer": args.optimizer or "adamw", "activation_checkpointing": ckpt, "loss_chunk_tokens": chunk,
         "lr_scale": lr_scale, "doc_mask": doc_mask,
     }
+    if cfg.n_experts:  # the mixture-of-experts training terms (see the training loop)
+        settings["lb_loss"] = float(getattr(args, "lb_loss", LB_LOSS_DEFAULT))
+        settings["router_z_loss"] = float(getattr(args, "router_z_loss", ROUTER_Z_LOSS_DEFAULT))
+        settings["bias_rate"] = float(getattr(args, "bias_rate", BIAS_RATE_DEFAULT))
     resolve_ema(settings, getattr(args, "ema", None), resumed=False)
+    moe_text = ""
+    if cfg.n_experts:
+        moe_text = (f", MoE: {cfg.n_experts} experts of hidden {cfg.expert_hidden}, {cfg.experts_per_token} per "
+                    f"token" + (f" in every {cfg.moe_every}. block" if cfg.moe_every > 1 else "")
+                    + (f", shared SwiGLU {cfg.shared_hidden}" if cfg.shared_hidden else "")
+                    + f", {cfg.router} router, balance {cfg.balance}")
     lines += [
         f"unique training tokens U = {unique:,} ({', '.join(f'{k} {v:,}' for k, v in train_by_source.items())}); "
         f"vocabulary {vocab:,}; {budget_text}",
         f"token budget D = {planned:,} ({why}); shape: {shape_why}",
         f"model: d_model {cfg.d_model}, layers {cfg.n_layers}, heads {cfg.n_heads}/{cfg.n_kv_heads} kv "
-        f"(head {cfg.head_dim}), SwiGLU {cfg.ffn_hidden}{', QK-norm' if cfg.qk_norm else ''}, ctx {cfg.ctx}, "
+        f"(head {cfg.head_dim}), SwiGLU {cfg.ffn_hidden}{', QK-norm' if cfg.qk_norm else ''}{moe_text}, ctx {cfg.ctx}, "
         f"RoPE base {cfg.rope_base:,.0f}"
-        f"{'' if args.rope_base else ' (default for this ctx)'}; parameters {n_total:,} total, "
-        f"{n_nonembed:,} excluding the ({'tied' if cfg.tie_embeddings else 'untied'}) embedding",
-        f"ctx {cfg.ctx} ({'--ctx' if args.ctx else f'default for d_model {cfg.d_model}'}): attention "
+        f"{'' if args.rope_base or fixed_cfg is not None else ' (default for this ctx)'}; parameters {n_total:,} total, "
+        + (f"{n_active:,} active per token, " if cfg.n_experts else "")
+        + f"{n_nonembed:,} excluding the ({'tied' if cfg.tie_embeddings else 'untied'}) embedding",
+        f"ctx {cfg.ctx} ({'--ctx' if args.ctx else 'from the checkpoint' if fixed_cfg is not None else f'default for d_model {cfg.d_model}'}): attention "
         f"{attention_flop_share(cfg):.0%} of the training FLOPs per token",
         f"batch: {micro} x {cfg.ctx} tokens x {accum} accumulation = {tokens_per_step:,} tokens/step; "
         f"{steps:,} steps = {train_tokens:,} training tokens",
-        f"ratios: {train_tokens / n_total:,.1f} training tokens per parameter "
-        f"({train_tokens / max(n_nonembed, 1):,.1f} per non-embedding parameter); "
-        f"unique data {unique / n_total:,.1f} tokens per parameter; {epochs:,.2f} epochs",
+        f"ratios: {train_tokens / n_active:,.1f} training tokens per {'active ' if cfg.n_experts else ''}parameter "
+        + (f"({train_tokens / n_total:,.1f} per total parameter, {train_tokens / max(n_nonembed, 1):,.1f} per "
+           f"non-embedding parameter); " if cfg.n_experts else
+           f"({train_tokens / max(n_nonembed, 1):,.1f} per non-embedding parameter); ")
+        + f"unique data {unique / n_total:,.1f} tokens per parameter; {epochs:,.2f} epochs",
         f"learning rate {lr:.2e} peak ("
-        + ("set" if args.lr else f"heuristic for {n_total / 1e6:,.1f}M parameters x batch factor {lr_factor:.2f}"
+        + ("set" if args.lr else f"heuristic for {n_active / 1e6:,.1f}M {'active ' if cfg.n_experts else ''}parameters x batch factor {lr_factor:.2f}"
            + ("" if lr_factor == 1.0 else f" for {tokens_per_step:,} tokens/step against the table's "
-                                          f"{tokens_per_step_legacy(n_total):,}")
+                                          f"{tokens_per_step_legacy(n_active):,}")
            + ("" if lr_scale == 1.0 else f" x --lr-scale {lr_scale:g}"))
         + f"), min {lr * min_lr_ratio:.2e} ({min_lr_ratio:g} of peak"
         + ("" if args.min_lr_ratio is not None else
@@ -2580,6 +2906,16 @@ def plan_run(args, manifest, device, amp_dtype, token_cap=None):
     ]
     if args.steps and train_tokens > max_epochs * unique:
         lines.append(f"note: --steps {args.steps:,} trains {epochs:.2f} epochs, more than --max-epochs {max_epochs:g}.")
+    floor = float(getattr(args, "tokens_per_total_param", 0) or 0)
+    if cfg.n_experts and floor > 0 and train_tokens / n_total < floor:
+        lines.append(f"WARNING: {train_tokens / n_total:,.1f} training tokens per TOTAL parameter is below the "
+                     f"--tokens-per-total-param floor {floor:g}: every published mixture-of-experts gain was "
+                     "measured at 22-700; with this little data the experts are unlikely to beat the dense model "
+                     "(fewer --experts, --moe-every 2, or more data).")
+    if cfg.n_experts >= 32:
+        lines.append(f"note: {cfg.n_experts} experts on one device run as {cfg.n_experts} small matmuls per layer "
+                     "(or one grouped kernel with --moe-impl grouped on CUDA); fine-grained experts pay off with a "
+                     "fused grouped GEMM (SM90 CUDA), not here. 8-16 experts, 2 per token, is the default range.")
     over = [s for s, e in source_epochs.items() if e > max_epochs + 1e-9]
     if over:
         lines.append("WARNING: " + ", ".join(f"{s} would be seen {source_epochs[s]:.1f} times" for s in over)
@@ -2666,8 +3002,9 @@ def flops_per_token(cfg, checkpointing=False):
     forward pass, 4 in the backward) plus the attention scores, 12 x layers x
     context x width (QK^T and AV: 4 per layer forward, 8 backward). Activation
     checkpointing runs the forward pass a second time: 8 per parameter and 16 x
-    layers x context x width."""
-    n = count_params(cfg)[0]
+    layers x context x width. The parameters are the ACTIVE ones: in a
+    mixture-of-experts block only the experts a token visits do work."""
+    n = count_params(cfg)[2]
     return (8 if checkpointing else 6) * n + (16 if checkpointing else 12) * cfg.n_layers * cfg.ctx * cfg.d_model
 
 
@@ -2689,10 +3026,12 @@ def sustained_speed(out_dir, device):
         return None, "no experiments.csv"
     for r in reversed(rows):
         try:
+            moe = parse_moe_label(r.get("moe"))  # "8x2/1" from the moe column; blank or absent = dense
             cfg = ModelConfig(vocab_size=int(r["vocab"]), ctx=int(r["ctx"]), d_model=int(r["d_model"]),
-                              n_layers=int(r["layers"]), n_heads=int(r["heads"]), n_kv_heads=int(r["kv_heads"]))
+                              n_layers=int(r["layers"]), n_heads=int(r["heads"]), n_kv_heads=int(r["kv_heads"]),
+                              **moe)
             tokens, hours = float(r["tokens_seen"]), float(r["train_hours"])
-        except (KeyError, TypeError, ValueError):
+        except (KeyError, TypeError, ValueError, SystemExit):
             continue
         if hours >= 0.2 and tokens > 0:
             # the run's own FLOP count: a checkpointed run did more work per token than its tokens/s suggest
@@ -2702,6 +3041,18 @@ def sustained_speed(out_dir, device):
                            f"({int(r['params']) / 1e6:.1f}M parameters, {tokens / hours / 3600:,.0f} tokens/s"
                            f"{', activation checkpointing' if recompute else ''})")
     return None, f"no training run of 12 minutes or more on a {device.type} device yet"
+
+
+def parse_moe_label(text):
+    """ModelConfig fields from an experiments-table moe label "ExK/M" (experts x
+    per token / every); {} for a blank (dense) one."""
+    text = (text or "").strip()
+    if not text:
+        return {}
+    m = re.fullmatch(r"(\d+)x(\d+)/(\d+)", text)
+    if not m:
+        raise ValueError(f"not a moe label: {text!r}")
+    return {"n_experts": int(m.group(1)), "experts_per_token": int(m.group(2)), "moe_every": int(m.group(3))}
 
 
 # compiled / eager training speed, measured on the RTX 3070 (1.31x at 6 layers, 1.45x at the 216M shape)
@@ -2721,13 +3072,15 @@ def have_triton():
         return False
 
 
-def plan_with_time_budget(args, manifest, device, amp_dtype):
+def plan_with_time_budget(args, manifest, device, amp_dtype, fixed_cfg=None):
     """plan_run, then (with --time-budget-hours) choose the largest ladder shape
     whose parameter count N still satisfies tokens >= r * N when tokens are
     limited by BOTH the data cap and what fits in the time budget at the speed
     measured on this device. Binary search over the ladder (bigger = slower, so
-    the condition is monotone); evaluation/sampling/checkpoint overhead 8%."""
-    cfg, settings, lines = plan_run(args, manifest, device, amp_dtype)
+    the condition is monotone); evaluation/sampling/checkpoint overhead 8%.
+    fixed_cfg (--init-from): the architecture is given, so only its tokens are
+    capped by the budget (N is its active parameter count)."""
+    cfg, settings, lines = plan_run(args, manifest, device, amp_dtype, fixed_cfg=fixed_cfg)
     hours = getattr(args, "time_budget_hours", None)
     if not hours:
         return cfg, settings, lines
@@ -2748,7 +3101,7 @@ def plan_with_time_budget(args, manifest, device, amp_dtype):
 
     def trial(shape_args):
         """(reaches tokens >= r x N, tokens that fit, peak memory of the speed test in bytes) for this shape."""
-        c, st, _ = plan_run(shape_args, manifest, device, amp_dtype)
+        c, st, _ = plan_run(shape_args, manifest, device, amp_dtype, fixed_cfg=fixed_cfg)
         raw, peak = measure_seconds_per_step(c, st["micro_batch"], st["grad_accum"], device, amp_dtype, args.attn,
                                              checkpointing=st["activation_checkpointing"],
                                              loss_chunk=st["loss_chunk_tokens"], settings=st)
@@ -2757,7 +3110,7 @@ def plan_with_time_budget(args, manifest, device, amp_dtype):
         sec = max(measured, step_flops / speed) if speed else measured * slow
         fit_tokens = int(budget_s / sec) * st["tokens_per_step"]
         tokens = min(fit_tokens, st["planned_train_tokens"])
-        n = count_params(c)[0]
+        n = count_params(c)[2]
         est = estimate_train_bytes(c, st["micro_batch"], amp_dtype is not None, st["activation_checkpointing"],
                                    st["loss_chunk_tokens"], st["optimizer"], device, st.get("doc_mask", False))
         notes.append(f"time budget {hours:g} h: {n / 1e6:,.1f}M parameters, {sec:.2f} s/step expected over hours "
@@ -2777,7 +3130,8 @@ def plan_with_time_budget(args, manifest, device, amp_dtype):
         return argparse.Namespace(**{**vars(a), "batch_size": micro // 2,
                                      "grad_accum": a.grad_accum * 2 if a.grad_accum else None})
 
-    explicit = any(v is not None for v in (args.d_model, args.layers, args.heads, args.kv_heads))
+    explicit = fixed_cfg is not None or any(v is not None for v in (args.d_model, args.layers, args.heads,
+                                                                     args.kv_heads))
     if explicit:
         chosen_args = args
         while True:  # the given shape must be measured: on out-of-memory, halve the micro-batch and measure again
@@ -2787,7 +3141,7 @@ def plan_with_time_budget(args, manifest, device, amp_dtype):
             except RuntimeError as exc:
                 if not is_oom(exc):
                     raise
-                micro = plan_run(chosen_args, manifest, device, amp_dtype)[1]["micro_batch"]
+                micro = plan_run(chosen_args, manifest, device, amp_dtype, fixed_cfg=fixed_cfg)[1]["micro_batch"]
                 if micro == 1:
                     raise SystemExit("time budget: this model shape runs out of memory on this device even at "
                                      "micro-batch 1; choose a smaller --d-model/--layers/--ctx.")
@@ -2853,7 +3207,7 @@ def plan_with_time_budget(args, manifest, device, amp_dtype):
                 notes.append("time budget: even the smallest shape cannot reach the tokens-per-parameter target "
                              "in time; it trains on what fits")
         _, tokens, peak, chosen_args = results[best]  # with the memory options the retries settled on
-    cfg, settings, lines = plan_run(chosen_args, manifest, device, amp_dtype, token_cap=tokens)
+    cfg, settings, lines = plan_run(chosen_args, manifest, device, amp_dtype, token_cap=tokens, fixed_cfg=fixed_cfg)
     lines[1] = lines[1].replace("command-line values, ladder defaults for the rest",
                                 "largest ladder shape that satisfies the data AND the time budget"
                                 if not explicit else "command-line values, tokens capped by the time budget")
@@ -2884,7 +3238,7 @@ def plan_table(vocab, device, amp_dtype, r, max_epochs):
         cfg = fitting[-1] if fitting else ladder[0]
         cfg.ctx = default_ctx(cfg.d_model)
         cfg.rope_base = default_rope_base(cfg.ctx)
-        n, _ = count_params(cfg)
+        n = count_params(cfg)[0]
         tps = tokens_per_step_for(n, planned)
         try:
             micro, accum = choose_micro_batch(cfg, tps, budget, amp_dtype is not None)
@@ -2947,6 +3301,41 @@ def parse_args(argv=None):
                         "keeps high learning rates stable): default on for new runs; a checkpoint keeps its own "
                         "setting on --resume and --init-from")
     g.add_argument("--dropout", type=float)
+    g = p.add_argument_group("mixture of experts (default: none, a dense SwiGLU in every block)")
+    g.add_argument("--experts", type=int, default=0,
+                   help="replace the SwiGLU of every block (or every --moe-every-th) by this many smaller experts "
+                        "with a router (0 = dense; 2-64; 8-16 is the useful range on one device). The model then "
+                        "has more parameters at the same FLOPs per token; whether that beats dense depends on the "
+                        "data (unproven below ~20 tokens per TOTAL parameter: A/B it first)")
+    g.add_argument("--experts-per-token", type=int, default=2, help="experts each token is routed to (default 2)")
+    g.add_argument("--expert-hidden", type=int, default=0,
+                   help="hidden size of one expert (default: the SwiGLU hidden / experts per token, rounded to 64, "
+                        "so the active FLOPs equal the dense FFN)")
+    g.add_argument("--shared-hidden", type=int, default=0,
+                   help="hidden size of a SwiGLU every token also goes through (DeepSeek-style shared expert; 0 = none)")
+    g.add_argument("--moe-every", type=int, default=1, help="make every N-th block an MoE block (1 = all)")
+    g.add_argument("--router", choices=("softmax", "sigmoid"), default="softmax",
+                   help="routing scores: softmax over the experts (Mixtral) or a sigmoid per expert (DeepSeek-V3)")
+    g.add_argument("--balance", choices=("loss", "bias", "both"), default="bias",
+                   help="how the experts are kept evenly loaded: the Switch load-balancing loss (--lb-loss), "
+                        "DeepSeek-V3's auxiliary-loss-free routing bias updated after every step (--bias-rate), "
+                        "or both (default bias)")
+    g.add_argument("--lb-loss", type=float, default=LB_LOSS_DEFAULT,
+                   help="weight of the load-balancing loss E x sum f_e P_e when --balance is loss or both "
+                        "(default %g; the term is reported as moe_lb whatever the balance)" % LB_LOSS_DEFAULT)
+    g.add_argument("--router-z-loss", type=float, default=ROUTER_Z_LOSS_DEFAULT,
+                   help="weight of the router z-loss (mean (log sum exp logits)^2; keeps the routing logits "
+                        "bounded; default %g)" % ROUTER_Z_LOSS_DEFAULT)
+    g.add_argument("--bias-rate", type=float, default=BIAS_RATE_DEFAULT,
+                   help="step of the routing bias per optimizer step when --balance is bias or both (default %g)"
+                        % BIAS_RATE_DEFAULT)
+    g.add_argument("--moe-impl", choices=("loop", "grouped"), default="loop",
+                   help="how the experts run: one matmul per expert (loop, default, every device) or one "
+                        "torch._grouped_mm kernel for all (grouped; a gain only on compiled CUDA, used only when "
+                        "a forward+backward probe passes at model build, else the loop)")
+    g.add_argument("--tokens-per-total-param", type=float, default=0.0,
+                   help="warn when an MoE run plans fewer training tokens per TOTAL parameter than this "
+                        "(0 = off; the value is to be set from the MoE-versus-dense A/B)")
     g = p.add_argument_group("budget")
     g.add_argument("--steps", type=int, help="optimizer steps (on --resume: new total)")
     g.add_argument("--train-tokens", type=float, help="training tokens instead of --steps")
@@ -3063,7 +3452,8 @@ def validate_args(args, parser):
     if not NAME_RE.fullmatch(args.name):
         parser.error("--name may contain letters, digits, '.', '_' and '-' only (no folders)")
     positive = ["steps", "d_model", "layers", "heads", "kv_heads", "ctx", "ffn_hidden", "batch_size", "grad_accum",
-                "tokens_per_step", "threads", "eval_every", "eval_tokens", "save_every", "sample_tokens", "length"]
+                "tokens_per_step", "threads", "eval_every", "eval_tokens", "save_every", "sample_tokens", "length",
+                "experts_per_token", "moe_every"]
     for name in positive:
         value = getattr(args, name)
         if value is not None and value <= 0:
@@ -3072,10 +3462,16 @@ def validate_args(args, parser):
                          ("weight_decay", 0.0, 1.0), ("beta1", 0.0, 0.9999), ("beta2", 0.0, 0.99999),
                          ("grad_clip", 0.0, 1e3), ("dropout", 0.0, 0.9), ("top_p", 0.0, 1.0),
                          ("tokens_per_param", 0.1, 1e6), ("max_epochs", 0.01, 1e4), ("temperature", 0.0, 10.0),
-                         ("mix_alpha", 0.0, 2.0), ("lr_scale", 0.01, 100.0)):
+                         ("mix_alpha", 0.0, 2.0), ("lr_scale", 0.01, 100.0), ("lb_loss", 0.0, 10.0),
+                         ("router_z_loss", 0.0, 10.0), ("bias_rate", 0.0, 1.0), ("tokens_per_total_param", 0.0, 1e6),
+                         ("expert_hidden", 0, 1e6), ("shared_hidden", 0, 1e6)):
         value = getattr(args, name)
         if value is not None and not lo <= value <= hi:
             parser.error(f"--{name.replace('_', '-')} must be between {lo} and {hi}")
+    if args.experts and not 2 <= args.experts <= 64:
+        parser.error("--experts must be 0 (dense) or between 2 and 64")
+    if args.experts and args.experts_per_token > args.experts:
+        parser.error("--experts-per-token must not exceed --experts")
     if not 0 < args.watermark_gamma < 1:
         parser.error("--watermark-gamma must be between 0 and 1")
     if args.ema is not None:  # "off" or a per-step decay; None = the default for the run (see resolve_ema)
@@ -3232,7 +3628,8 @@ def cmd_export(args):
     tensors = {k: v for k, v in model.state_dict().items() if not (cfg.tie_embeddings and k == "lm_head.weight")}
     os.makedirs(out, exist_ok=True)
     write_safetensors(tensors, os.path.join(out, "model.safetensors"),
-                      {"format": "tinyGPT", "tie_embeddings": cfg.tie_embeddings, "qk_norm": cfg.qk_norm})
+                      {"format": "tinyGPT", "tie_embeddings": cfg.tie_embeddings, "qk_norm": cfg.qk_norm,
+                       "n_experts": cfg.n_experts})
     with open(os.path.join(out, "tokenizer.model"), "wb") as handle:
         handle.write(tok.proto)
     metrics = obj.get("metrics", {}) if isinstance(obj.get("metrics"), dict) else {}
@@ -3240,6 +3637,12 @@ def cmd_export(args):
                               "grouped-query attention"
                               + (", QK-norm (RMSNorm with a shared gain on each query and key head, before RoPE)"
                                  if cfg.qk_norm else "")
+                              + (f", mixture of experts ({cfg.n_experts} SwiGLU experts of hidden "
+                                 f"{cfg.expert_hidden} per MoE block, {cfg.experts_per_token} per token chosen by a "
+                                 f"{cfg.router} router with a balancing bias"
+                                 + (f", every {cfg.moe_every}. block" if cfg.moe_every > 1 else "")
+                                 + (f", plus a shared SwiGLU of hidden {cfg.shared_hidden}" if cfg.shared_hidden
+                                    else "") + ")" if cfg.n_experts else "")
                               + (", tied input/output embeddings" if cfg.tie_embeddings else ", untied output layer")
                               + ", no biases",
               "model_config": dataclasses.asdict(cfg), "tokenizer": {**tok.meta(), "file": "tokenizer.model"},
@@ -3558,9 +3961,13 @@ def _train(args):
     # ---------------- configuration ----------------
     plan_lines = []
     if resume_obj is not None:
-        cfg = ModelConfig(**resume_obj["model_config"])
+        cfg = config_from_checkpoint(resume_obj)  # a clear error for a file written by a newer tiny_gpt.py
         settings = dict(resume_obj["train_config"])
         settings.setdefault("optimizer", "adamw")  # runs from before --optimizer used AdamW
+        if cfg.n_experts:  # the mixture-of-experts terms; fixed for a run like z_loss
+            settings.setdefault("lb_loss", args.lb_loss)
+            settings.setdefault("router_z_loss", args.router_z_loss)
+            settings.setdefault("bias_rate", args.bias_rate)
         # memory options do not change the mathematics, so a resumed run may switch them (e.g. on another machine)
         settings.setdefault("activation_checkpointing", False)
         settings.setdefault("loss_chunk_tokens", 0)
@@ -3599,6 +4006,8 @@ def _train(args):
             ignored.append("--tie-embeddings off")
         if args.qk_norm is not None and (args.qk_norm == "on") != cfg.qk_norm:
             ignored.append(f"--qk-norm {args.qk_norm}")
+        if args.experts and args.experts != cfg.n_experts:
+            ignored.append(f"--experts {args.experts} (the architecture is the checkpoint's)")
         if args.lr_scale != 1.0:
             ignored.append(f"--lr-scale {args.lr_scale:g}")
         if args.doc_mask is not None and (args.doc_mask == "on") != bool(settings["doc_mask"]):
@@ -3634,7 +4043,11 @@ def _train(args):
         # the new data is read
         stored_ctx = config_from_checkpoint(init_obj).ctx
         cfg = config_from_checkpoint(init_obj, ctx=args.ctx)
-        _, settings, plan_lines = plan_with_time_budget(_args_with_shape(args, cfg), manifest, device, amp_dtype)
+        # the planner sizes memory, batch, steps and learning rate for exactly this architecture (experts included)
+        _, settings, plan_lines = plan_with_time_budget(args, manifest, device, amp_dtype, fixed_cfg=cfg)
+        if args.experts and args.experts != cfg.n_experts:
+            plan_lines.append(f"--experts {args.experts} ignored: the architecture is the checkpoint's "
+                              f"({cfg.n_experts or 'no'} experts); start a fresh run to change it")
         if cfg.ctx != stored_ctx:
             plan_lines.append(f"model was trained at ctx {stored_ctx}; continuing at {cfg.ctx} (RoPE tables rebuilt "
                               "for the new length, weights unchanged)")
@@ -3693,6 +4106,12 @@ def _train(args):
     model = TinyGPT(cfg).to(device)
     attn_impl, attn_why = choose_attention(device, cfg, amp_dtype, args.attn)
     model.set_attention_impl(attn_impl)
+    moe = bool(cfg.n_experts)
+    moe_impl, moe_impl_why = "loop", "one matmul per expert"
+    if moe and args.moe_impl == "grouped":
+        ok, moe_impl_why = grouped_mm_available(device)
+        moe_impl = "grouped" if ok else "loop"
+    model.set_moe_impl(moe_impl)
     if device.type == "cuda":
         torch.cuda.reset_peak_memory_stats(device)  # peak_mem_gib on the metrics lines counts from the built model
     source_obj = resume_obj or init_obj
@@ -3706,6 +4125,13 @@ def _train(args):
     model.grad_checkpoint = bool(settings.get("activation_checkpointing"))
     model.doc_sep_id = tok.bos_id if settings.get("doc_mask") else None
     loss_chunk = int(settings.get("loss_chunk_tokens") or 0)
+    # mixture-of-experts terms added to the loss that is backpropagated (the reported train loss stays pure
+    # cross-entropy): the Switch load-balancing loss when --balance is loss or both, the router z-loss always, and
+    # DeepSeek-V3's bias update after every step when --balance is bias or both (TinyGPT.update_router_bias)
+    lb_loss = float(settings.get("lb_loss", LB_LOSS_DEFAULT)) if moe else 0.0
+    lb_weight = lb_loss if moe and cfg.balance in ("loss", "both") else 0.0
+    router_z_loss = float(settings.get("router_z_loss", ROUTER_Z_LOSS_DEFAULT)) if moe else 0.0
+    bias_rate = float(settings.get("bias_rate", BIAS_RATE_DEFAULT)) if moe and cfg.balance in ("bias", "both") else 0.0
     scaler = torch.amp.GradScaler(device.type) if need_scaler else None
     schedule = LRSchedule(settings["schedule"], total_steps, settings["lr"], settings["min_lr"],
                           settings["warmup_steps"], settings["decay_frac"], settings["decay_shape"])
@@ -3842,8 +4268,8 @@ def _train(args):
     resume_obj = init_obj = source_obj = None
 
     train_model = maybe_compile(model, args.compile, device, return_hidden=bool(loss_chunk), amp_dtype=amp_dtype,
-                                micro=micro)
-    n_total, n_nonembed = model.param_counts()
+                                micro=micro, return_aux=moe)
+    n_total, n_nonembed, n_active, _ = model.param_counts()
     unique = sum(len(a) for a in arrays["train"].values())
 
     # ---------------- run header ----------------
@@ -3865,7 +4291,8 @@ def _train(args):
           + f" | validation windows (fixed): {evalset.describe()}"
           + (f" | skipped (too small): {evalset.skipped}" if evalset.skipped else ""))
     print("model: " + json.dumps(dataclasses.asdict(cfg)))
-    print(f"parameters: {n_total:,} total, {n_nonembed:,} non-embedding")
+    print(f"parameters: {n_total:,} total, {n_nonembed:,} non-embedding"
+          + (f", {n_active:,} active per token" if moe else ""))
     print("train: " + json.dumps({k: v for k, v in settings.items()}))
     print(f"schedule: {schedule.describe()}")
     print(f"weights: {ema_note}"
@@ -3874,6 +4301,12 @@ def _train(args):
              f"is saved as {os.path.basename(best_path)} (its 'weights' field says which)" if ema is not None else "")
           + ("; document mask on: attention stays within each document of a window" if model.doc_sep_id is not None
              else ""))
+    if moe:
+        print(f"experts: {cfg.n_experts} per MoE block ({cfg.n_moe_blocks} of {cfg.n_layers} blocks), "
+              f"{cfg.experts_per_token} per token, hidden {cfg.expert_hidden}, {cfg.router} router; balance "
+              f"{cfg.balance}: load-balancing loss weight {lb_weight:g}, router z-loss {router_z_loss:g}, bias rate "
+              f"{bias_rate:g} per step; experts run as {moe_impl} ({moe_impl_why}); metrics lines report moe_lb (1.0 "
+              "= even routing), moe_z, moe_load_max (busiest expert / mean) and dead_experts")
     for line in plan_lines:
         print(f"plan: {line}")
     train_tokens_total = total_steps * settings["tokens_per_step"]
@@ -3990,6 +4423,13 @@ def _train(args):
     last_gnorm = torch.zeros((), device=device)
     overflow_run = 0  # FP16 updates skipped in a row by the GradScaler (gradients overflowed)
     nonfinite_run = 0  # updates skipped in a row because the gradient norm was not finite (BF16/FP32 path)
+    # mixture of experts: tokens per (MoE block, expert) of the current step (the bias update's input) and since
+    # the last metrics line (the load figures), and the balancing-term sums reported there
+    step_counts = torch.zeros((cfg.n_moe_blocks, cfg.n_experts), dtype=torch.long, device=device) if moe else None
+    interval_counts = torch.zeros_like(step_counts) if moe else None
+    interval_lb = torch.zeros((), device=device)
+    interval_z = torch.zeros((), device=device)
+    aux = None
     save_failures = 0  # periodic saves failed in a row (disk full, locked file, no memory for the copy)
     oom_retries = 0  # out-of-memory retries of the current step (after the first step)
     peak_mem = 0  # bytes: the process's peak memory on the device so far, sampled after every step (peak_mem_gib)
@@ -4027,7 +4467,8 @@ def _train(args):
                 torch.get_rng_state() if cfg.dropout > 0 else None,
                 torch.cuda.get_rng_state_all() if cfg.dropout > 0 and device.type == "cuda" else None,
                 interval_loss.clone(), progress_loss.clone(),
-                device_rng_state(device) if cfg.dropout > 0 and device.type == "mps" else None)
+                device_rng_state(device) if cfg.dropout > 0 and device.type == "mps" else None,
+                interval_lb.clone(), interval_z.clone())
 
     def rewind(snap):
         """Undo an unfinished step, so it is replayed exactly (same windows, dropout masks and loss sums)."""
@@ -4040,6 +4481,10 @@ def _train(args):
             set_device_rng_state(device, snap[5])
         interval_loss.copy_(snap[3])
         progress_loss.copy_(snap[4])
+        interval_lb.copy_(snap[6])
+        interval_z.copy_(snap[7])
+        if moe:
+            step_counts.zero_()
 
     try:
         step = start_step
@@ -4056,12 +4501,16 @@ def _train(args):
                 for _ in range(accum):
                     x, y = batcher.next()
                     with torch.autocast(device.type, dtype=amp_dtype or torch.float32, enabled=amp_dtype is not None):
+                        if moe:  # the experts' balancing terms come back with the output
+                            output, aux = train_model(x, return_hidden=bool(loss_chunk), return_aux=True)
+                        else:
+                            output = train_model(x, return_hidden=True) if loss_chunk else train_model(x)
                         if loss_chunk:
-                            ce, zsum, n_tok = chunked_lm_loss(train_model(x, return_hidden=True),
-                                                              model.lm_head.weight, y, loss_chunk)
+                            ce, zsum, n_tok = chunked_lm_loss(output, model.lm_head.weight, y, loss_chunk)
                             flat = None
                         else:
-                            logits = train_model(x)
+                            logits = output
+                        output = None
                     if loss_chunk:
                         loss = ce / n_tok
                     else:
@@ -4072,6 +4521,16 @@ def _train(args):
                     if z_loss:
                         # PaLM z-loss: keeps log Z (the softmax normaliser) near 0; reported loss excludes it
                         loss = loss + z_loss * (zsum / n_tok if loss_chunk else lse.pow(2).mean())
+                    if aux is not None:
+                        # mixture of experts: the load-balancing loss (when --balance is loss or both) and the router
+                        # z-loss join the backpropagated loss; the tokens per expert feed the bias update and the load
+                        # figures. Nothing is kept on the modules (see MoEFFN).
+                        interval_lb += aux["lb"].detach()
+                        interval_z += aux["z"].detach()
+                        step_counts += aux["counts"]
+                        if lb_weight or router_z_loss:
+                            loss = loss + lb_weight * aux["lb"] + router_z_loss * aux["z"]
+                        aux = None
                     if scaler is not None:
                         scaler.scale(loss / accum).backward()
                     else:
@@ -4104,6 +4563,8 @@ def _train(args):
                         opt.zero_grad(set_to_none=True)
                         interval_loss.copy_(step_start[3])
                         progress_loss.copy_(step_start[4])
+                        interval_lb.copy_(step_start[6])
+                        interval_z.copy_(step_start[7])
                         applied = False
                         nonfinite_run += 1
                         print(f"step {step}: non-finite gradient norm {float(gnorm)}; update skipped "
@@ -4118,6 +4579,14 @@ def _train(args):
                         opt.step()
                         last_gnorm, nonfinite_run = gnorm, 0
                     opt.zero_grad(set_to_none=True)
+                    if moe:
+                        if applied and bias_rate:
+                            # DeepSeek-V3 (Wang et al. 2024): bias -= rate x sign(tokens - mean tokens) per expert,
+                            # so the experts the step overloaded are chosen less in the next
+                            model.update_router_bias(step_counts, bias_rate)
+                        if applied:
+                            interval_counts += step_counts
+                        step_counts.zero_()
                     if applied:  # a skipped step's loss left the sums above, so it leaves their counts too
                         interval_micro += accum
                         progress_micro += accum
@@ -4136,7 +4605,7 @@ def _train(args):
                     if oom_retries > 2:
                         raise
                     opt.zero_grad(set_to_none=True)
-                    x = y = logits = flat = lse = loss = ce = zsum = None
+                    x = y = logits = flat = lse = loss = ce = zsum = output = aux = None
                     free_device_memory(device)
                     rewind(step_start)
                     if scaler is not None:  # a new scaler with the same scale: forgets an unscale_ already done
@@ -4152,7 +4621,7 @@ def _train(args):
                 if not (oom or train_model is not model):
                     raise
                 opt.zero_grad(set_to_none=True)
-                x = y = logits = flat = lse = loss = ce = zsum = None  # drop the failed batch and its graph before retrying
+                x = y = logits = flat = lse = loss = ce = zsum = output = aux = None  # drop the failed batch and its graph before retrying
                 free_device_memory(device)
                 rewind(step_start)  # the retry trains on the same windows, as an uninterrupted run would
                 if scaler is not None:  # a new scaler with the same scale: forgets an unscale_ already done
@@ -4296,10 +4765,26 @@ def _train(args):
                          "is_best": is_best, "best_weights": best_source if is_best else None,
                          "val_ema": ev_ema["loss"] if ev_ema is not None else None,
                          "bpb_ema": ev_ema["bpb"] if ev_ema is not None else None, "time": now_iso()}
+                moe_text = ""
+                if moe:
+                    # per MoE block the mean over its micro-batches of the balancing terms (lb 1.0 = even routing),
+                    # and from the tokens per expert since the last line: load = tokens / mean tokens of the block
+                    # (moe_load_max is the busiest expert anywhere), dead_experts = experts that saw no token
+                    per = max(interval_micro, 1) * cfg.n_moe_blocks
+                    load = interval_counts.float() / interval_counts.float().mean(dim=1, keepdim=True).clamp(min=1e-9)
+                    entry.update({"moe_lb": (interval_lb / per).item(), "moe_z": (interval_z / per).item(),
+                                  "moe_load_max": load.max().item(),
+                                  "dead_experts": int((interval_counts == 0).sum().item()),
+                                  "moe_load": [[round(v, 3) for v in row] for row in load.tolist()]})
+                    moe_text = (f" | moe lb {entry['moe_lb']:.3f} z {entry['moe_z']:.2f} load max "
+                                f"{entry['moe_load_max']:.2f} dead {entry['dead_experts']}")
+                    interval_counts.zero_()
                 history.append(entry)
                 # the interval is recorded: zero its sums now, so a Ctrl+C during the best save, the print or the
                 # sample does not fold these steps into the next row as well
                 interval_loss.zero_()
+                interval_lb.zero_()
+                interval_z.zero_()
                 interval_micro, interval_tokens, interval_train_time = 0, 0, 0.0
                 if is_best:  # before printing or sampling, so Ctrl+C can never leave an announced best unsaved
                     try:
@@ -4326,7 +4811,7 @@ def _train(args):
                       + (f" | val(mix) {ev['loss_mix']:.3f}" if ev.get("loss_mix") is not None else "")
                       + (f" | val(ema) {ev_ema['loss']:.3f}" if ev_ema is not None else "")
                       + f" | ppl {entry['ppl']:,.2f} | bpb {ev['bpb']:.3f} | lr {lr:.2e} | {tok_s:,.0f} tok/s | "
-                      f"{meter.short()} | {elapsed_text()} | ETA {fmt_dur(eta)} | {status_text}")
+                      f"{meter.short()} | {elapsed_text()} | ETA {fmt_dur(eta)}{moe_text} | {status_text}")
                 last_print = time.perf_counter()
                 if args.sample_every and (step % args.sample_every == 0 or step == total_steps):
                     gen = torch.Generator().manual_seed(sample_gen_seed)
@@ -4354,7 +4839,7 @@ def _train(args):
                     save_failures += 1
                     print(f"WARNING: could not save {ckpt_path} ({type(exc).__name__}: {str(exc)[:160]}); "
                           f"training continues, next attempt in about a minute ({save_failures}/3)")
-                    x = y = logits = flat = lse = loss = ce = zsum = None
+                    x = y = logits = flat = lse = loss = ce = zsum = output = aux = None
                     free_device_memory(device)
                     last_save = time.perf_counter() - args.save_minutes * 60 + 60
                     if save_failures >= 3 or stop_now or step == total_steps:
@@ -4394,7 +4879,7 @@ def _train(args):
         crash = os.path.join(args.out_dir, f"{args.name}_crash.pt")
         # the step's tensors and graph are dropped first: after an out-of-memory error the full state (optimizer
         # included) needs the room, and if even that fails the weights alone are still worth keeping
-        x = y = logits = flat = lse = loss = ce = zsum = None
+        x = y = logits = flat = lse = loss = ce = zsum = output = aux = None
         gc.collect()
         try:
             try:
@@ -4410,11 +4895,14 @@ def _train(args):
         raise
     finally:
         meter.stop()
-        n_total, n_nonembed = model.param_counts()
+        n_total, n_nonembed, n_active, _ = model.param_counts()
         last_hist = history[-1] if history else {}
         record_experiment(args.out_dir, {
             "event": "training run", "name": args.name, "status": status, "step": step, "total_steps": total_steps,
-            "params": n_total, "non_embedding_params": n_nonembed, "d_model": cfg.d_model, "layers": cfg.n_layers,
+            "params": n_total, "non_embedding_params": n_nonembed, "active_params": n_active,
+            "moe": cfg.moe_label() or None, "lb_loss": lb_weight if moe else None,
+            "router_z_loss": router_z_loss if moe else None, "balance": cfg.balance if moe else None,
+            "d_model": cfg.d_model, "layers": cfg.n_layers,
             "heads": cfg.n_heads, "kv_heads": cfg.n_kv_heads, "ctx": cfg.ctx, "vocab": cfg.vocab_size,
             "tokens_seen": tokens_seen, "tokens_per_step": settings["tokens_per_step"],
             "micro_batch": settings["micro_batch"], "grad_accum": settings["grad_accum"],
@@ -4465,9 +4953,11 @@ def energy_columns(meter, device, note=None):
 
 
 EXPERIMENT_COLUMNS = ["time", "event", "name", "status", "step", "total_steps", "params", "non_embedding_params",
+                      "active_params", "moe",
                       "d_model", "layers", "heads", "kv_heads", "ctx", "vocab", "tokens_seen", "tokens_per_step",
                       "micro_batch", "grad_accum", "activation_checkpointing", "loss_chunk_tokens", "optimizer", "lr",
                       "lr_scale", "min_lr", "schedule", "warmup_steps", "decay_frac", "decay_shape", "weight_decay", "betas", "grad_clip", "z_loss", "ema", "dropout",
+                      "lb_loss", "router_z_loss", "balance",
                       "precision", "dataset", "best_val", "best_step", "last_val", "last_val_mix", "last_bpb", "last_ppl",
                       "benchmark_accuracy", "benchmark_floor", "benchmark_items", "tok_s", "peak_mem_gib", "device",
                       "train_hours",
@@ -4601,16 +5091,7 @@ def _per_source(ev):
     return " [" + " ".join(f"{n} {v:.3f}" for n, v in ev["per_source"].items()) + "]"
 
 
-def _args_with_shape(args, cfg):
-    clone = argparse.Namespace(**vars(args))
-    clone.d_model, clone.layers, clone.heads, clone.kv_heads = cfg.d_model, cfg.n_layers, cfg.n_heads, cfg.n_kv_heads
-    clone.ctx, clone.ffn_hidden, clone.rope_base = cfg.ctx, cfg.ffn_hidden, cfg.rope_base
-    clone.tie_embeddings = "on" if cfg.tie_embeddings else "off"  # the plan counts and labels the embedding as built
-    clone.qk_norm = "on" if getattr(cfg, "qk_norm", False) else "off"
-    return clone
-
-
-def maybe_compile(model, mode, device, return_hidden=False, amp_dtype=None, micro=1):
+def maybe_compile(model, mode, device, return_hidden=False, amp_dtype=None, micro=1, return_aux=False):
     """The model compiled with torch.compile, warmed up once with exactly the call
     training makes (a (micro, ctx) batch under the same autocast; return_hidden:
     the chunked loss), so the training graph is compiled here and a compile failure
@@ -4642,7 +5123,11 @@ def maybe_compile(model, mode, device, return_hidden=False, amp_dtype=None, micr
         # fork_rng: the warm-up's dropout masks must not consume the (restored) random state of the run
         with fork_device_rng(device):
             with torch.autocast(device.type, dtype=amp_dtype or torch.float32, enabled=amp_dtype is not None):
-                out = compiled(x, return_hidden=return_hidden)
+                if return_aux:  # a mixture of experts: training asks for the aux terms as well
+                    out, aux = compiled(x, return_hidden=return_hidden, return_aux=True)
+                    out = out.float().sum() + aux["lb"] + aux["z"]
+                else:
+                    out = compiled(x, return_hidden=return_hidden)
             out.float().sum().backward()
         del out
     except Exception as exc:  # noqa: BLE001
