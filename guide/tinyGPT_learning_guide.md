@@ -174,7 +174,8 @@ Every script was reviewed for bugs, stale code and speed. What you will notice:
 
 - **Training keeps going through trouble:** a failed save is retried a minute later; an out-of-memory error after the
   first step replays the step; a step with a non-finite gradient is skipped instead of poisoning the weights; the
-  checkpoint is read lazily (1.8 GB of RAM freed on the 216M run).
+  checkpoint read at a resume is released once loaded (1.8 GB of RAM freed on the 216M run; on macOS and Linux it is
+  also memory-mapped).
 - **Faster on this GPU:** the planner prefers a micro-batch of about 2,048 tokens without activation checkpointing
   (2 x 132 instead of 4 x 66 for the 216M model: 5-16 % faster per step, measured), one log-sum-exp serves the loss
   and the z-loss, and the memory estimate is calibrated to the measured peak, which every metrics line now records
@@ -2345,7 +2346,9 @@ matter for tinyGPT-style training from scratch, which is limited by compute: the
 (75% of Metal's recommended working set, about 54 GiB) already holds, with Muon and the 16,384-piece vocabulary,
 the 1.45B ladder shape (d 2,048, ctx 2,048) without checkpointing at about 25 GiB, the 2.25B shape (d 2,560, ctx
 4,096) with checkpointing at about 32 GiB, and the 3.2B shape (d 3,072, ctx 4,096) with checkpointing at about 45
-GiB. The first-day checklist for training on the Mac is in HOW_TO_RUN.md (Mac Studio).
+GiB. These figures leave out the attention scores, which MPS may keep for the backward pass; the first plan on
+the Mac measures that, and if it does, the planner switches checkpointing on first at ctx 2,048 and above. The
+first-day checklist for training on the Mac is in HOW_TO_RUN.md (Mac Studio).
 
 **Candidates in September 2026** (memory at 4-bit):
 

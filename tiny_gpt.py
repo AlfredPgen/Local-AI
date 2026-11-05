@@ -3500,7 +3500,7 @@ def parse_args(argv=None):
     g.add_argument("--grad-accum", type=int, help="micro-batches per optimizer step")
     g.add_argument("--tokens-per-step", type=int,
                    help="tokens per optimizer step (default: half of DeepSeek's B_opt = 0.292 C^0.327 for C = 6 N D, "
-                        "a power of two between 16,384 and 2,097,152)")
+                        "a power of two between 16,384 and 2,097,152; with --steps, the planned tokens / --steps)")
     g.add_argument("--lr", type=float, help="peak learning rate")
     g.add_argument("--lr-scale", type=float, default=1.0,
                    help="multiply the planner's heuristic peak learning rate by this (for LR sweeps; no effect with "
