@@ -3891,6 +3891,8 @@ def maybe_compile(model, mode, device, return_hidden=False, amp_dtype=None, micr
     if compiled is not None and "out of memory" in failure[1].lower():
         print("torch.compile warm-up ran out of memory; keeping the compiled model (the first step's "
               "out-of-memory handling picks the memory savings).")
+        if device.type == "cuda":  # the loss in pieces that handling is likely to switch on runs compiled as well
+            set_chunk_loss_compiled(True)
         return compiled
     print(f"torch.compile failed ({failure[0]}: {failure[1][:120]}); using eager mode.")
     return model
