@@ -1204,10 +1204,14 @@ class TestPipeline(unittest.TestCase):
         code, out_o = run(["tiny_gpt.py", "--name", "T", "--out-dir", self.runs, "--log-file", log, "--device", "cpu",
                            "--resume", "--steps", "20", "--eval-every", "8", "--eval-tokens", "2048",
                            "--sample-tokens", "8", "--no-probes", "--activation-checkpointing", "off",
-                           "--loss-chunk-tokens", "0"])
+                           "--loss-chunk-tokens", "0", "--min-lr-ratio", "0.05"])
         self.assertEqual(code, 0, out_o)
         ck = torch.load(os.path.join(self.runs, "T.pt"), map_location="cpu", weights_only=True)
         self.assertEqual((ck["step"], ck["train_config"]["activation_checkpointing"]), (20, False))
+        # step 16 of the new 20 is still in the stable phase, so the end point of the decay may change
+        self.assertIn("from the decay phase on", out_o)
+        self.assertAlmostEqual(ck["train_config"]["min_lr"], 0.05 * ck["train_config"]["lr"])
+        self.assertEqual(ck["train_config"]["mix_alpha"], 1.0)
         # fine-tuning in micro-batches of 1 with recomputation: the same held-out loss as whole batches of 4
         examples = os.path.join(HERE, "finetune_examples")
         losses = []
@@ -1370,9 +1374,13 @@ class TestPipeline(unittest.TestCase):
         self.assertNotIn("retrying with the loss computed", out_x)
         # --init-from a training state without --steps: the planned steps come after its step
         code, out_p = self.patched_run("none", 0, list(self.common[1:]) + [
-            "--name", "O5", "--no-probes", "--stop-after-steps", "1", "--init-from", os.path.join(self.runs, "O3.pt")])
+            "--name", "O5", "--no-probes", "--stop-after-steps", "1", "--init-from", os.path.join(self.runs, "O3.pt"),
+            "--ctx", "96"])
         self.assertEqual(code, 0, out_p)
         self.assertIn("the schedule continues at the --init-from checkpoint's step 8", out_p)
+        self.assertIn("model was trained at ctx 64; continuing at 96", out_p)
+        self.assertEqual(torch.load(os.path.join(self.runs, "O5.pt"), map_location="cpu",
+                                    weights_only=True)["model_config"]["ctx"], 96)
         self.assertEqual(torch.load(os.path.join(self.runs, "O5.pt"), map_location="cpu", weights_only=True)["step"], 9)
 
     def test_resume_with_a_new_micro_batch(self):
@@ -2537,7 +2545,7 @@ class TestFixes(unittest.TestCase):
 
         def fits_at_speed(c):
             shaped = tiny_gpt.ModelConfig(**dataclasses.asdict(c))
-            shaped.ctx = 256 if c.d_model <= 192 else (512 if c.d_model <= 512 else 1024)  # plan_run's ctx rule
+            shaped.ctx = tiny_gpt.default_ctx(c.d_model)  # plan_run's ctx rule
             return hours * 3600 * 0.92 * speed / tiny_gpt.flops_per_token(shaped) >= 20 * tiny_gpt.count_params(c)[0]
 
         want_s = max((c for c in ladder if fits_at_speed(c)), key=lambda c: c.d_model)
@@ -2967,6 +2975,222 @@ class TestFixes(unittest.TestCase):
         cpu_state = tiny_gpt.optimizer_state_for_checkpoint(opt, cpu)
         self.assertTrue(all(v.device.type == "cpu" for s in cpu_state["state"].values() for v in s.values()
                             if isinstance(v, torch.Tensor)))
+
+
+    # ---------------- self-scaling planner (2026-11 audit, WP4) ----------------
+    def test_planner_rules_keep_the_216m_plan(self):
+        """One context rule, a RoPE base that follows the context, the compute-budget batch and the LR batch factor
+        are monotone and bounded over the ladder; the current 216M plan (d 1024, L 18, ctx 1024, 262,144 or
+        270,336 tokens/step, lr 4.76e-4) comes out unchanged, with the WSD decay now ending at zero."""
+        self.assertEqual([tiny_gpt.default_ctx(d) for d in (128, 192, 256, 512, 768, 1024, 1280, 2048, 2560, 3072)],
+                         [256, 256, 512, 512, 1024, 1024, 2048, 2048, 4096, 4096])
+        self.assertEqual(tiny_gpt.default_ctx(1024), 1024)
+        self.assertEqual([tiny_gpt.default_rope_base(c) for c in (512, 1024, 2048, 4096, 8192, 16384)],
+                         [10_000.0, 10_000.0, 10_000.0, 40_000.0, 160_000.0, 640_000.0])
+        self.assertEqual(tiny_gpt.tokens_per_step_for(216e6, 16.2e9), 262_144)
+        self.assertEqual(tiny_gpt.tokens_per_step_for(1.45e9, 29e9), 524_288)
+        self.assertEqual(tiny_gpt.tokens_per_step_for(3.2e9, 64e9), 1_048_576)
+        self.assertEqual(tiny_gpt.tokens_per_step_for(1e5, 1e6), 2 ** 14, "clamped below")
+        self.assertEqual(tiny_gpt.tokens_per_step_for(1e12, 1e14), 2 ** 21, "clamped above")
+        self.assertEqual(tiny_gpt.tokens_per_step_legacy(216e6), 262_144)
+        self.assertEqual(tiny_gpt.lr_batch_factor(216e6, 262_144), 1.0)
+        self.assertEqual(tiny_gpt.lr_batch_factor(216e6, 270_336), 1.0, "accumulation rounding leaves the LR alone")
+        self.assertAlmostEqual(tiny_gpt.lr_batch_factor(216e6, 2 * 262_144), 1.4, msg="sqrt(2) clamped to 1.4")
+        self.assertAlmostEqual(tiny_gpt.lr_batch_factor(216e6, 262_144 // 2), math.sqrt(0.5))
+        self.assertEqual(tiny_gpt.lr_batch_factor(216e6, 262_144 // 16), 0.7)
+        ladder = tiny_gpt.shape_ladder(16384)
+        prev_tps, prev_lr, prev_ctx = 0, float("inf"), 0
+        for c in ladder:
+            n = tiny_gpt.count_params(c)[0]
+            tps = tiny_gpt.tokens_per_step_for(n, 20 * n)
+            self.assertEqual(tps & (tps - 1), 0, f"{tps} is not a power of two")
+            self.assertTrue(2 ** 14 <= tps <= 2 ** 21, tps)
+            self.assertGreaterEqual(tps, prev_tps, "tokens/step grows with the model")
+            self.assertLessEqual(tiny_gpt.heuristic_lr(n), prev_lr, "the heuristic LR falls with the model")
+            ctx = tiny_gpt.default_ctx(c.d_model)
+            self.assertGreaterEqual(ctx, prev_ctx)
+            self.assertGreaterEqual(tiny_gpt.default_rope_base(ctx), 10_000.0)
+            shaped = tiny_gpt.ModelConfig(**{**dataclasses.asdict(c), "ctx": ctx})
+            self.assertTrue(0.0 < tiny_gpt.attention_flop_share(shaped) < 0.5)
+            prev_tps, prev_lr, prev_ctx = tps, tiny_gpt.heuristic_lr(n), ctx
+        # the 216M run's plan at the current dataset size (4.05B unique tokens x 4 epochs)
+        manifest = {"tokenizer": {"vocab_size": 16384}, "sources": {
+            "wiki": {"train": {"tokens": 1_430_000_000}, "doc_tokens_percentiles": {"50": 600}},
+            "pmc": {"train": {"tokens": 1_105_000_000}, "doc_tokens_percentiles": {"50": 10_072}},
+            "fineweb": {"train": {"tokens": 810_000_000}, "doc_tokens_percentiles": {"50": 500}},
+            "pes2o": {"train": {"tokens": 441_000_000}, "doc_tokens_percentiles": {"50": 5_000}},
+            "arxiv": {"train": {"tokens": 170_000_000}, "doc_tokens_percentiles": {"50": 12_332}},
+            "books": {"train": {"tokens": 20_000_000}, "doc_tokens_percentiles": {"50": 206_767}},
+            "notes": {"train": {"tokens": 24_000_000}, "doc_tokens_percentiles": {"50": 800}}}}
+        budget = (64 * 2 ** 30, "64 GiB (test)")
+
+        def plan(argv):
+            args = tiny_gpt.parse_args(["--name", "x", "--d-model", "1024", "--layers", "18"] + argv)
+            with unittest.mock.patch.object(tiny_gpt, "device_memory_budget", return_value=budget):
+                return tiny_gpt.plan_run(args, manifest, torch.device("cpu"), None)
+
+        cfg, st, lines = plan(["--optimizer", "muon"])
+        n = tiny_gpt.count_params(cfg)[0]
+        self.assertEqual((cfg.ctx, cfg.rope_base, cfg.tie_embeddings, cfg.n_heads, cfg.n_kv_heads),
+                         (1024, 10_000.0, True, 16, 4))
+        self.assertEqual(st["tokens_per_step"], 262_144)
+        self.assertEqual(st["lr"], tiny_gpt.heuristic_lr(n), "batch factor exactly 1 at the current shape")
+        self.assertAlmostEqual(st["lr"], 4.76e-4, delta=1e-6)
+        self.assertEqual(st["min_lr"], 0.0, "wsd decays to zero by default")
+        text = "\n".join(lines)
+        self.assertIn("batch factor 1.00", text)
+        self.assertIn("ctx 1024 (default for d_model 1024): attention 15% of the training FLOPs", text)
+        self.assertIn("default for wsd: decay to zero", text)
+        self.assertIn("decay timescale 1/(lr x wd) = 21,020 steps", text)
+        self.assertRegex(text, r"sources: wiki 35\.8% \(4\.00 epochs\), pmc 27\.6% \(4\.00 epochs\)")
+        self.assertIn("ctx 1024 is shorter than the median document of pmc (median document 10,072 tokens, 28%", text)
+        self.assertNotIn("WARNING", text)
+        self.assertNotIn("books (median", text, "books carry 0.5% of the tokens: below the 10% bar")
+        # the run's actual batch (4 x 66 x 1024) and its 60,000 steps: the same learning rate
+        cfg2, st2, _ = plan(["--optimizer", "muon", "--tokens-per-step", "270336", "--steps", "60000"])
+        self.assertEqual((st2["tokens_per_step"], st2["lr"], st2["steps"]), (270_336, st["lr"], 60_000))
+        # cosine keeps one tenth; an explicit ratio wins; --lr switches the batch factor off
+        _, st_c, lines_c = plan(["--schedule", "cosine"])
+        self.assertAlmostEqual(st_c["min_lr"], 0.1 * st_c["lr"])
+        self.assertIn("default for cosine: one tenth", "\n".join(lines_c))
+        _, st_r, lines_r = plan(["--min-lr-ratio", "0.3", "--lr", "1e-3"])
+        self.assertAlmostEqual(st_r["min_lr"], 3e-4)
+        self.assertIn("learning rate 1.00e-03 peak (set)", "\n".join(lines_r))
+        # a doubled batch raises the LR by the clamped sqrt factor, printed
+        _, st_b, lines_b = plan(["--tokens-per-step", "524288"])
+        self.assertAlmostEqual(st_b["lr"], 1.4 * tiny_gpt.heuristic_lr(n))
+        self.assertIn("batch factor 1.40 for 524,288 tokens/step against the table's 262,144", "\n".join(lines_b))
+        # --mix-alpha flattens the mix in the plan and warns about sources repeated past --max-epochs
+        _, st_a, lines_a = plan(["--mix-alpha", "0.8"])
+        text_a = "\n".join(lines_a)
+        self.assertIn("--mix-alpha 0.8: shares ~ weight x tokens^alpha", text_a)
+        self.assertRegex(text_a, r"WARNING: .*books would be seen 8\.\d times.*above --max-epochs 4")
+        # larger shapes: the Mac ladder gets ctx 2048 / 4096 and a RoPE base that follows
+        with unittest.mock.patch.object(tiny_gpt, "device_memory_budget", return_value=budget):
+            big, st_big, lines_big = tiny_gpt.plan_run(tiny_gpt.parse_args(["--name", "x", "--d-model", "2560"]),
+                                                       manifest, torch.device("cpu"), None)
+        self.assertEqual((big.ctx, big.rope_base), (4096, 40_000.0))
+        self.assertIn("RoPE base 40,000 (default for this ctx)", "\n".join(lines_big))
+        # plan_table shares the rules
+        with unittest.mock.patch.object(tiny_gpt, "device_memory_budget", return_value=budget):
+            rows = tiny_gpt.plan_table(16384, torch.device("cpu"), None, 20.0, 4.0)
+        for unique, planned, c, n_row, tps, fits, lr in rows:
+            self.assertEqual(c.ctx, tiny_gpt.default_ctx(c.d_model))
+            self.assertEqual(tps, tiny_gpt.tokens_per_step_for(n_row, planned))
+            self.assertAlmostEqual(lr, tiny_gpt.heuristic_lr(n_row) * tiny_gpt.lr_batch_factor(n_row, tps))
+
+    def test_min_lr_default_and_resume_override(self):
+        """--min-lr-ratio: None resolves per schedule; on --resume the end point may change while the run is in
+        its warmup or stable phase (nothing moves before decay_start) and is refused inside the decay."""
+        self.assertEqual(tiny_gpt.resolve_min_lr_ratio(None, "wsd"), 0.0)
+        self.assertEqual(tiny_gpt.resolve_min_lr_ratio(None, "cosine"), 0.1)
+        self.assertEqual(tiny_gpt.resolve_min_lr_ratio(0.3, "wsd"), 0.3)
+        self.assertIsNone(tiny_gpt.parse_args(["--name", "x"]).min_lr_ratio)
+        settings = {"schedule": "wsd", "steps": 100, "lr": 1e-3, "min_lr": 1e-4, "warmup_steps": 10,
+                    "decay_frac": 0.2, "decay_shape": "1-sqrt"}
+
+        def schedule():
+            return tiny_gpt.LRSchedule(settings["schedule"], settings["steps"], settings["lr"], settings["min_lr"],
+                                       settings["warmup_steps"], settings["decay_frac"], settings["decay_shape"])
+
+        before = [schedule().lr_at(s) for s in range(0, 81)]
+        applied, note = tiny_gpt.resume_min_lr(settings, 50, 0.0)
+        self.assertTrue(applied)
+        self.assertIn("from the decay phase on", note)
+        self.assertEqual(settings["min_lr"], 0.0)
+        self.assertEqual([schedule().lr_at(s) for s in range(0, 81)], before, "nothing changes before the decay")
+        self.assertEqual(schedule().lr_at(100), 0.0)
+        self.assertLess(schedule().lr_at(99), 1e-4)
+        applied, note = tiny_gpt.resume_min_lr(settings, 50, 0.0)
+        self.assertEqual((applied, "is already" in note), (False, True))
+        applied, note = tiny_gpt.resume_min_lr(settings, 90, 0.5)
+        self.assertFalse(applied)
+        self.assertIn("ignored (already in the decay phase)", note)
+        self.assertEqual(settings["min_lr"], 0.0)
+        cosine = dict(settings, schedule="cosine", min_lr=1e-4)
+        self.assertFalse(tiny_gpt.resume_min_lr(cosine, 50, 0.0)[0], "cosine decays from the warmup on")
+        self.assertTrue(tiny_gpt.resume_min_lr(cosine, 5, 0.0)[0], "but may still change during the warmup")
+
+    def test_mix_alpha_shares(self):
+        """--mix-alpha: sampling shares ~ weight x tokens^alpha; alpha 0 ignores the sizes, so weights {a: 3, b: 1}
+        give TokenBatcher.share() {0.75, 0.25}; alpha 1 is proportional sampling as before."""
+        rng = np.random.default_rng(0)
+        arrays = {"a": rng.integers(0, 50, 100, dtype=np.int64), "b": rng.integers(0, 50, 300, dtype=np.int64)}
+        sizes = {n: len(a) for n, a in arrays.items()}
+        device = torch.device("cpu")
+        flat = tiny_gpt.mix_weights("a=3,b=1", arrays, sizes, alpha=0.0)
+        share = tiny_gpt.TokenBatcher(arrays, flat, 8, 4, device, 0).share()
+        self.assertAlmostEqual(share["a"], 0.75, places=6)
+        self.assertAlmostEqual(share["b"], 0.25, places=6)
+        self.assertEqual(tiny_gpt.mix_weights("a=3,b=1", arrays, sizes, alpha=1.0), {"a": 3.0, "b": 1.0})
+        share1 = tiny_gpt.TokenBatcher(arrays, tiny_gpt.mix_weights(None, arrays, sizes, 1.0), 8, 4, device, 0).share()
+        self.assertAlmostEqual(share1["a"], 0.25, places=6)
+        half = tiny_gpt.TokenBatcher(arrays, tiny_gpt.mix_weights(None, arrays, sizes, 0.5), 8, 4, device, 0).share()
+        self.assertAlmostEqual(half["a"], math.sqrt(100) / (math.sqrt(100) + math.sqrt(300)), places=6)
+        self.assertEqual(tiny_gpt.parse_args(["--name", "x", "--mix-alpha", "0.8"]).mix_alpha, 0.8)
+        with redirect_stdout(io.StringIO()), self.assertRaises(SystemExit):
+            with open(os.devnull, "w") as devnull, unittest.mock.patch.object(sys, "stderr", devnull):
+                tiny_gpt.parse_args(["--name", "x", "--mix-alpha", "3"])
+
+    def test_eval_size_and_batch_rules(self):
+        """The validation set of a new run follows the tokens trained between evaluations (65,536 today, more from
+        ~1M tokens/step); the evaluation batch follows the memory budget, not the training micro-batch."""
+        self.assertEqual(tiny_gpt.default_eval_tokens(200, 270_336, 10, 1e9), 65_536)
+        self.assertEqual(tiny_gpt.default_eval_tokens(200, 2 ** 20, 10, 1e9), 131_072)
+        self.assertEqual(tiny_gpt.default_eval_tokens(200, 2 ** 21, 10, 1e9), 262_144)
+        self.assertEqual(tiny_gpt.default_eval_tokens(200, 2 ** 21, 10, 100_000), 100_000, "capped by the data")
+        self.assertEqual(tiny_gpt.default_eval_tokens(200, 2 ** 21, 10, 1_000), 65_536, "never below today's size")
+        self.assertIsNone(tiny_gpt.parse_args(["--name", "x"]).eval_tokens)
+        self.assertEqual(tiny_gpt.default_eval_batch(2, 1024, 16384, 6 * 2 ** 30), 2, "never below the micro-batch")
+        self.assertEqual(tiny_gpt.default_eval_batch(2, 1024, 16384, 64 * 2 ** 30), 16, "at most 16 windows")
+        self.assertEqual(tiny_gpt.default_eval_batch(4, 1024, 16384, 40 * 2 ** 30), 10)
+        self.assertEqual(tiny_gpt.default_eval_batch(1, 4096, 32768, 54 * 2 ** 30), 1)
+        big = tiny_gpt.ModelConfig(vocab_size=16384, ctx=1024, d_model=1024, n_layers=18, n_heads=16, n_kv_heads=4)
+        attn = 12 * 18 * 1024 * 1024
+        self.assertAlmostEqual(tiny_gpt.attention_flop_share(big), attn / (6 * tiny_gpt.count_params(big)[0] + attn))
+
+    def test_init_from_ctx_override_and_untied_embedding(self):
+        """config_from_checkpoint(obj, ctx=N): the weights of a model trained at one context load unchanged into a
+        model at another (RoPE tables are rebuilt), and agree on the shared prefix. --tie-embeddings off puts
+        the input embedding in the no-decay group and keeps the output matrix decayed."""
+        model = self.small_model(seed=5)
+        obj = {"format": tiny_gpt.CHECKPOINT_FORMAT, "checkpoint_type": "inference",
+               "model_config": dataclasses.asdict(model.cfg), "model": model.state_dict()}
+        self.assertEqual(tiny_gpt.config_from_checkpoint(obj).ctx, 16)
+        cfg = tiny_gpt.config_from_checkpoint(obj, ctx=32)
+        self.assertEqual(cfg.ctx, 32)
+        self.assertEqual(dataclasses.asdict(cfg), {**dataclasses.asdict(model.cfg), "ctx": 32})
+        longer = tiny_gpt.TinyGPT(cfg).eval()
+        longer.load_state_dict(obj["model"])
+        x = torch.randint(0, 50, (2, 32))
+        with torch.no_grad():
+            full = longer(x)
+            self.assertEqual(tuple(full.shape), (2, 32, 50))
+            torch.testing.assert_close(longer(x[:, :16]), model(x[:, :16]), rtol=1e-5, atol=1e-5)
+        with self.assertRaises(SystemExit):
+            tiny_gpt.config_from_checkpoint(obj, ctx=7)
+        settings = {"optimizer": "adamw", "lr": 1e-3, "betas": [0.9, 0.95], "weight_decay": 0.1}
+        _, _, names, note = tiny_gpt.build_optimizer(model, settings, torch.device("cpu"))
+        self.assertIn("token_embedding.weight", names[0], "tied: the one matrix keeps its decay")
+        self.assertNotIn("untied", note)
+        untied_cfg = tiny_gpt.ModelConfig(vocab_size=50, ctx=16, d_model=32, n_layers=2, n_heads=4, n_kv_heads=2,
+                                          tie_embeddings=False)
+        untied = tiny_gpt.TinyGPT(untied_cfg)
+        self.assertEqual(untied.param_counts()[0], tiny_gpt.count_params(untied_cfg)[0])
+        _, _, names_u, note_u = tiny_gpt.build_optimizer(untied, settings, torch.device("cpu"))
+        self.assertIn("token_embedding.weight", names_u[1])
+        self.assertIn("lm_head.weight", names_u[0])
+        self.assertIn("untied input embedding", note_u)
+        _, _, names_m, note_m = tiny_gpt.build_optimizer(untied, dict(settings, optimizer="muon"), torch.device("cpu"))
+        self.assertIn("token_embedding.weight", names_m[1])
+        self.assertNotIn("token_embedding.weight", names_m[2], "MUON_EXCLUDED keeps the embedding on AdamW")
+        manifest = {"tokenizer": {"vocab_size": 700},
+                    "sources": {"md": {"train": {"tokens": 5_000_000}, "doc_tokens_percentiles": {"50": 300}}}}
+        args = tiny_gpt.parse_args(["--name", "x", "--tie-embeddings", "off", "--d-model", "64"])
+        with unittest.mock.patch.object(tiny_gpt, "device_memory_budget", return_value=(4 * 2 ** 30, "4 GiB (test)")):
+            cfg_u, _, lines = tiny_gpt.plan_run(args, manifest, torch.device("cpu"), None)
+        self.assertFalse(cfg_u.tie_embeddings)
+        self.assertIn("excluding the (untied) embedding", "\n".join(lines))
 
 
 class TestRxiv(unittest.TestCase):

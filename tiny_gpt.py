@@ -902,22 +902,31 @@ def checkpoint_info(obj):
     return "unknown", "unknown"
 
 
-def config_from_checkpoint(obj):
+def config_from_checkpoint(obj, ctx=None):
+    """The model's configuration; ctx replaces the stored context length (the
+    two-stage long-context recipe: --init-from <best> --ctx 4096). No weight
+    depends on ctx: the RoPE tables are non-persistent buffers rebuilt from
+    cfg.ctx, so the checkpoint's tensors load unchanged."""
     family, _ = checkpoint_info(obj)
     if family == "tinygpt":
-        return ModelConfig(**obj["model_config"])
-    if family in ("legacy-v3", "legacy-v2"):
+        cfg = ModelConfig(**obj["model_config"])
+    elif family in ("legacy-v3", "legacy-v2"):
         s = obj["settings"]
         weights = obj["model"]
         tied = ("lm_head.weight" not in weights or
                 torch.equal(weights["lm_head.weight"], weights["token_embedding.weight"]))
-        return ModelConfig(vocab_size=int(obj.get("vocab_size") or weights["token_embedding.weight"].shape[0]),
-                           ctx=int(s["CTX"]), d_model=int(s["D"]), n_layers=int(s["LAYERS"]),
-                           n_heads=int(s["HEADS"]), n_kv_heads=int(s.get("KV_HEADS", s["HEADS"])),
-                           ffn_hidden=(8 * int(s["D"])) // 3, rope_base=float(s.get("ROPE_BASE", 10_000.0)),
-                           dropout=float(s.get("DROPOUT", 0.0)), tie_embeddings=tied)
-    raise SystemExit("Unrecognised checkpoint layout (neither tinyGPT nor the original script). "
-                     "view_pt.py can still list its tensors.")
+        cfg = ModelConfig(vocab_size=int(obj.get("vocab_size") or weights["token_embedding.weight"].shape[0]),
+                          ctx=int(s["CTX"]), d_model=int(s["D"]), n_layers=int(s["LAYERS"]),
+                          n_heads=int(s["HEADS"]), n_kv_heads=int(s.get("KV_HEADS", s["HEADS"])),
+                          ffn_hidden=(8 * int(s["D"])) // 3, rope_base=float(s.get("ROPE_BASE", 10_000.0)),
+                          dropout=float(s.get("DROPOUT", 0.0)), tie_embeddings=tied)
+    else:
+        raise SystemExit("Unrecognised checkpoint layout (neither tinyGPT nor the original script). "
+                         "view_pt.py can still list its tensors.")
+    if ctx:
+        cfg.ctx = int(ctx)
+        cfg.validate()
+    return cfg
 
 
 def tokenizer_from_checkpoint(obj):
@@ -1151,22 +1160,27 @@ def build_optimizer(model, settings, device):
     use_muon = settings.get("optimizer", "adamw") == "muon"
     muon = [(n, p) for n, p in named if use_muon and p.dim() == 2 and n not in MUON_EXCLUDED]
     taken = {n for n, _ in muon}
-    decay = [(n, p) for n, p in named if p.dim() >= 2 and n not in taken]
-    no_decay = [(n, p) for n, p in named if p.dim() < 2]
+    # an untied input embedding is a lookup table (each row trained only when its token occurs), so like the norm
+    # gains it is not decayed; tied, the one matrix is also the output layer and keeps its decay
+    tied = getattr(getattr(model, "cfg", None), "tie_embeddings", True)
+    undecayed = set() if tied else {"token_embedding.weight"}
+    decay = [(n, p) for n, p in named if p.dim() >= 2 and n not in taken and n not in undecayed]
+    no_decay = [(n, p) for n, p in named if p.dim() < 2 or n in undecayed]
     groups = [{"params": [p for _, p in decay], "weight_decay": settings["weight_decay"]},
               {"params": [p for _, p in no_decay], "weight_decay": 0.0}]
     adamw, name = make_adamw(groups, device, lr=settings["lr"], betas=tuple(settings["betas"]))
     names = [[n for n, _ in decay], [n for n, _ in no_decay]]
+    gains = f"{len(no_decay) - len(undecayed)} norm gains" + ("" if tied else " and the untied input embedding")
     if not use_muon:
-        return adamw, name, names, f"weight decay on {len(decay)} matrices, not on {len(no_decay)} norm gains"
+        return adamw, name, names, f"weight decay on {len(decay)} matrices, not on {gains}"
     if not hasattr(torch.optim, "Muon"):
         raise SystemExit(f"--optimizer muon needs PyTorch 2.9 or newer (this is {torch.__version__}).")
     muon_opt = torch.optim.Muon([{"params": [p for _, p in muon], "weight_decay": settings["weight_decay"]}],
                                 lr=settings["lr"], momentum=0.95, nesterov=True, adjust_lr_fn="match_rms_adamw")
     return (CombinedOptimizer([adamw, muon_opt]), f"Muon + {name}", names + [[n for n, _ in muon]],
             f"Muon for {len(muon)} block matrices, its step scaled to AdamW's update size; {name} for the embedding "
-            f"({len(decay)} matri{'x' if len(decay) == 1 else 'ces'}) and {len(no_decay)} norm gains; weight decay "
-            "on all matrices")
+            f"({len(decay)} matri{'x' if len(decay) == 1 else 'ces'}) and {gains}; weight decay "
+            "on all matrices" + ("" if tied else " but the untied input embedding"))
 
 
 def _state_keys(opt):
@@ -1869,8 +1883,11 @@ LR_TABLE = [(1e6, 2.0e-3), (1e7, 1.2e-3), (1e8, 6.0e-4), (1e9, 3.0e-4)]
 
 def heuristic_lr(n_params):
     """Log-log interpolation of peak AdamW learning rates used for published
-    decoder models (GPT-3 125M 6e-4, Pythia-70M 1e-3, 160M 6e-4, 1B 3e-4),
-    extended downward for small models. A starting point, not an optimum."""
+    decoder models (GPT-3 125M 6e-4, Pythia-70M 1e-3, 160M 6e-4, Pythia-410M
+    3e-4, GPT-3 760M 2.5e-4), extended downward for small models. The table
+    assumes the 0.5-2M tokens per step those runs used; lr_batch_factor moves
+    the rate when the planner's batch differs from the old 16 sqrt(N) rule.
+    A starting point, not an optimum."""
     x = math.log10(max(n_params, 1))
     pts = [(math.log10(n), math.log10(lr)) for n, lr in LR_TABLE]
     if x <= pts[0][0]:
@@ -1883,6 +1900,39 @@ def heuristic_lr(n_params):
 
 def default_layers(d_model):
     return int(min(max(round(d_model / 64) + 2, 4), 32))
+
+
+def default_ctx(d_model):
+    """Context length by width: the one rule plan_run, plan_table and
+    estimate_dataset share. 1024 up to d 1024 (the laptop plan), 2048 up to
+    d 2048 (the 1.45B Mac shape), 4096 above. Attention is 12 x layers x ctx x d
+    FLOPs per token on top of 6 N, so a longer context costs a growing share
+    (attention_flop_share); --ctx overrides."""
+    if d_model <= 192:
+        return 256
+    if d_model <= 512:
+        return 512
+    if d_model <= 1024:
+        return 1024
+    return 2048 if d_model <= 2048 else 4096
+
+
+def default_rope_base(ctx):
+    """RoPE base for a context: 10,000 up to ctx 2048, then growing as ctx^2
+    (10,000 x (ctx / 2048)^2 rounded to thousands: 4k 40k, 8k 160k, 16k 640k),
+    at or above the lower bound of Men et al. 2024 ("Base of RoPE bounds
+    context length") and Llama 3's 500k at 8k. Below the bound the model keeps
+    its perplexity but loses long-range retrieval."""
+    if ctx <= 2048:
+        return 10_000.0
+    return float(round(10_000 * (ctx / 2048) ** 2, -3))
+
+
+def attention_flop_share(cfg):
+    """Share of the training FLOPs per token spent on attention scores:
+    12 L ctx d / (6 N + 12 L ctx d) (see flops_per_token)."""
+    attn = 12 * cfg.n_layers * cfg.ctx * cfg.d_model
+    return attn / (6 * count_params(cfg)[0] + attn)
 
 
 def default_head_dim(d_model):
@@ -1904,11 +1954,103 @@ def shape_ladder(vocab_size, ctx=512):
     return out
 
 
-def tokens_per_step_for(n_params):
-    """~16 * sqrt(N) tokens per optimizer step, rounded to a power of two,
-    between 16k and 512k (small models reach their critical batch early)."""
+def tokens_per_step_legacy(n_params):
+    """The rule before the 2026-11 audit: ~16 sqrt(N) tokens per optimizer step,
+    rounded to a power of two between 16k and 512k. Kept as the reference
+    batch of the learning-rate table (lr_batch_factor)."""
     raw = 16 * math.sqrt(n_params)
     return int(min(max(2 ** round(math.log2(raw)), 16_384), 524_288))
+
+
+def tokens_per_step_for(n_params, planned_tokens):
+    """Tokens per optimizer step from the compute budget C = 6 N D:
+    half of DeepSeek's (Bi et al. 2024) fitted batch B_opt = 0.292 C^0.327
+    (the 0.5 keeps the batch below B_opt, where per-token efficiency is best),
+    rounded to a power of two between 16k and 2M. 262,144 at 216M / 16.2B
+    (the old 16 sqrt(N) rule's value), 524,288 at 1.45B / 29B, 1,048,576 at
+    3.2B / 64B."""
+    compute = 6.0 * max(n_params, 1) * max(planned_tokens, 1)
+    raw = 0.5 * 0.292 * compute ** 0.327
+    return int(min(max(2 ** round(math.log2(raw)), 2 ** 14), 2 ** 21))
+
+
+def lr_batch_factor(n_params, tokens_per_step):
+    """Factor on heuristic_lr when the planned batch differs from the batch its
+    table was calibrated against (tokens_per_step_legacy): sqrt of the ratio
+    (the square-root rule of Malladi et al. 2022 for Adam), clamped to
+    [0.7, 1.4]. The ratio is rounded to a power of two first, so the
+    accumulation rounding of a batch (270,336 against 262,144) or a small
+    --tokens-per-step tweak leaves the rate exactly where it was; only a
+    doubled or halved batch moves it. Muon follows through match_rms_adamw."""
+    ratio = tokens_per_step / tokens_per_step_legacy(n_params)
+    rounded = 2.0 ** round(math.log2(ratio))
+    return min(max(math.sqrt(rounded), 0.7), 1.4)
+
+
+def resolve_min_lr_ratio(ratio, schedule):
+    """--min-lr-ratio unset: WSD decays to zero (Hagele et al. 2024 and MiniCPM end
+    their decay at ~0; stopping at 0.1 x peak leaves 0.005-0.03 nats on the
+    table), cosine keeps the customary one tenth of the peak."""
+    if ratio is not None:
+        return float(ratio)
+    return 0.0 if schedule == "wsd" else 0.1
+
+
+def resume_min_lr(settings, step, ratio):
+    """--min-lr-ratio on --resume, mirroring the --steps override: before the
+    decay phase the end point of the schedule may still change (lr_at() does
+    not depend on min_lr until decay_start, so nothing moves until then);
+    inside it the change would bend the running decay, so it is refused.
+    Returns (applied, note); applied=True means settings['min_lr'] changed."""
+    schedule = LRSchedule(settings["schedule"], settings["steps"], settings["lr"], settings["min_lr"],
+                          settings["warmup_steps"], settings["decay_frac"], settings["decay_shape"])
+    new_min = float(settings["lr"]) * float(ratio)
+    if schedule.phase(int(step)) == "decay":
+        return False, (f"Note: --min-lr-ratio {ratio:g} ignored (already in the decay phase); the schedule keeps "
+                       f"min_lr {settings['min_lr']:.2e}.")
+    if new_min == float(settings["min_lr"]):
+        return False, f"Note: --min-lr-ratio {ratio:g}: this run's min_lr is already {new_min:.2e}."
+    settings["min_lr"] = new_min
+    return True, (f"Note: --min-lr-ratio {ratio:g}: min_lr {new_min:.2e} from the decay phase on; nothing changes "
+                  "before it.")
+
+
+def default_eval_tokens(eval_every, tokens_per_step, n_sources, available):
+    """Fixed validation tokens per source for a new run: about 0.5 % of the
+    tokens trained between evaluations, shared by the sources and rounded to
+    a power of two, at least 65,536 (today's value up to ~1M tokens/step) and
+    at most the tokens the largest validation source has (EvalSet caps the
+    smaller ones itself)."""
+    raw = 0.005 * eval_every * tokens_per_step / max(n_sources, 1)
+    want = 2 ** round(math.log2(max(raw, 1)))
+    return int(max(65_536, min(want, max(int(available), 65_536))))
+
+
+def default_eval_batch(micro, ctx, vocab_size, budget_bytes):
+    """Windows per evaluation forward pass, independent of the training
+    micro-batch (no gradients are kept): evaluate() holds three fp32 copies of
+    the logits (logits.float(), log-probabilities, probabilities), so 5 % of the
+    memory budget pays for budget x 0.05 / (ctx x vocab x 4 x 3) windows, at most
+    16 and never fewer than the micro-batch (which is known to fit with its
+    gradients)."""
+    fits = int(0.05 * budget_bytes) // (ctx * vocab_size * 4 * 3)
+    return max(int(micro), min(16, fits))
+
+
+def mix_weights(text, sources, sizes, alpha=1.0):
+    """TokenBatcher weights from --mix and --mix-alpha. TokenBatcher samples a
+    source with probability p_i ~ w_i x n_i (tokens), so passing w_i x n_i^(alpha-1)
+    gives p_i ~ w_i x n_i^alpha: alpha 1 (default) is proportional sampling,
+    alpha 0 ignores the sizes, values in between flatten a mix one source
+    dominates (temperature sampling, as in multilingual training)."""
+    weights = parse_mix(text, sources)
+    if alpha == 1.0:
+        return weights
+    scaled = {}
+    for name, w in weights.items():
+        n = max(int(sizes.get(name, 0)), 1)
+        scaled[name] = w * n ** (alpha - 1.0)
+    return scaled
 
 
 def device_memory_budget(device):
@@ -2140,7 +2282,6 @@ def plan_run(args, manifest, device, amp_dtype, token_cap=None):
 
     # --- model shape ---
     # Largest ladder shape whose parameter count N satisfies D >= r * N.
-    p90 = max(int(s.get("doc_tokens_percentiles", {}).get("90", 512)) for s in manifest["sources"].values())
     ladder = shape_ladder(vocab)
     fitting = [c for c in ladder if count_params(c)[0] * r <= planned]
     target = planned / r
@@ -2158,26 +2299,24 @@ def plan_run(args, manifest, device, amp_dtype, token_cap=None):
             if args.heads is not None:
                 cfg.n_heads = args.heads
             cfg.n_kv_heads = args.kv_heads if args.kv_heads is not None else default_kv_heads(cfg.n_heads)
-        if args.ctx:
-            cfg.ctx = args.ctx
-        else:
-            cap = 256 if cfg.d_model <= 192 else (512 if cfg.d_model <= 512 else 1024)
-            want = 2 ** math.ceil(math.log2(max(p90, 256)))
-            cfg.ctx = int(min(cap, want))
+        cfg.ctx = args.ctx if args.ctx else default_ctx(cfg.d_model)
         cfg.ffn_hidden = args.ffn_hidden or swiglu_hidden(cfg.d_model)
-        if args.rope_base:
-            cfg.rope_base = args.rope_base
+        # the RoPE base follows the context unless given (10,000 up to ctx 2048, then ctx^2)
+        cfg.rope_base = args.rope_base if args.rope_base else default_rope_base(cfg.ctx)
+        cfg.tie_embeddings = getattr(args, "tie_embeddings", "on") != "off"
         cfg.validate()
         return cfg
 
-    def batch_for(cfg):
-        n = count_params(cfg)[0]
+    def target_tps(cfg):
+        """Tokens per step before the micro-batch rounding: the command line, or the compute-budget rule."""
         if args.tokens_per_step:
-            tps = args.tokens_per_step
-        elif args.steps:
-            tps = max(cfg.ctx, planned // args.steps)
-        else:
-            tps = tokens_per_step_for(n)
+            return args.tokens_per_step
+        if args.steps:
+            return max(cfg.ctx, planned // args.steps)
+        return tokens_per_step_for(count_params(cfg)[0], planned)
+
+    def batch_for(cfg):
+        tps = target_tps(cfg)
         amp, opt_kind = amp_dtype is not None, args.optimizer or "adamw"
         if args.batch_size:
             micro, accum, ck, lc = choose_memory_plan(cfg, tps, budget_bytes, amp, opt_kind,
@@ -2224,11 +2363,21 @@ def plan_run(args, manifest, device, amp_dtype, token_cap=None):
     epochs = train_tokens / max(unique, 1)
     dropout = args.dropout if args.dropout is not None else (0.0 if epochs <= 4 else 0.1)
     cfg.dropout = dropout
-    lr = args.lr or heuristic_lr(n_total)
+    # the LR table was calibrated at the old batch rule; a doubled or halved batch moves the rate by sqrt(2)
+    tps_target = target_tps(cfg)
+    lr_factor = 1.0 if args.lr else lr_batch_factor(n_total, tps_target)
+    lr = args.lr or heuristic_lr(n_total) * lr_factor
+    min_lr_ratio = resolve_min_lr_ratio(args.min_lr_ratio, args.schedule)
     warmup = args.warmup_steps if args.warmup_steps is not None else int(min(max(round(0.02 * steps), 50), 2000, max(1, steps // 10)))
+    mix_alpha = getattr(args, "mix_alpha", None)
+    mix_alpha = 1.0 if mix_alpha is None else float(mix_alpha)
+    weights = mix_weights(getattr(args, "mix", None), train_by_source, train_by_source, mix_alpha)
+    raw_share = {s: weights[s] * n for s, n in train_by_source.items()}
+    share = {s: v / max(sum(raw_share.values()), 1e-12) for s, v in raw_share.items()}
+    source_epochs = {s: train_tokens * share[s] / max(n, 1) for s, n in train_by_source.items()}
     settings = {
         "steps": steps, "micro_batch": micro, "grad_accum": accum, "tokens_per_step": tokens_per_step,
-        "lr": lr, "min_lr": lr * args.min_lr_ratio, "warmup_steps": warmup, "schedule": args.schedule,
+        "lr": lr, "min_lr": lr * min_lr_ratio, "warmup_steps": warmup, "schedule": args.schedule,
         "decay_frac": args.decay_frac, "decay_shape": args.decay_shape, "weight_decay": args.weight_decay,
         "betas": [args.beta1, args.beta2], "grad_clip": args.grad_clip, "planned_train_tokens": train_tokens,
         "optimizer": args.optimizer or "adamw", "activation_checkpointing": ckpt, "loss_chunk_tokens": chunk,
@@ -2238,16 +2387,32 @@ def plan_run(args, manifest, device, amp_dtype, token_cap=None):
         f"vocabulary {vocab:,}; {budget_text}",
         f"token budget D = {planned:,} ({why}); shape: {shape_why}",
         f"model: d_model {cfg.d_model}, layers {cfg.n_layers}, heads {cfg.n_heads}/{cfg.n_kv_heads} kv "
-        f"(head {cfg.head_dim}), SwiGLU {cfg.ffn_hidden}, ctx {cfg.ctx}; parameters {n_total:,} total, "
-        f"{n_nonembed:,} excluding the (tied) embedding",
+        f"(head {cfg.head_dim}), SwiGLU {cfg.ffn_hidden}, ctx {cfg.ctx}, RoPE base {cfg.rope_base:,.0f}"
+        f"{'' if args.rope_base else ' (default for this ctx)'}; parameters {n_total:,} total, "
+        f"{n_nonembed:,} excluding the ({'tied' if cfg.tie_embeddings else 'untied'}) embedding",
+        f"ctx {cfg.ctx} ({'--ctx' if args.ctx else f'default for d_model {cfg.d_model}'}): attention "
+        f"{attention_flop_share(cfg):.0%} of the training FLOPs per token",
         f"batch: {micro} x {cfg.ctx} tokens x {accum} accumulation = {tokens_per_step:,} tokens/step; "
         f"{steps:,} steps = {train_tokens:,} training tokens",
         f"ratios: {train_tokens / n_total:,.1f} training tokens per parameter "
         f"({train_tokens / max(n_nonembed, 1):,.1f} per non-embedding parameter); "
         f"unique data {unique / n_total:,.1f} tokens per parameter; {epochs:,.2f} epochs",
-        f"learning rate {lr:.2e} peak (heuristic for {n_total / 1e6:,.1f}M parameters), min {lr * args.min_lr_ratio:.2e}; "
+        f"learning rate {lr:.2e} peak ("
+        + ("set" if args.lr else f"heuristic for {n_total / 1e6:,.1f}M parameters x batch factor {lr_factor:.2f}"
+           + ("" if lr_factor == 1.0 else f" for {tps_target:,} tokens/step against the table's "
+                                          f"{tokens_per_step_legacy(n_total):,}"))
+        + f"), min {lr * min_lr_ratio:.2e} ({min_lr_ratio:g} of peak"
+        + ("" if args.min_lr_ratio is not None else
+           f", default for {args.schedule}: {'decay to zero' if min_lr_ratio == 0 else 'one tenth'}") + "); "
         f"dropout {dropout} ({'set' if args.dropout is not None else 'auto: 0 for <= 4 epochs, else 0.1'}); "
         f"weight decay {args.weight_decay} on matrices only; optimizer {OPTIMIZER_LABELS[args.optimizer or 'adamw']}",
+        # the EMA timescale of AdamW's weight decay, 1 / (lr x wd) steps (Wang and Aitchison 2024): how far back the
+        # weights remember; a timescale far above the run means the decay hardly acts, far below means forgetting
+        ("decay timescale 1/(lr x wd) = " + (f"{1 / (lr * args.weight_decay):,.0f} steps "
+                                             f"({1 / (lr * args.weight_decay) / steps:.0%} of the run)"
+                                             if args.weight_decay > 0 else "infinite (no weight decay)")),
+        "sources: " + ", ".join(f"{s} {share[s]:.1%} ({source_epochs[s]:.2f} epochs)" for s in train_by_source)
+        + (f"; --mix-alpha {mix_alpha:g}: shares ~ weight x tokens^alpha" if mix_alpha != 1.0 else ""),
         "memory: " + ("activation checkpointing on (blocks recomputed in the backward pass)" if ckpt
                       else "activation checkpointing off") + "; "
         + (f"loss computed {chunk:,} tokens at a time" if chunk else "loss computed on the whole micro-batch")
@@ -2256,6 +2421,21 @@ def plan_run(args, manifest, device, amp_dtype, token_cap=None):
     ]
     if args.steps and train_tokens > max_epochs * unique:
         lines.append(f"note: --steps {args.steps:,} trains {epochs:.2f} epochs, more than --max-epochs {max_epochs:g}.")
+    over = [s for s, e in source_epochs.items() if e > max_epochs + 1e-9]
+    if over:
+        lines.append("WARNING: " + ", ".join(f"{s} would be seen {source_epochs[s]:.1f} times" for s in over)
+                     + f", above --max-epochs {max_epochs:g} (repeats beyond ~4 fade, Muennighoff et al. 2023); "
+                     "lower its --mix weight or bring --mix-alpha closer to 1.")
+    # a context shorter than the typical document of a source with a real share of the training tokens means that
+    # source is mostly read in pieces (random windows cross document boundaries)
+    long_docs = []
+    for name, s in manifest["sources"].items():
+        p50 = int(s.get("doc_tokens_percentiles", {}).get("50", 0) or 0)
+        if share.get(name, 0.0) > 0.10 and p50 > cfg.ctx:
+            long_docs.append(f"{name} (median document {p50:,} tokens, {share[name]:.0%} of training tokens)")
+    if long_docs:
+        lines.append(f"note: ctx {cfg.ctx} is shorter than the median document of " + ", ".join(long_docs)
+                     + "; these are read in windows that cross documents.")
     if epochs > 4:
         lines.append(f"note: {epochs:.1f} epochs repeats data beyond the ~4 epochs that Muennighoff et al. (2023) "
                      "found nearly as good as fresh data; expect diminishing returns and watch val(mix) against train.")
@@ -2543,15 +2723,16 @@ def plan_table(vocab, device, amp_dtype, r, max_epochs):
         ladder = shape_ladder(vocab)
         fitting = [c for c in ladder if count_params(c)[0] <= planned / r]
         cfg = fitting[-1] if fitting else ladder[0]
-        cfg.ctx = 256 if cfg.d_model <= 192 else (512 if cfg.d_model <= 512 else 1024)
+        cfg.ctx = default_ctx(cfg.d_model)
+        cfg.rope_base = default_rope_base(cfg.ctx)
         n, _ = count_params(cfg)
-        tps = tokens_per_step_for(n)
+        tps = tokens_per_step_for(n, planned)
         try:
             micro, accum = choose_micro_batch(cfg, tps, budget, amp_dtype is not None)
             fits = f"{micro}x{accum}"
         except SystemExit:
             fits = "does not fit"
-        rows.append((unique, planned, cfg, n, tps, fits, heuristic_lr(n)))
+        rows.append((unique, planned, cfg, n, tps, fits, heuristic_lr(n) * lr_batch_factor(n, tps)))
     return rows
 
 
@@ -2570,6 +2751,9 @@ def parse_args(argv=None):
     g = p.add_argument_group("data")
     g.add_argument("--dataset", help="folder built by data_prep.py")
     g.add_argument("--mix", help="source weights per token, e.g. md=3,wiki=1 (default: proportional)")
+    g.add_argument("--mix-alpha", type=float,
+                   help="sampling share of a source ~ its --mix weight x its tokens^alpha (default 1: proportional "
+                        "to size; below 1 flattens a mix one source dominates; honoured on --resume like --mix)")
     g.add_argument("--data", help="(compat) folder of .md files: builds datasets/<name> with data_prep defaults")
     g.add_argument("--wiki-dir", default=os.path.join(os.path.expanduser("~"), "ai_training_data", "wikipedia"),
                    help="(compat)")
@@ -2595,7 +2779,10 @@ def parse_args(argv=None):
     g.add_argument("--kv-heads", type=int)
     g.add_argument("--ctx", type=int)
     g.add_argument("--ffn-hidden", type=int)
-    g.add_argument("--rope-base", type=float)
+    g.add_argument("--rope-base", type=float, help="default: 10,000 up to ctx 2048, then 10,000 x (ctx/2048)^2")
+    g.add_argument("--tie-embeddings", choices=("on", "off"), default="on",
+                   help="share the input embedding with the output layer (default on, as Llama 3.2, Qwen2.5 and "
+                        "Gemma do at every size); off trains a separate output matrix")
     g.add_argument("--dropout", type=float)
     g = p.add_argument_group("budget")
     g.add_argument("--steps", type=int, help="optimizer steps (on --resume: new total)")
@@ -2611,7 +2798,9 @@ def parse_args(argv=None):
     g.add_argument("--grad-accum", type=int, help="micro-batches per optimizer step")
     g.add_argument("--tokens-per-step", type=int)
     g.add_argument("--lr", type=float, help="peak learning rate")
-    g.add_argument("--min-lr-ratio", type=float, default=0.1)
+    g.add_argument("--min-lr-ratio", type=float,
+                   help="learning rate at the end of the run as a share of the peak (default: 0 for wsd, 0.1 for "
+                        "cosine); on --resume it may still be changed before the decay phase begins")
     g.add_argument("--warmup-steps", type=int)
     g.add_argument("--schedule", choices=("wsd", "cosine"), default="wsd")
     g.add_argument("--decay-frac", type=float, default=0.2, help="WSD: share of steps in the final decay")
@@ -2636,7 +2825,9 @@ def parse_args(argv=None):
                    help="weight of the z-loss stability term (0 disables; resumed runs keep their setting)")
     g = p.add_argument_group("evaluation and logging")
     g.add_argument("--eval-every", type=int, default=200, help="steps between validation + metrics line")
-    g.add_argument("--eval-tokens", type=int, default=65_536, help="fixed validation tokens per source")
+    g.add_argument("--eval-tokens", type=int,
+                   help="fixed validation tokens per source (default: 65,536, more at >= 1M tokens/step: about 0.5%% "
+                        "of the tokens trained between evaluations; fixed for the run, so ignored on --resume)")
     g.add_argument("--heartbeat-seconds", type=int, default=120,
                    help="print a short training-only progress line when nothing was printed for this long (0 = off)")
     g.add_argument("--log-every", "--report-every", type=int, default=0,
@@ -2706,7 +2897,8 @@ def validate_args(args, parser):
     for name, lo, hi in (("lr", 1e-7, 1.0), ("min_lr_ratio", 0.0, 1.0), ("decay_frac", 0.0, 0.9),
                          ("weight_decay", 0.0, 1.0), ("beta1", 0.0, 0.9999), ("beta2", 0.0, 0.99999),
                          ("grad_clip", 0.0, 1e3), ("dropout", 0.0, 0.9), ("top_p", 0.0, 1.0),
-                         ("tokens_per_param", 0.1, 1e6), ("max_epochs", 0.01, 1e4), ("temperature", 0.0, 10.0)):
+                         ("tokens_per_param", 0.1, 1e6), ("max_epochs", 0.01, 1e4), ("temperature", 0.0, 10.0),
+                         ("mix_alpha", 0.0, 2.0)):
         value = getattr(args, name)
         if value is not None and not lo <= value <= hi:
             parser.error(f"--{name.replace('_', '-')} must be between {lo} and {hi}")
@@ -3230,9 +3422,22 @@ def _train(args):
                       f"decay phase: the learning rate drops at once to {new.lr_at(int(resume_obj['step'])):.2e}.")
             settings["steps"] = args.steps
             settings["planned_train_tokens"] = args.steps * settings["tokens_per_step"]
+        if args.min_lr_ratio is not None:
+            applied, note = resume_min_lr(settings, int(resume_obj["step"]), args.min_lr_ratio)
+            print(note)
+            if applied:
+                print("schedule now: " + LRSchedule(settings["schedule"], settings["steps"], settings["lr"],
+                                                    settings["min_lr"], settings["warmup_steps"],
+                                                    settings["decay_frac"], settings["decay_shape"]).describe())
     elif init_obj is not None:
-        cfg = config_from_checkpoint(init_obj)  # --time-budget-hours then sets how much of the new data is read
+        # --ctx may change the context (the weights do not depend on it); --time-budget-hours then sets how much of
+        # the new data is read
+        stored_ctx = config_from_checkpoint(init_obj).ctx
+        cfg = config_from_checkpoint(init_obj, ctx=args.ctx)
         _, settings, plan_lines = plan_with_time_budget(_args_with_shape(args, cfg), manifest, device, amp_dtype)
+        if cfg.ctx != stored_ctx:
+            plan_lines.append(f"model was trained at ctx {stored_ctx}; continuing at {cfg.ctx} (RoPE tables rebuilt "
+                              "for the new length, weights unchanged)")
         cfg.dropout = args.dropout if args.dropout is not None else 0.0
         plan_lines.append(f"architecture taken from --init-from {args.init_from}; dropout {cfg.dropout} "
                           f"({'set' if args.dropout is not None else 'default 0 when continuing from weights'}, "
@@ -3249,20 +3454,31 @@ def _train(args):
         raise SystemExit(f"Model vocabulary {cfg.vocab_size} != dataset tokenizer {tok.vocab_size}.")
     total_steps = int(settings["steps"])
     micro, accum = int(settings["micro_batch"]), int(settings["grad_accum"])
-    mix = parse_mix(args.mix if resume_obj is None else (args.mix or settings.get("mix")), arrays["train"])
+    mix_text = args.mix if resume_obj is None else (args.mix or settings.get("mix"))
+    if args.mix_alpha is not None:
+        mix_alpha = float(args.mix_alpha)
+    else:  # runs from before --mix-alpha sampled in proportion to size (alpha 1)
+        mix_alpha = float(settings.get("mix_alpha", 1.0)) if resume_obj is not None else 1.0
+    mix = mix_weights(mix_text, arrays["train"], {n: len(a) for n, a in arrays["train"].items()}, mix_alpha)
     byte_tables = tuple(torch.from_numpy(t) for t in tok.byte_tables())
     z_loss = float(settings.setdefault("z_loss", args.z_loss if resume_obj is None else 0.0))
     if resume_obj is not None and args.z_loss != settings["z_loss"] and args.z_loss != 1e-4:
         print(f"Note: --z-loss ignored on --resume; this run keeps z_loss {settings['z_loss']:g}.")
-    eval_tokens = int(settings.setdefault("eval_tokens", args.eval_tokens))  # fixed windows stay fixed on resume
-    if resume_obj is not None and eval_tokens != args.eval_tokens and args.eval_tokens != 65_536:
+    if resume_obj is None and args.eval_tokens is None:  # new run: the size follows the tokens between evaluations
+        largest_val = max((len(a) - 1 for a in arrays["val"].values()), default=0)
+        args.eval_tokens = default_eval_tokens(args.eval_every, int(settings["tokens_per_step"]), len(arrays["val"]),
+                                               largest_val)
+    # fixed windows stay fixed on resume; runs from before the key existed used the old default of 65,536
+    eval_tokens = int(settings.setdefault("eval_tokens", args.eval_tokens or 65_536))
+    if resume_obj is not None and args.eval_tokens is not None and eval_tokens != args.eval_tokens:
         print(f"Note: --eval-tokens ignored on --resume; this run keeps {eval_tokens:,} (its validation windows).")
     probes_sha = file_sha256(args.probes)[:16] if args.probes else None
     if resume_obj is not None and settings.get("probes_sha") and probes_sha and settings["probes_sha"] != probes_sha:
         print(f"Note: {os.path.basename(args.probes)} has changed since this run started: fact-probe accuracies "
               "from now on are not comparable with the earlier ones.")
     settings["probes_sha"] = probes_sha
-    settings["mix"] = args.mix if resume_obj is None else (args.mix or settings.get("mix"))
+    settings["mix"] = mix_text
+    settings["mix_alpha"] = mix_alpha
 
     # ---------------- model & optimizer ----------------
     torch.manual_seed(args.seed)  # planning and attention timing must not change the initial weights
@@ -3287,7 +3503,27 @@ def _train(args):
 
     batcher = TokenBatcher(arrays["train"], mix, cfg.ctx, micro, device, args.seed)
     evalset = EvalSet(arrays["val"], cfg.ctx, eval_tokens)
-    eval_batch = max(1, min(micro, int(3e8 // (cfg.ctx * cfg.vocab_size * 4))))
+    # evaluation keeps no gradients, so its batch is set by the memory budget, not by the training micro-batch
+    eval_batch = default_eval_batch(micro, cfg.ctx, cfg.vocab_size, device_memory_budget(device)[0])
+
+    def evaluate_retrying():
+        """evaluate() with the training step's halve-on-out-of-memory retry: the evaluation batch may be larger
+        than the micro-batch, so the first evaluation can be the first time this many windows meet the model."""
+        nonlocal eval_batch
+        was_training = model.training
+        try:
+            while True:
+                try:
+                    return evaluate(model, evalset, device, amp_dtype, eval_batch, byte_tables=byte_tables,
+                                    share=batcher.share())
+                except RuntimeError as exc:  # torch.cuda.OutOfMemoryError / MPS OOM are RuntimeErrors
+                    if "out of memory" not in str(exc).lower() or eval_batch <= 1:
+                        raise
+                    free_device_memory(device)
+                    eval_batch = max(1, eval_batch // 2)
+                    print(f"Out of memory during evaluation; retrying with {eval_batch} windows at a time.")
+        finally:
+            model.train(was_training)
     probes = read_probes(args.probes) if args.probes else []
     probes_sha = file_sha256(args.probes) if probes else None
 
@@ -3478,7 +3714,7 @@ def _train(args):
     # ---------------- baseline evaluation ----------------
     if not resumed and not history:
         print(f"measuring the untrained model on the fixed validation windows ({evalset.describe()}) ...")
-        ev = evaluate(model, evalset, device, amp_dtype, eval_batch, byte_tables=byte_tables, share=batcher.share())
+        ev = evaluate_retrying()
         history.append({"step": start_step, "tokens": tokens_seen, "train_loss": None, "val_loss": ev["loss"],
                         "val_mix": ev["loss_mix"], "bpb": ev["bpb"], "bpb_mix": ev["bpb_mix"],
                         "bpb_per_source": ev["bpb_per_source"],
@@ -3775,8 +4011,7 @@ def _train(args):
                         f"training loss became {train_loss} by step {step}. The last good checkpoint is "
                         f"{ckpt_path}; resume it with a lower --lr (start a new --name with --init-from).")
                 tok_s = interval_tokens / max(interval_train_time, 1e-9)
-                ev = evaluate(model, evalset, device, amp_dtype, eval_batch, byte_tables=byte_tables,
-                              share=batcher.share())
+                ev = evaluate_retrying()
                 ev["step"] = step
                 probe_acc, probe_by_category, probe_floor_acc = None, None, None
                 if probes:

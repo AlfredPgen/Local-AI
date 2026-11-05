@@ -542,7 +542,7 @@ and a `train{...}` block. Here is what each value means and where it came from.
 | grad_accum | 4 | Micro-batches whose gradients are summed before one update | tokens_per_step ÷ (micro_batch × ctx) |
 | tokens_per_step | 65,536 | Tokens behind each update: $32 \times 4 \times 512$ | About $16\sqrt{N}$, rounded to a power of 2 |
 | lr | 0.001017 | Peak learning rate | Interpolated on a log-log scale from published models (Pythia-70M $10^{-3}$, GPT-3 125M $6\times10^{-4}$, ...) at 17.3M parameters |
-| min_lr | 0.0001017 | Learning rate at the very end | 10% of the peak (`--min-lr-ratio 0.1`) |
+| min_lr | 0.0001017 | Learning rate at the very end | 10% of the peak (`--min-lr-ratio 0.1`, the default when this run started). New WSD runs now decay to 0 unless `--min-lr-ratio` is given (Hägele et al. 2024 end their decay at ~0); cosine keeps 0.1 |
 | warmup_steps | 237 | Steps of linear ramp from 0 to the peak | 2% of the steps |
 | schedule | wsd | Warm-up, stable, decay | Default. It allows a run to be extended, and matches cosine schedules at the end |
 | decay_frac | 0.2 | Share of steps in the final decay | The last 2,374 steps, from step 9,496 |

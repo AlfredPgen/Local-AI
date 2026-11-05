@@ -410,8 +410,8 @@ def main(argv=None):
         measured_speed(tiny_gpt.experiments_path(HERE) if os.path.isfile(tiny_gpt.experiments_path(HERE))
                        else os.path.join(HERE, "experiments.csv"))
 
-    def ctx_of(c):  # tiny_gpt's rule: long documents (books) take the width's maximum context
-        return 256 if c.d_model <= 192 else (512 if c.d_model <= 512 else 1024)
+    def ctx_of(c):  # tiny_gpt's one context rule (default_ctx): 1024 up to d 1024, 2048 up to d 2048, then 4096
+        return tiny_gpt.default_ctx(c.d_model)
 
     def per_token(n, c):
         return 6 * n + 12 * c.n_layers * ctx_of(c) * c.d_model
