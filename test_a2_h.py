@@ -385,6 +385,46 @@ class Audit2PipelineTools(unittest.TestCase):
         self.assertTrue(out.endswith("\n" + tiny_gpt.GPU_BUSY_MESSAGE + " Or pass --force.\n"), out[-400:])
         self.assertEqual(out.count("driver"), tiny_gpt.GPU_BUSY_MESSAGE.count("driver"))
 
+    # ---------------- tools ----------------
+    def test_keyword_covered_candidates_by_word_count_change_nothing(self):
+        """F384 (guard: passes before and after): looking for covering terms only among terms with a word count
+        that can cover gives what comparing every pair of terms gives."""
+        import kw_covered
+
+        def every_pair(terms, nested):
+            shapes = {t: kw_covered.shape(t) for t in terms}
+            covered, seen = {}, {}
+            for t in terms:
+                sa = shapes[t]
+                if not sa:
+                    continue
+                key = (tuple(sa[0]), sa[1])
+                if seen.get(key, t) != t:
+                    covered[t] = seen[key]
+                    continue
+                seen[key] = t
+                for u in sorted(terms):
+                    su = shapes[u]
+                    if u != t and u not in covered and su and su != sa and kw_covered.covers(su, sa, nested) \
+                            and not any(kind == "suffix" for _, kind in su[0]):
+                        covered[t] = u
+                        break
+            return covered
+
+        terms = ["polymer*", "polymerase", "spatial transcriptomic*", "spatial transcriptomics", "CITE-seq",
+                 "=CITE-seq", "=MET", "=Met", "regression", "linear regression", "*mab", "adalimumab",
+                 "China Kadoorie", "China Kadoorie Biobank", "Kadoorie Biobank study group", "UK Biobank",
+                 "UK Biobank study", "=UK", "T cell", "T cell receptor", "CAR T cell receptor*", "cell receptor",
+                 "recept*", "receptor", "=T", "of the", "risk of the disease", "zeta", "Zeta", "Biobank stud*",
+                 "linear mixed model", "mixed model*", "generalised linear mixed models", "model", "=DNA", "DNA"]
+        for nested in (False, True):
+            self.assertEqual(kw_covered.find(terms, nested), every_pair(terms, nested), nested)
+        nested = kw_covered.find(terms, True)
+        self.assertEqual((nested["UK Biobank study"], nested["T cell receptor"], nested["risk of the disease"],
+                          nested["generalised linear mixed models"]),
+                         ("Biobank stud*", "T cell", "of the", "mixed model*"))
+        self.assertGreater(len(nested), len(kw_covered.find(terms, False)))
+
 
 if __name__ == "__main__":
     unittest.main()

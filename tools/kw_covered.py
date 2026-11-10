@@ -53,13 +53,17 @@ def covers(sb, sa, nested):
 def find(terms, nested):
     """{covered term: covering term} for a list of terms."""
     shapes = {t: shape(t) for t in terms}
-    by_word, short = {}, set()  # possible covering terms, by the first 3 letters of their words
+    # possible covering terms, by (the first 3 letters of a word, the number of words); those with a shorter word by
+    # the number of words alone. A term can only be covered by one with as many words or, nested, with 2 or more
+    # but fewer (covers), so only those are looked at: comparing all of them was close to quadratic
+    by_word, short = {}, {}
     for t in terms:
         s = shapes[t]
         if not s or any(kind == "suffix" for _, kind in s[0]):
             continue
+        n = len(s[0])
         for w, _ in s[0]:
-            (short.add(t) if len(w) < 3 else by_word.setdefault(w.lower()[:3], set()).add(t))
+            (short.setdefault(n, set()) if len(w) < 3 else by_word.setdefault((w.lower()[:3], n), set())).add(t)
     covered, seen = {}, {}
     for t in terms:
         sa = shapes[t]
@@ -70,9 +74,11 @@ def find(terms, nested):
             covered[t] = seen[key]
             continue
         seen[key] = t
-        cands = set(short)
-        for w, _ in sa[0]:
-            cands |= by_word.get(w.lower()[:3], set())
+        m, cands = len(sa[0]), set()
+        for n in [m] + (list(range(2, m)) if nested else []):
+            cands |= short.get(n, set())
+            for w, _ in sa[0]:
+                cands |= by_word.get((w.lower()[:3], n), set())
         for u in sorted(cands):
             # a term of the same shape (a case variant) is left to the `seen` rule above: the first one stays
             if u != t and u not in covered and shapes[u] and shapes[u] != sa and covers(shapes[u], sa, nested):
