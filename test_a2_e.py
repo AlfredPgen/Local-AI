@@ -732,6 +732,33 @@ class Audit2Downloaders(unittest.TestCase):
             got = list(rx.read_cache(path))
         self.assertEqual([(r["doi"], r["version"]) for r in got], [("10.1101/A", 1), ("10.1101/B", 2)])
 
+    # ---------------- download_wikipedia.py ----------------
+    def test_f146_download_wikipedia_help_starts_no_work(self):
+        """F146: download_wikipedia.py has an argument parser: --help prints the help and an unknown
+        argument is an error, both before any work (without a parser every argument was ignored and
+        the download started)."""
+        import subprocess
+        import download_wikipedia as wiki
+        target = os.path.join(self.tmp, "wikipedia")
+        with unittest.mock.patch.object(wiki, "save_path", target), redirect_stdout(io.StringIO()) as buf, \
+                self.assertRaises(SystemExit) as stop:
+            wiki.main(["--help"])
+        self.assertEqual(stop.exception.code, 0)
+        self.assertIn("usage:", buf.getvalue())
+        self.assertIn("Download English Wikipedia", buf.getvalue())
+        self.assertEqual(os.listdir(self.tmp), [])
+        script = os.path.join(HERE, "download_wikipedia.py")
+        with open(script, encoding="utf-8") as f:
+            self.assertIn("ArgumentParser", f.read())  # never start the script itself without a parser
+        done = subprocess.run([sys.executable, script, "--help"], cwd=self.tmp, capture_output=True, timeout=300)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn(b"usage:", done.stdout)
+        self.assertEqual(os.listdir(self.tmp), [])
+        done = subprocess.run([sys.executable, script, "somewhere"], cwd=self.tmp, capture_output=True, timeout=300)
+        self.assertEqual(done.returncode, 2, done.stdout)
+        self.assertIn(b"unrecognized arguments", done.stderr)
+        self.assertEqual(os.listdir(self.tmp), [])
+
 
 if __name__ == "__main__":
     unittest.main()

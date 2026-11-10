@@ -8,6 +8,7 @@ deleted at the end (by default they would stay in hidden cache folders, about
 30 GB more). The copy is written to <folder>.part and renamed when complete,
 so an interrupted run never leaves a folder that looks finished.
 """
+import argparse
 import gc
 import os
 import shutil
@@ -23,7 +24,9 @@ def _remove(folder):
         print(f"Could not delete all of {folder} (a file still in use?); delete it by hand.")
 
 
-def main():
+def main(argv=None):
+    # no options: the parser is here so that --help (or a mistyped argument) does not start the download
+    argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter).parse_args(argv)
     if os.path.isfile(os.path.join(save_path, "dataset_dict.json")):
         print(f"Wikipedia is already in {save_path}; delete that folder to download it again.")
         return
