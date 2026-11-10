@@ -356,6 +356,21 @@ class Audit2Benchmark(unittest.TestCase):
             self.assertNotIn("Windows", said[platform])
             self.assertIn("(start Docker). Generated code is never run on this machine;", said[platform])
 
+    def test_download_entry_hashes_and_dropped_items(self):
+        """F001, F011 (guard: passes before and after): the manifest entry of a download has the sha256 of the
+        raw file and of items.jsonl, and a malformed item is dropped and counted once."""
+        import hashlib
+        entry, _, _, items = self.fake_download("f001", False)
+        folder = os.path.join(self.tmp, "f001", "toy")
+        for path, digest in ((os.path.join(folder, "raw", "data", "t.jsonl"), entry["files"][0]["sha256"]),
+                             (os.path.join(folder, "items.jsonl"), entry["items_sha256"])):
+            with open(path, "rb") as handle:
+                self.assertEqual(hashlib.sha256(handle.read()).hexdigest(), digest)
+        self.assertEqual([it["id"] for it in items], ["t0", "t1", "t2"])
+        self.assertEqual((entry["items"], entry["dropped_items"]), (3, 1))
+        self.assertEqual([list(pair) for pair in entry["dropped_examples"]],
+                         [["bad", "answer not among the options"]])
+
     def test_generated_code_gets_no_stdin(self):
         """F020: the jailed program reads /dev/null, not the rest of the wrapper script piped to `bash -s` (which
         holds the clean-up lines), and the unsafe local runner gives its child no stdin either."""

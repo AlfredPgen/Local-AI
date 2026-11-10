@@ -61,6 +61,7 @@ import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
+import data_prep  # noqa: E402
 
 BENCH_DIR = os.path.join(HERE, "benchmarks")
 MANIFEST = os.path.join(BENCH_DIR, "manifest.json")
@@ -78,7 +79,7 @@ SANDBOX_SITE = "$HOME/.cache/tinygpt-sandbox/site"  # inside WSL; mounted read-o
 # ---------------------------------------------------------------------------
 
 
-def _flat(value):
+def _flat(value):  # None -> "", but 0 stays "0" on purpose: an MCQ option can be the number 0
     return " ".join(str(value if value is not None else "").split())
 
 
@@ -116,14 +117,6 @@ def _dict(value):
 
 def stable_key(*parts):
     return hashlib.sha256("|".join(str(p) for p in parts).encode("utf-8")).hexdigest()
-
-
-def file_sha256(path):
-    h = hashlib.sha256()
-    with open(path, "rb") as handle:
-        for block in iter(lambda: handle.read(1 << 20), b""):
-            h.update(block)
-    return h.hexdigest()
 
 
 def home_short(text):
@@ -540,10 +533,10 @@ def download_one(spec, man, force=False):
     entry = {"title": spec["title"], "group": spec["group"], "kind": spec["kind"], "grading": spec["grading"],
              "scored": spec["scored"], "source": spec["url"], "repo_id": spec["repo"], "revision": info.sha,
              "licence": spec["licence"], "card_licence": card.get("license"),
-             "files": [{"path": f, "bytes": os.path.getsize(p), "sha256": file_sha256(p)}
+             "files": [{"path": f, "bytes": os.path.getsize(p), "sha256": data_prep.sha256_file(p)}
                        for f, p in zip(spec["files"], raw_paths)],
              "items": len(items), "dropped_items": len(bad), "dropped_examples": bad[:5],
-             "items_sha256": file_sha256(items_path), "categories": len({it["category"] for it in items}),
+             "items_sha256": data_prep.sha256_file(items_path), "categories": len({it["category"] for it in items}),
              "bytes": folder_bytes(folder), "downloaded": now_iso(), "notes": spec["notes"]}
     return entry, "downloaded"
 
