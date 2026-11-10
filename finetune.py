@@ -48,6 +48,11 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import tiny_gpt  # noqa: E402
 
+
+def _hms(seconds):
+    seconds = int(max(seconds, 0))
+    return f"{seconds // 3600}:{seconds % 3600 // 60:02d}:{seconds % 60:02d}"
+
 TEMPLATE = "### Question:\n{prompt}\n\n### Answer:\n"
 
 
@@ -378,6 +383,7 @@ def train(args):
     history, step, t0 = [], 0, time.time()
     val_loss, val_info = evaluate_items(val_items)
     print(f"epoch 0 | held-out loss {val_loss:.4f}" + "".join(f" | {k} {v:.3f}" for k, v in val_info.items()))
+    t_train = last_beat = time.time()  # the rate excludes the initial evaluation
     for epoch in range(1, args.epochs + 1):
         rng = random.Random(args.seed + epoch)
         if args.no_length_grouping:
@@ -400,6 +406,14 @@ def train(args):
                 torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
                 opt.step()
             running.append(loss)
+            now = time.time()
+            if now - last_beat >= 60 or step == total:  # a progress line about once a minute
+                rate = (now - t_train) / max(step, 1)
+                recent = running[-50:]
+                print(f"  ... step {step:,}/{total:,} | epoch {epoch} | train loss {sum(recent) / len(recent):.4f} "
+                      f"(last {len(recent)} steps) | lr {schedule.lr_at(step):.2e} | {rate:.2f} s/step | "
+                      f"elapsed {_hms(now - t0)} | left {_hms(rate * (total - step))}", flush=True)
+                last_beat = now
         val_loss, val_info = evaluate_items(val_items)
         history.append({"epoch": epoch, "step": step, "train_loss": sum(running) / len(running),
                         "val_loss": val_loss, **val_info})
