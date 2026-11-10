@@ -244,8 +244,11 @@ def bootstrap(nll_a, nll_b, bytes_a, bytes_b, reps, seed):
     n = len(nll_a)
     ln2 = math.log(2)
     point = nll_a.sum() / (ln2 * bytes_a.sum()) - nll_b.sum() / (ln2 * bytes_b.sum())
-    idx = rng.integers(0, n, (reps, n))
-    stats = nll_a[idx].sum(1) / (ln2 * bytes_a[idx].sum(1)) - nll_b[idx].sum(1) / (ln2 * bytes_b[idx].sum(1))
+    stats = []
+    for start in range(0, reps, 250):  # in blocks: one reps x documents index matrix and its four gathers are large
+        idx = rng.integers(0, n, (min(250, reps - start), n))
+        stats.append(nll_a[idx].sum(1) / (ln2 * bytes_a[idx].sum(1)) - nll_b[idx].sum(1) / (ln2 * bytes_b[idx].sum(1)))
+    stats = np.concatenate(stats)
     low, high = np.percentile(stats, [2.5, 97.5])
     p = min(1.0, 2 * min((stats <= 0).mean(), (stats >= 0).mean()))
     return point, low, high, p

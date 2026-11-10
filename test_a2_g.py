@@ -285,6 +285,34 @@ class Audit2FinetuneTools(unittest.TestCase):
         self.assertEqual(second["previous"]["history"], first["history"])
         self.assertEqual(os.path.normcase(second["previous"]["base"]), os.path.normcase(os.path.abspath(base)))
 
+    # ---- compare_models.py ------------------------------------------------------------------------------
+    def test_bootstrap_in_blocks_draws_the_same_resamples(self):
+        """F025 (guard): the bootstrap resamples in blocks of 250 and gives exactly the numbers of one
+        reps x documents index matrix (the code before the change, copied here), also when reps is no multiple
+        of 250."""
+        import math
+        import numpy as np
+        import compare_models
+
+        def whole_matrix(nll_a, nll_b, bytes_a, bytes_b, reps, seed):
+            rng = np.random.default_rng(seed)
+            n = len(nll_a)
+            ln2 = math.log(2)
+            point = nll_a.sum() / (ln2 * bytes_a.sum()) - nll_b.sum() / (ln2 * bytes_b.sum())
+            idx = rng.integers(0, n, (reps, n))
+            stats = nll_a[idx].sum(1) / (ln2 * bytes_a[idx].sum(1)) - nll_b[idx].sum(1) / (ln2 * bytes_b[idx].sum(1))
+            low, high = np.percentile(stats, [2.5, 97.5])
+            p = min(1.0, 2 * min((stats <= 0).mean(), (stats >= 0).mean()))
+            return point, low, high, p
+        data = np.random.default_rng(11)
+        for n, reps, seed in ((777, 2001, 0), (33, 100, 5), (40, 250, 1), (5, 613, 2)):
+            bytes_a = data.integers(200, 20_000, n).astype(float)
+            bytes_b = bytes_a * data.uniform(0.98, 1.0, n)
+            nll_a = bytes_a * data.uniform(0.8, 1.6, n)
+            nll_b = nll_a * data.uniform(0.97, 1.04, n)
+            self.assertEqual(compare_models.bootstrap(nll_a, nll_b, bytes_a, bytes_b, reps, seed),
+                             whole_matrix(nll_a, nll_b, bytes_a, bytes_b, reps, seed), (n, reps))
+
     # ---- posttrain.py -----------------------------------------------------------------------------------
     def posttrain_data(self, tag):
         folder = os.path.join(self.tmp, tag)
