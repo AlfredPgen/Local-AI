@@ -65,6 +65,7 @@ DEFAULT_QUERY = 'OPEN_ACCESS:y AND HAS_FT:y AND SRC:MED AND (genetic* OR genom* 
 USER_AGENT = "tinyGPT-pmc-downloader/1.0 (personal research; python urllib)"
 MAX_XML_BYTES = 400 << 20
 MIN_REQUEST_GAP = 0.35  # seconds between request starts: NCBI allows 3 per second without an API key
+MAX_SERVER_PAUSE = 600.0  # seconds one try waits at most because the server's Retry-After asks for it
 FINAL = {"ok", "no_fulltext", "no_body", "not_english", "bad_xml"}  # statuses not retried on a rerun
 REPORT_COLUMNS = ["pmcid", "status", "chars", "journal", "year", "cited", "licence", "file"]
 
@@ -88,7 +89,8 @@ def http_get(url, data=None, timeout=300, tries=6):
     """Bytes of url (POST when data is given), None on 404. Rate limits, server
     errors and network failures are retried with exponential backoff; after
     "too many requests" (429) or "busy" (503) the wait is at least as long as
-    the server's Retry-After asks (at most an hour)."""
+    the server's Retry-After asks (at most 10 minutes for one try; a line says
+    so, because a request waiting in a worker thread prints nothing else)."""
     delay = 3.0
     for attempt in range(tries):
         _wait_turn()
@@ -113,7 +115,10 @@ def http_get(url, data=None, timeout=300, tries=6):
                 if "download_arxiv" not in sys.modules:
                     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
                 from download_arxiv import _retry_after
-                asked = min(_retry_after(exc.headers) or 0.0, 3600.0)
+                asked = min(_retry_after(exc.headers) or 0.0, MAX_SERVER_PAUSE)
+                if asked > delay + 1:  # longer than the backoff below
+                    print(f"  the server asks to slow down ({exc.code}); this request waits {asked:,.0f} s",
+                          flush=True)
         except (urllib.error.URLError, TimeoutError, ConnectionError, http.client.HTTPException, OSError):
             if attempt == tries - 1:
                 raise

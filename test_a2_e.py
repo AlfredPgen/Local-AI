@@ -627,10 +627,13 @@ class Audit2Downloaders(unittest.TestCase):
                 headers["Retry-After"] = retry_after
             return [urllib.error.HTTPError("https://example.org/x", code, "slow down", headers, None), Response()]
 
+        said = []  # what each call printed
+
         def longest_sleep(code, retry_after):
             with unittest.mock.patch.object(pmc.urllib.request, "urlopen", side_effect=answers(code, retry_after)), \
-                    unittest.mock.patch.object(pmc.time, "sleep") as sleep:
+                    unittest.mock.patch.object(pmc.time, "sleep") as sleep, redirect_stdout(io.StringIO()) as buf:
                 self.assertEqual(pmc.http_get("https://example.org/x"), b"body")
+            said.append(buf.getvalue())
             return max(call.args[0] for call in sleep.call_args_list)
 
         self.assertGreaterEqual(longest_sleep(429, "30"), 30)
@@ -638,7 +641,12 @@ class Audit2Downloaders(unittest.TestCase):
         self.assertLess(longest_sleep(429, "1"), 4.01)  # shorter than the backoff: the backoff (3-4 s) stands
         self.assertLess(longest_sleep(429, None), 4.01)
         self.assertLess(longest_sleep(500, "30"), 4.01)  # Retry-After is honoured for 429 and 503 only
-        self.assertLessEqual(longest_sleep(429, "999999"), 3600)
+        # a wait the server asked for is announced (the request waits in a worker thread, where nothing else
+        # would be printed), and one try waits at most 10 minutes for it
+        self.assertEqual(said, ["  the server asks to slow down (429); this request waits 30 s\n",
+                                "  the server asks to slow down (503); this request waits 30 s\n", "", "", ""])
+        self.assertEqual(longest_sleep(429, "999999"), 600)
+        self.assertEqual(said[-1], "  the server asks to slow down (429); this request waits 600 s\n")
 
     KEYWORDS = "genetic*\nallele*\ndrift\nselection\n"
     MATCH = ("Genetic drift and allele frequencies", "Genetic drift changes allele frequencies; selection acts too.")
