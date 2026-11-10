@@ -1593,7 +1593,8 @@ def plan_lines(history, ck):
             per_day = gain / 1000 * (timed[-1][0] - timed[0][0]) / (timed[-1][1] - timed[0][1]) * 86400
             detail = f"{per_day:.3f} per 24 h of training"
         out.append((f"improving {_rate(gain)} per 1,000 steps" if gain > 0
-                    else f"not improving (validation up {_rate(-gain)} per 1,000 steps)", detail))
+                    else f"not improving (validation up {_rate(-gain)} per 1,000 steps)" if gain < 0
+                    else "not improving (validation flat: 0 per 1,000 steps)", detail))
     speeds = [v for _, v in _series(history, "tok_s") if v > 0][-10:]
     if speeds and planned and _finite(per_step) and total > step:
         hours = (total - step) * per_step / float(np.median(speeds)) / 3600
