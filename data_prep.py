@@ -2446,6 +2446,7 @@ def _prepare(args, state=None):
         exact_seen = {}
         duplicates = []
         line_counts = collections.defaultdict(collections.Counter)
+        boiler = {}  # source -> {line key: documents with the line}, for the lines in enough documents
         line_examples = {}
         spool1_files = []
         keyword_totals = collections.defaultdict(collections.Counter)
@@ -2572,6 +2573,9 @@ def _prepare(args, state=None):
             print(f"[{name}] scanned {stats['scanned']:,} | kept {stats['accepted']:,} | skipped "
                   f"{sum(stats['skipped'].values()):,} {dict(stats['skipped'].most_common())} "
                   f"({time.time() - t0:,.0f} s)", flush=True)
+            # the source's table now, so that its line counts (millions of keys) do not wait for the other sources
+            boiler[name] = {k: c for k, c in line_counts.pop(name, {}).items()
+                            if c >= max(args.boilerplate_min_docs, 2)}
 
         workers.close()
         del exact_seen
@@ -2579,10 +2583,6 @@ def _prepare(args, state=None):
         # ------------------------------------------------------------------
         # Pass 2: boilerplate strip + MinHash -> spool2
         # ------------------------------------------------------------------
-        boiler = {}
-        for name, counter in line_counts.items():
-            threshold = max(args.boilerplate_min_docs, 2)
-            boiler[name] = {k: c for k, c in counter.items() if c >= threshold}
         del line_counts
         line_examples = {k: line_examples[k] for table in boiler.values() for k in table if k in line_examples}
         removed_lines = collections.Counter()

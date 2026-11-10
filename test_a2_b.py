@@ -1373,6 +1373,25 @@ class Audit2DataPrep(unittest.TestCase):
                 handle.write("x\n")
         self.assertTrue(data_prep._is_incomplete_build(partial))
 
+    # ---------------- F051: a source's boilerplate table is made when the source has been read ----------------
+    def test_boilerplate_tables_per_source_with_a_source_that_keeps_nothing(self):
+        """Guard (it passes before and after): a source without a kept document has no boilerplate table to
+        look up, and the other sources lose the same lines as without it."""
+        folder = self.folder("f051_in")
+        with open(os.path.join(folder, "short.md"), "w", encoding="utf-8", newline="\n") as handle:
+            handle.write("Too short to keep.\n")
+        out = os.path.join(self.tmp, "f051")
+        with redirect_stdout(io.StringIO()):
+            data_prep.prepare(["--out", out, "--md-dir", f"void={folder}"] + self.base_args())
+        manifest, plain = data_prep.read_manifest(out), data_prep.read_manifest(self.plain())
+        self.assertEqual(manifest["sources"]["void"]["kept_docs"], 0)
+        self.assertEqual(manifest["fingerprint"], plain["fingerprint"])
+        removed = read_file(os.path.join(out, "boilerplate.tsv"))
+        self.assertEqual(removed, read_file(os.path.join(self.plain(), "boilerplate.tsv")))
+        self.assertGreater(len(removed.splitlines()), 1, "the corpus has a boilerplate line")
+        for name in ("md", "notes"):
+            self.assertEqual(manifest["sources"][name]["cleaning"], plain["sources"][name]["cleaning"])
+
 
 if __name__ == "__main__":
     unittest.main()
