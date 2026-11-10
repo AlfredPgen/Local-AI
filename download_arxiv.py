@@ -541,7 +541,7 @@ def main_tex(files):
     \\documentclass is preferred, then the longest once its \\input files are
     filled in (a short main.tex that only includes its sections beats a long
     supplement or template)."""
-    texts = {n: _COMMENT_RE.sub("", t) for n, t in files.items() if n.endswith(".tex")}
+    texts = {n: _COMMENT_RE.sub("", t) for n, t in files.items() if n.lower().endswith(".tex")}
     cands = [n for n, t in texts.items() if re.search(r"\\begin\s*\{document\}", t)]
     if not cands:
         return None

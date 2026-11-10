@@ -55,6 +55,11 @@ class Audit2Downloaders(unittest.TestCase):
         self.assertTrue(result["method"].startswith("pdf (latex failed: error"), result["method"])
         self.assertTrue(os.path.isfile(os.path.join(self.tmp, result["file"])))
 
+    def test_f126_upper_case_tex_can_be_the_main_file(self):
+        """F126: a file named MAIN.TEX is found as the main file."""
+        self.assertEqual(ax.main_tex({"MAIN.TEX": r"\documentclass{article}\begin{document}x\end{document}"}),
+                         "MAIN.TEX")
+
 
 if __name__ == "__main__":
     unittest.main()
