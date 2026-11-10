@@ -15,7 +15,7 @@ Workflow
    speed on this device and picks the largest model the data AND the time allow):
        python tiny_gpt.py --dataset datasets\bio_all --plan --time-budget-hours 48
        python tiny_gpt.py --dataset datasets\bio_all --name bio_48h --time-budget-hours 48
-       python tiny_gpt.py --dataset datasets\bio_all --name bio_small --d-model 256 --layers 6 --steps 5000
+       python tiny_gpt.py --dataset datasets\bio_all --name bio_small --d-model 256 --layers 6 --steps 5000 --tokens-per-step 65536
 3. Resume after Ctrl+C (same name; the dataset path is stored in the checkpoint):
        python tiny_gpt.py --name tinyGPT_muon --resume
        python tiny_gpt.py --name tinyGPT_muon --resume --steps 70000     # extend the run
@@ -3094,6 +3094,13 @@ def plan_run(args, manifest, device, amp_dtype, token_cap=None, fixed_cfg=None, 
     lines += block
     if args.steps and train_tokens > max_epochs * unique:
         lines.append(f"note: --steps {args.steps:,} trains {epochs:.2f} epochs, more than --max-epochs {max_epochs:g}.")
+    usual_tps = tokens_per_step_for(n_active, planned)
+    if args.steps and not args.tokens_per_step and tokens_per_step > 4 * usual_tps:
+        # --steps alone shares the whole budget D among the steps: nothing bounds the step (target_tps)
+        lines.append(f"WARNING: --steps {args.steps:,} alone divides the token budget D by the steps: "
+                     f"{tokens_per_step:,} tokens per step, {tokens_per_step / usual_tps:,.0f}x the {usual_tps:,} the "
+                     "planner would choose for this model and budget. For a short run add --tokens-per-step (the "
+                     "budget is then --steps x --tokens-per-step), or give --train-tokens instead of --steps.")
     floor = float(args.tokens_per_total_param)
     if cfg.n_experts and floor > 0 and train_tokens / n_total < floor:
         lines.append(f"WARNING: {train_tokens / n_total:,.1f} training tokens per TOTAL parameter is below the "

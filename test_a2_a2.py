@@ -214,3 +214,30 @@ class Audit2TinyGptB(unittest.TestCase):
         self.assertIn("cannot reach the tokens-per-parameter target in time", text_h)
         _, _, lines_e = self._time_plan(["--time-budget-hours", "1", "--d-model", "512"], one)
         self.assertIn("command-line values, tokens capped by the time budget", "\n".join(lines_e))
+
+    def test_steps_alone_warns_about_huge_steps(self):
+        """F338: --steps alone divides the whole token budget by the steps; when that gives more than 4x the
+        planner's tokens per step the plan says so and names --tokens-per-step."""
+        manifest = toy_manifest(tokens=50_000_000, vocab=4096)
+        cfg, st, lines = self._plan(["--steps", "5"], manifest)
+        rule = tiny_gpt.tokens_per_step_for(tiny_gpt.count_params(cfg)[2], 4 * 100_000_000)
+        self.assertGreater(st["tokens_per_step"], 4 * rule)
+        warning = [ln for ln in lines if ln.startswith("WARNING: --steps 5")]
+        self.assertEqual(len(warning), 1, lines)
+        self.assertIn("--tokens-per-step", warning[0])
+        self.assertIn(f"{st['tokens_per_step']:,} tokens per step", warning[0])
+        self.assertIn(f"{rule:,}", warning[0])
+        # the budget named with the steps, a step count near the planner's own, or a batch fixed by hand: no warning
+        steps = 4 * 100_000_000 // (2 * rule)
+        for argv in (["--steps", "5", "--tokens-per-step", str(rule)], ["--steps", str(steps)],
+                     ["--steps", "5", "--batch-size", "8", "--grad-accum", "1"], []):
+            _, st_ok, lines_ok = self._plan(argv, manifest)
+            self.assertLessEqual(st_ok["tokens_per_step"], 4 * rule, argv)
+            self.assertFalse(any("WARNING" in ln for ln in lines_ok), (argv, lines_ok))
+        # the example of the module docstring (and so of --help) plans a sane step
+        example = [ln for ln in tiny_gpt.__doc__.splitlines() if "--name bio_small" in ln]
+        self.assertEqual(len(example), 1)
+        argv = example[0].split("--name bio_small", 1)[1].split()
+        self.assertIn("--steps", argv)
+        _, st_ex, lines_ex = self._plan(argv, self.BIG)
+        self.assertFalse(any("WARNING" in ln for ln in lines_ex), lines_ex)
