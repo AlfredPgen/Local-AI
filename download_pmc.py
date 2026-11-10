@@ -221,7 +221,12 @@ def harvest(query, folder, refresh=False):
         count, _ = _harvest_pages(query, records + ".new", state_path + ".new")
         if _finish_refresh(records, state_path):
             print(f"Metadata: {count:,} papers in {records}")
-            return records
+        else:  # the search answers wrongly: the earlier harvest as it is, and no further request in this run
+            earlier = _read_state(state_path)
+            print(f"Metadata: {earlier.get('records', 0):,} papers from {records}"
+                  + ("" if earlier.get("complete") else " (that harvest is not finished; a run without "
+                                                        "--refresh-metadata continues it)"))
+        return records
     elif unfinished:
         print(f"An unfinished metadata refresh exists ({unfinished.get('records', 0):,} papers so far); the earlier "
               "harvest is used. Rerun with --refresh-metadata to continue it.", flush=True)

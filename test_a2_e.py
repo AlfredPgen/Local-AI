@@ -564,6 +564,45 @@ class Audit2Downloaders(unittest.TestCase):
         self.assertEqual(sorted(os.listdir(folder)), ["records.jsonl.gz", "state.json"])
         self.assertEqual(self.pmc_ids(records), [1, 2, 3])
 
+    def test_f139_refresh_that_finds_no_paper_sends_no_further_request(self):
+        """F139 (part A): after a refresh that found no paper the run uses the earlier harvest as it is. It
+        does not go on with an unfinished earlier harvest (the search is answering wrongly: an empty page
+        would end that harvest early), and it does not replace an earlier harvest of another query."""
+        folder = os.path.join(self.tmp, "metadata")
+        records, state_path = os.path.join(folder, "records.jsonl.gz"), os.path.join(folder, "state.json")
+
+        def state():
+            with open(state_path, encoding="utf-8") as f:
+                return json.load(f)
+
+        # an unfinished earlier harvest: one page saved, the second request failed
+        pages = {"*": (range(1, 4), "c1"), "c1": (range(4, 7), "c1")}
+        with unittest.mock.patch.object(pmc, "http_get", side_effect=self.epmc_server(pages, [], fail_at=2)), \
+                redirect_stdout(io.StringIO()), self.assertRaises(OSError):
+            pmc.harvest(self.QUERY, folder)
+        before = state()
+        self.assertEqual((before["complete"], before["cursor"], before["records"]), (False, "c1", 3))
+        empty = {"*": ([], "*"), "c1": ([], "c1")}
+        for query in (self.QUERY, "OPEN_ACCESS:y AND OTHER:y"):
+            asked = []
+            with unittest.mock.patch.object(pmc, "http_get", side_effect=self.epmc_server(empty, asked)), \
+                    redirect_stdout(io.StringIO()) as buf:
+                self.assertEqual(pmc.harvest(query, folder, refresh=True), records)
+            self.assertEqual(asked, ["*"], query)  # the refresh's one request, nothing after it
+            self.assertIn("found no paper", buf.getvalue())
+            self.assertIn("Metadata: 3 papers from", buf.getvalue())
+            self.assertIn("not finished", buf.getvalue())
+            self.assertEqual(state(), before, query)
+            self.assertEqual(sorted(os.listdir(folder)), ["records.jsonl.gz", "state.json"])
+            self.assertEqual(self.pmc_ids(records), [1, 2, 3])
+        # a later run without the option continues the earlier harvest as usual
+        asked = []
+        with unittest.mock.patch.object(pmc, "http_get", side_effect=self.epmc_server(pages, asked)), \
+                redirect_stdout(io.StringIO()):
+            pmc.harvest(self.QUERY, folder)
+        self.assertEqual(asked, ["c1"])
+        self.assertEqual(self.pmc_ids(records), [1, 2, 3, 4, 5, 6])
+
     def test_f141_pmc_http_get_honours_retry_after(self):
         """F141: on 429/503 the PMC http_get waits as long as the server's Retry-After asks (at least
         its own backoff); without the header, and for other errors, the backoff is unchanged."""
