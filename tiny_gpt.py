@@ -1604,6 +1604,18 @@ def atomic_save(obj, path):
                 pass
 
 
+def last_dashboard_push(png_name):
+    """Unix time of the last commit of dashboards/<png_name> in this script's repository; 0.0 when there is
+    none (or no git, or no repository). A session starts its --dashboard-push-hours clock from it, so that a
+    --resume does not push again at its first new best."""
+    try:
+        out = subprocess.run(["git", "-C", HERE, "log", "-1", "--format=%ct", "--", f"dashboards/{png_name}"],
+                             capture_output=True, text=True, timeout=10)
+        return float(out.stdout.strip()) if out.returncode == 0 and out.stdout.strip() else 0.0
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return 0.0
+
+
 def launch_dashboard(path, args, state):
     """Draw view_pt.py's dashboard for a new best checkpoint in the background
     (CPU, idle priority; training does not wait). Skipped while the previous
@@ -4591,9 +4603,10 @@ def _train(args):
             return f"elapsed {fmt_hms(session)}"
         return f"elapsed {fmt_hms(session)} (whole run {fmt_hms(run_seconds_before + session)})"
 
-    dashboard = {"proc": None, "pushed": 0.0}
     dashboard_on = args.dashboard == "on" or (
         args.dashboard == "auto" and os.path.normcase(os.path.abspath(args.out_dir)) == os.path.normcase(HERE))
+    best_png = os.path.splitext(os.path.basename(best_path))[0] + "_dashboard.png"  # view_pt.py's name for it
+    dashboard = {"proc": None, "pushed": last_dashboard_push(best_png) if dashboard_on else 0.0}
 
     # ---------------- training loop ----------------
     model.train()

@@ -9,8 +9,11 @@ import io
 import math
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
+import time
+import types
 import unittest
 import unittest.mock
 
@@ -185,6 +188,45 @@ class Audit2TinyGptA(unittest.TestCase):
         self.assertTrue(all(v.device.type == "cpu" and v.dtype == torch.bfloat16 for v in half.values()))
         self.assertTrue(torch.equal(half["token_embedding.weight"],
                                     model.token_embedding.weight.detach().to(torch.bfloat16)))
+
+    def _launch(self, state, hours=3.0):
+        """The command launch_dashboard starts for X_best.pt (Popen replaced, nothing runs)."""
+        args = types.SimpleNamespace(dashboard_push_hours=hours, out_dir=os.path.join(self.tmp, "dash_out"))
+        with unittest.mock.patch.object(tiny_gpt.subprocess, "Popen") as popen:
+            tiny_gpt.launch_dashboard(os.path.join(self.tmp, "X_best.pt"), args, state)
+        return popen.call_args
+
+    @unittest.skipUnless(shutil.which("git"), "needs git")
+    def test_dashboard_push_clock_starts_at_the_last_pushed_commit(self):
+        """F318: a new session seeds its --dashboard-push-hours clock from the commit time of the dashboard in
+        the repository, so a --resume does not push again at its first new best."""
+        repo = os.path.join(self.tmp, "dash_repo")
+        os.makedirs(os.path.join(repo, "dashboards"))
+        with open(os.path.join(repo, "dashboards", "X_best_dashboard.png"), "wb") as f:
+            f.write(b"png")
+
+        def git(*cmd):
+            done = subprocess.run(["git", "-C", repo, "-c", "user.name=test", "-c", "user.email=test@example.invalid",
+                                   "-c", "commit.gpgsign=false", "-c", "core.autocrlf=false", *cmd],
+                                  capture_output=True, text=True)
+            self.assertEqual(done.returncode, 0, done.stderr)
+
+        git("init", "-q")
+        git("add", "dashboards/X_best_dashboard.png")
+        git("commit", "-q", "-m", "dashboard")
+        with unittest.mock.patch.object(tiny_gpt, "HERE", repo):
+            pushed = tiny_gpt.last_dashboard_push("X_best_dashboard.png")
+            self.assertLess(abs(time.time() - pushed), 600, "the commit just made")
+            self.assertEqual(tiny_gpt.last_dashboard_push("Y_best_dashboard.png"), 0.0, "never committed")
+            self.assertIn("--no-push", self._launch({"proc": None, "pushed": pushed})[0][0])
+            self.assertNotIn("--no-push", self._launch({"proc": None, "pushed": pushed - 4 * 3600})[0][0])
+            self.assertNotIn("--no-push", self._launch({"proc": None, "pushed": pushed}, hours=0)[0][0])
+            with unittest.mock.patch.object(tiny_gpt.subprocess, "run", side_effect=FileNotFoundError("git")):
+                self.assertEqual(tiny_gpt.last_dashboard_push("X_best_dashboard.png"), 0.0, "no git")
+        with unittest.mock.patch.object(tiny_gpt, "HERE", os.path.join(self.tmp, "dash_out")):
+            self.assertEqual(tiny_gpt.last_dashboard_push("X_best_dashboard.png"), 0.0, "not in the repository")
+        source = inspect.getsource(tiny_gpt._train)  # the session's state is seeded, and only with the dashboard on
+        self.assertRegex(source, r'"pushed": last_dashboard_push\(.*\) if dashboard_on else 0\.0')
 
 
 if __name__ == "__main__":
