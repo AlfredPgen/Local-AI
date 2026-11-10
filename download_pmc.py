@@ -52,6 +52,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
+import zlib
 
 SEARCH_URL = "https://www.ebi.ac.uk/europepmc/webservices/rest/search"
 EFETCH_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi"
@@ -172,6 +173,12 @@ def harvest(query, folder, refresh=False):
         if os.path.isfile(records):
             os.remove(records)
         state = {"query": query, "cursor": "*", "records": 0, "complete": False}
+    # "bytes": the size of the records file when the progress was last saved. Anything after it is a page whose
+    # progress was never saved (possibly a gzip member cut off by a crash): cut it off, it is fetched again.
+    # A state.json from before this field has none and is left as it is.
+    if state.get("bytes") is not None and os.path.isfile(records) and os.path.getsize(records) > state["bytes"]:
+        with open(records, "r+b") as handle:
+            handle.truncate(state["bytes"])
     if state["complete"]:
         print(f"Metadata: {state['records']:,} papers from {records}")
         return records
@@ -196,6 +203,7 @@ def harvest(query, folder, refresh=False):
             with gzip.open(records, "at", encoding="utf-8") as handle:  # one gzip member per page
                 handle.write("\n".join(lines) + "\n")
         nxt = data.get("nextCursorMark")
+        state["bytes"] = os.path.getsize(records) if os.path.isfile(records) else 0
         state["records"] += len(lines)
         state["complete"] = not results or not nxt or nxt == state["cursor"]
         state["cursor"] = nxt or state["cursor"]
@@ -215,16 +223,24 @@ def harvest(query, folder, refresh=False):
 
 
 def read_records(path):
+    """The harvested records, each paper once (its first copy). A damaged file
+    (a page cut off by a crash before the harvest guarded against that) is read
+    up to the damage, with a warning, instead of stopping the run."""
     seen = set()
-    with gzip.open(path, "rt", encoding="utf-8") as handle:
-        for line in handle:
-            try:
-                rec = json.loads(line)
-            except ValueError:  # a page cut short by a crash; the harvest rewrote it after
-                continue
-            if rec["pmcid"] not in seen:
-                seen.add(rec["pmcid"])
-                yield rec
+    try:
+        with gzip.open(path, "rt", encoding="utf-8") as handle:
+            for line in handle:
+                try:
+                    rec = json.loads(line)
+                except ValueError:  # a line cut short by a crash
+                    continue
+                pmcid = rec.get("pmcid") if isinstance(rec, dict) else None
+                if pmcid and pmcid not in seen:
+                    seen.add(pmcid)
+                    yield rec
+    except (OSError, EOFError, zlib.error) as exc:  # gzip.BadGzipFile is an OSError
+        print(f"  warning: {path} is damaged ({type(exc).__name__}: {exc}); using the {len(seen):,} papers before "
+              "the damage, everything after it is not read. --refresh-metadata harvests again.", flush=True)
 
 
 def keyword_list(records_path, keyword_path, min_hits, min_distinct, limit, rank, path, skip=()):
