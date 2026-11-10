@@ -98,6 +98,25 @@ class Audit2Downloaders(unittest.TestCase):
             ax.main(["--out", out, "--meta", meta, "--sets", "q-bio", "--wait", "0"])
         self.assertEqual(blobs, [ax.FETCH_FAILED])
 
+    def test_f118_latex_failure_reason_is_recorded(self):
+        """F118: the report's method says why LaTeX conversion failed (one line, bounded), not only the
+        exception type; read_report does not take it for a PDF time-out."""
+        boom = unittest.mock.Mock(side_effect=RuntimeError("Error at line 3:\tunknown\ncommand " + "x" * 200))
+        result = self.convert(TEX.encode(), run_pandoc=boom)
+        self.assertEqual(result["status"], "ok")
+        self.assertTrue(result["method"].startswith("pdf (latex failed: RuntimeError: Error at line 3: unknown command"),
+                        result["method"])
+        self.assertNotIn("\t", result["method"])
+        self.assertNotIn("\n", result["method"])
+        self.assertLessEqual(len(result["method"]), len("pdf (latex failed: RuntimeError: )") + 80)
+        report = os.path.join(self.tmp, "report.tsv")
+        with open(report, "w", encoding="utf-8", newline="\n") as f:
+            f.write("\t".join(ax.REPORT_COLUMNS) + "\n")
+            f.write("\t".join(ax._flat(result[c]) for c in ax.REPORT_COLUMNS) + "\n")
+        limits = {}
+        self.assertEqual(ax.read_report(report, limits), {ROW["id"]: "ok"})
+        self.assertEqual(limits, {})
+
 
 if __name__ == "__main__":
     unittest.main()

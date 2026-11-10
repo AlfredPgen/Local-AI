@@ -771,7 +771,7 @@ def convert_paper(row, blob, out_dir, min_body, pandoc, pdf_seconds=PDF_SECONDS,
             md, method = latex_markdown(blob, row["title"], row.get("abstract", ""), pandoc)
         except (subprocess.TimeoutExpired, RuntimeError, ValueError, tarfile.TarError, EOFError, OSError,
                 zlib.error) as exc:
-            md, method = None, f"latex failed: {type(exc).__name__}"
+            md, method = None, f"latex failed: {type(exc).__name__}: {_flat(str(exc))[:80]}"
         if md is not None and len(md) - len(row["title"]) - len(row.get("abstract", "")) < min_body:
             md, method = None, "latex too short"
     if md is None:  # PDF-only submission, unreadable LaTeX or no source: the PDF
