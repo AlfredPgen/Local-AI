@@ -1051,6 +1051,55 @@ class Audit2DataPrep(unittest.TestCase):
             self.assertEqual(new[1]["none"], {"val_chars_target": 0, "val_chars": 0, "train_chars": 0})
         self.assertTrue(reasons["cross_source_cluster"] and reasons["group_too_large_for_val"], reasons)
 
+    # ---------------- F059: pass 3 encodes the next batch while the last one is written ----------------
+    def test_pass3_in_small_batches_writes_the_token_files_of_a_plain_encode(self):
+        """Guard. With the batch limit at 3,000 characters the toy corpus gives batches of short documents
+        before and after documents above the limit (the whole-book path): every token file holds BOS + the
+        tokens of the document's parts + EOS, document after document in spool order, and the dataset is the
+        one built with the limit as it is."""
+        c = self.corpus()
+        argv = ["--md-dir", f"notes={c.notes}", "--md-dir", c.md, "--wiki-dir", c.wiki, "--vocab-size", "600",
+                "--val-fraction", "0.2", "--max-doc-chars", "4000", "--threads", "2", "--workers", "1"]
+        out, usual = os.path.join(self.tmp, "f059"), os.path.join(self.tmp, "f059_usual")
+        with unittest.mock.patch.object(data_prep, "PASS3_BATCH_CHARS", 3_000), redirect_stdout(io.StringIO()):
+            data_prep.prepare(["--out", out, "--keep-work"] + argv)
+        with redirect_stdout(io.StringIO()):
+            data_prep.prepare(["--out", usual] + argv)
+        manifest = data_prep.read_manifest(out)
+        self.assertEqual(manifest["fingerprint"], data_prep.read_manifest(usual)["fingerprint"])
+        state = data_prep._load_state(os.path.join(out, "_work", data_prep.STATE_NAME))
+        tok = data_prep.Tokenizer.from_file(os.path.join(out, "tokenizer.model"))
+        dtype = np.uint16 if tok.vocab_size <= 65536 else np.uint32
+        expected = collections.defaultdict(list)
+        books, batches, batch_chars, batch_before_book = 0, 0, 0, False
+        with data_prep._open_spool(state["spool2"], "r") as spool:
+            for i, line in enumerate(spool):
+                if state["dropped"][i]:
+                    continue
+                rec = json.loads(line)
+                if len(rec["x"]) > 3_000:
+                    batch_before_book = batch_before_book or batches > 0
+                    books, batches, batch_chars = books + 1, batches + bool(batch_chars), 0
+                else:
+                    batch_chars += len(rec["x"])
+                    if batch_chars > 3_000:
+                        batches, batch_chars = batches + 1, 0
+                ids = [tok.bos_id]
+                for part in tok.encode_batch(data_prep.split_long_text(rec["x"], 4_000)):
+                    ids.extend(part)
+                ids.append(tok.eos_id)
+                key = (data_prep.SPLIT_NAMES[state["split_of"][i]], rec["s"])
+                expected[key].append(np.asarray(ids, dtype=dtype).tobytes())
+        self.assertGreaterEqual(books, 1, "one document above the limit is needed")
+        self.assertGreaterEqual(batches, 5, "several batches are needed")
+        self.assertTrue(batch_before_book, "a batch must be under way when the first long document comes")
+        self.assertGreater(batch_chars, 0, "and one after the last long document")
+        names = sorted(f"{split}.{source}.bin" for split, source in expected)
+        self.assertEqual(names, sorted(n for n in os.listdir(out) if n.endswith(".bin")))
+        for (split, source), chunks in expected.items():
+            with open(os.path.join(out, f"{split}.{source}.bin"), "rb") as handle:
+                self.assertEqual(handle.read(), b"".join(chunks), f"{split}.{source}.bin")
+
 
 if __name__ == "__main__":
     unittest.main()

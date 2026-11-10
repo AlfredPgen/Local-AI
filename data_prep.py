@@ -2208,6 +2208,9 @@ def _validate(args, parser):
         parser.error(str(exc))
 
 
+PASS3_BATCH_CHARS = 8_000_000  # pass 3 encodes about this many characters in one SentencePiece call
+
+
 class _Unresumable(SystemExit):
     """A --resume that cannot continue (its spool is missing or cut short): no resume hint is printed for it."""
 
@@ -2787,14 +2790,29 @@ def _prepare(args, state=None):
         doc_tokens[i] = k
         chars_by[(split, source)] += docs[i][3]
 
-    def flush(batch):
-        encoded = tok.encode_batch([part for _, parts in batch for part in parts], threads=args.threads)
-        pos = 0
-        for i, parts in batch:
-            write_doc(i, encoded[pos:pos + len(parts)])
-            pos += len(parts)
+    # one batch is encoded in the background while the one before it is written and the next one is read: the
+    # order of the documents in the token files is the order of the spool
+    from concurrent.futures import ThreadPoolExecutor
+    encoder = ThreadPoolExecutor(max_workers=1)
+    pending = []  # at most one (batch, future of its tokens): encoded or being encoded, not written yet
 
-    def encoded_in_slices(parts, limit=8_000_000):
+    def drain():
+        """Write the batch that is waiting, if any."""
+        if pending:
+            batch, future = pending.pop()
+            encoded, pos = future.result(), 0
+            for i, parts in batch:
+                write_doc(i, encoded[pos:pos + len(parts)])
+                pos += len(parts)
+
+    def flush(batch):
+        """Start encoding this batch, then write the one before it."""
+        future = encoder.submit(tok.encode_batch, [part for _, parts in batch for part in parts],
+                                threads=args.threads)
+        drain()
+        pending.append((batch, future))
+
+    def encoded_in_slices(parts, limit=PASS3_BATCH_CHARS):
         """The parts' tokens, encoded a few million characters at a time."""
         k = 0
         while k < len(parts):
@@ -2816,20 +2834,23 @@ def _prepare(args, state=None):
                 if len(parts) > 1:
                     sources[rec["s"]]["stats"]["cleaning"]["oversized_docs_split"] += 1
                     sources[rec["s"]]["stats"]["cleaning"]["oversized_parts"] += len(parts)
-                if len(rec["x"]) > 8_000_000:  # a whole book: encoded and written part by part, in file order
+                if len(rec["x"]) > PASS3_BATCH_CHARS:  # a whole book: encoded and written part by part, in file order
                     if batch:
                         flush(batch)
                         batch, batch_chars = [], 0
+                    drain()  # the book comes after every earlier document, and only one encode runs at a time
                     write_doc(i, encoded_in_slices(parts))
                     continue
                 batch.append((i, parts))
                 batch_chars += len(rec["x"])
-                if batch_chars > 8_000_000:
+                if batch_chars > PASS3_BATCH_CHARS:
                     flush(batch)
                     batch, batch_chars = [], 0
             if batch:
                 flush(batch)
+            drain()
     finally:
+        encoder.shutdown(wait=True, cancel_futures=True)
         for handle in writers.values():
             handle.close()
     print(f"Pass 3 done ({time.time() - t0:,.0f} s)", flush=True)
