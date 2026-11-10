@@ -12,8 +12,9 @@ coding and 3D-modelling benchmarks, downloaded once and scored on any checkpoint
                numeric  greedy answer, first number parsed, the benchmark's tolerance
                code     greedy completion (pass@1), tests run ONLY in a sandbox:
                         Docker (no network, 1 GB, 1 CPU) if its daemon runs, else WSL
-                        with bubblewrap (no network, no Windows drives), else refused
-                        unless --unsafe-local-execution
+                        with bubblewrap (no network, no Windows drives) or unshare
+                        (weaker: no PID namespace), else refused unless
+                        --unsafe-local-execution
                open / vision-graded sets are listed but not scored
              Results: results\benchmarks.csv (appended), per-item CSVs in
              benchmarks\runs\<checkpoint>_<time>\, one row in experiments.csv.
@@ -1172,8 +1173,15 @@ def cmd_run(args):
                 before = len(items)
                 items = [it for it in items if not set(it.get("requires", [])) & lacking]
                 note += f"; {before - len(items)} skipped: sandbox lacks {', '.join(sorted(lacking))}"
+                if sandbox.name == "docker":  # sandbox-setup fills the folder only the bubblewrap jail mounts
+                    hint = (f"pass --docker-image <image with {', '.join(sorted(lacking))}> or --sandbox wsl after "
+                            "sandbox-setup")
+                elif sandbox.name == "wsl" and sandbox.tool == "unshare":
+                    hint = "install bubblewrap; the unshare fallback cannot see the sandbox site"
+                else:
+                    hint = "see `python benchmark.py sandbox-setup`"
                 print(f"{name}: sandbox lacks {', '.join(sorted(lacking))} ({before - len(items)} items skipped; "
-                      "see `python benchmark.py sandbox-setup`)")
+                      f"{hint})")
             if not items:
                 continue
         print(f"{name}: {len(items)} items ({spec['kind']}) ...", flush=True)

@@ -136,6 +136,31 @@ class Audit2Benchmark(unittest.TestCase):
         _, _, calls, _ = self.fake_download("f012_plain", False)
         self.assertFalse(calls[0].get("force_download"))
 
+    def test_missing_module_hint_fits_the_sandbox(self):
+        """F010: `sandbox-setup` fills the folder that only the bubblewrap jail mounts, so the line about skipped
+        items points there for bubblewrap alone; Docker and the unshare fallback get the step that helps them."""
+        b = self.b
+        items = [{"id": "h0", "question": "def f():\n", "options": None, "answer": "    return 1\n",
+                  "category": "python", "kind": "code", "style": "humaneval", "test": "def check(c): pass",
+                  "entry_point": "f", "requires": ["numpy"]}]
+        lacks = b.SandboxResult(True, "passed", 'MODS={"numpy": false}')
+        boom = unittest.mock.Mock(side_effect=AssertionError("nothing may be executed"))
+        old = "see `python benchmark.py sandbox-setup`"
+        cases = (("docker", b.DockerSandbox("img"), "pass --docker-image <image with numpy> or --sandbox wsl"),
+                 ("unshare", b.WSLSandbox("Ubuntu", "unshare"), "install bubblewrap; the unshare fallback cannot"),
+                 ("bwrap", b.WSLSandbox("Ubuntu", "bwrap"), old))
+        for label, sandbox, want in cases:
+            with unittest.mock.patch.object(b, "_finish", return_value=lacks), \
+                    unittest.mock.patch.object(b, "_run", boom), \
+                    unittest.mock.patch.object(b, "_MODULE_CACHE", {}):
+                code, out, rows, _, _ = self.suite_run(f"f010_{label}", {"humanevalplus": items}, sandbox=sandbox)
+            line = next(text for text in out.splitlines() if "sandbox lacks numpy" in text)
+            self.assertIn("(1 items skipped; " + want, line)
+            self.assertEqual(old in line, label == "bwrap", line)
+            self.assertEqual((code, rows), (0, []))
+        boom.assert_not_called()
+        self.assertIn("or unshare (weaker: no PID namespace)", " ".join(b.__doc__.split()))
+
     def test_generated_code_gets_no_stdin(self):
         """F020: the jailed program reads /dev/null, not the rest of the wrapper script piped to `bash -s` (which
         holds the clean-up lines), and the unsafe local runner gives its child no stdin either."""
