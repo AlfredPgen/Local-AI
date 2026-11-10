@@ -313,6 +313,34 @@ class Audit2FinetuneTools(unittest.TestCase):
             self.assertEqual(compare_models.bootstrap(nll_a, nll_b, bytes_a, bytes_b, reps, seed),
                              whole_matrix(nll_a, nll_b, bytes_a, bytes_b, reps, seed), (n, reps))
 
+    def test_compare_models_takes_the_dataset_of_either_model(self):
+        """F284 (compare_models half): without --dataset the validation documents come from A's dataset, and
+        from B's when A's checkpoint records none (an export folder made before exports kept it)."""
+        import compare_models
+
+        class Stop(Exception):
+            pass
+        a, b = (os.path.join(self.tmp, name) for name in ("cmp_A.pt", "cmp_B.pt"))
+        for path in (a, b):
+            open(path, "wb").close()
+        entries = {a: None, b: {"path": "datasets/bio", "fingerprint": "f1"}}
+        asked = []
+
+        def resolve(obj, override=None):
+            asked.append(obj)
+            raise Stop
+        for case in ("B's", "A's"):
+            with unittest.mock.patch.object(tiny_gpt, "load_for_inference",
+                                            lambda path, device, trust=False: (None, None, None,
+                                                                               {"dataset": entries[path]})), \
+                    unittest.mock.patch.object(tiny_gpt, "resolve_dataset", resolve), \
+                    unittest.mock.patch.object(sys, "argv", ["compare_models.py", a, b, "--device", "cpu"]), \
+                    self.assertRaises(Stop):
+                compare_models.main()
+            self.assertEqual(asked, [{"dataset": entries[b] if case == "B's" else entries[a]}], case)
+            entries[a] = {"path": "datasets/other", "fingerprint": "f2"}
+            asked.clear()
+
     # ---- posttrain.py -----------------------------------------------------------------------------------
     def posttrain_data(self, tag):
         folder = os.path.join(self.tmp, tag)

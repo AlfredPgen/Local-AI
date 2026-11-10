@@ -300,8 +300,9 @@ def main():
     trained_on["B"] = obj_b.get("dataset") if isinstance(obj_b.get("dataset"), dict) else None
     del obj_b
     gc.collect()
-    # A's dataset on this machine (by its stored path, else datasets/<same name> with the same fingerprint)
-    dataset = args.dataset or tiny_gpt.resolve_dataset({"dataset": trained_on["A"]})
+    # A's dataset on this machine (by its stored path, else datasets/<same name> with the same fingerprint); B's
+    # when A's checkpoint records none
+    dataset = args.dataset or tiny_gpt.resolve_dataset({"dataset": trained_on["A"] or trained_on["B"]})
     if not os.path.isdir(dataset):
         p.error(f"--dataset not found: {dataset}")
     layout = {}
