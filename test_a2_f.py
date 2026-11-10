@@ -361,6 +361,54 @@ class Audit2DocsYoutubeConvert(unittest.TestCase):
         self.assertEqual(kinds, ["books", "articles", "articles"])
         self.assertEqual(opened, [two, broken])  # once each, whatever asked
 
+    def test_output_names_are_made_lazily_in_the_same_order(self):
+        """F028: the candidate output names of an input come one at a time (the first is nearly always enough), in
+        the order and with the last-resort name they always had."""
+        import argparse
+        import inspect
+        import re
+        import convert_to_markdown as conv
+        root = os.path.join(self.tmp, "f028")
+        out = os.path.join(root, "out")
+        files = []
+        for k in range(30):  # the same name in 30 folders that are all called 'sub': numbered names are needed
+            folder = os.path.join(root, f"d{k:02d}", "sub")
+            os.makedirs(folder)
+            files.append(os.path.join(folder, "x.txt" if k else "x.md"))
+            with open(files[-1], "w", encoding="utf-8") as handle:
+                handle.write("Genetic drift.\n")
+        args = argparse.Namespace(out=out, by_type=False, name_prefix="", book_pages=150, no_gwas=False,
+                                  output_name=None)
+
+        def reference(path):  # the list this function built before the change
+            target = conv.plan_target(path, args, len(files))
+            stem = target[:-3]
+            ext = os.path.basename(path).lower().replace(".gz", "").rsplit(".", 1)[-1]
+            parent = re.sub(r"[^\w.-]+", "_", os.path.basename(os.path.dirname(os.path.abspath(path)))) or "folder"
+            head = [target] + ([] if path.endswith(".md") else [f"{stem}.{ext}.md"]) + [f"{stem}__{parent}.md"]
+            return head + [f"{stem}__{k}.md" for k in range(2, 1000)]
+
+        for path in files[:2]:
+            self.assertEqual(list(conv._name_candidates(path, args, len(files))), reference(path))
+        planned = conv.plan_targets(files, args)
+        self.assertEqual([p for p, _ in planned], files)
+        self.assertEqual([os.path.basename(t) for _, t in planned],
+                         ["x.md", "x.txt.md", "x__sub.md"] + [f"x__{k}.md" for k in range(2, 29)])
+        # a name recorded by an earlier run is kept when it is among the first 22 candidates, not beyond them
+        names = reference(files[5])
+        for index, kept in ((21, True), (22, False)):
+            owners = {conv._norm(names[index]): (names[index], files[5])}
+            target = dict(conv.plan_targets(files, args, owners))[files[5]]
+            self.assertEqual(target == names[index], kept, (index, target))
+        # every name taken: the last one, as before
+        taken = {conv._norm(name): (name, os.path.join(root, "elsewhere", f"{k}.txt"))
+                 for k, name in enumerate(reference(files[1]))}
+        self.assertEqual(os.path.basename(dict(conv.plan_targets(files[1:2], args, taken))[files[1]]), "x__999.md")
+        legacy = conv.legacy_outputs(files + [os.path.join(out, "x__sub.md"), os.path.join(out, "x__20.md"),
+                                              os.path.join(out, "x__21.md")], args)
+        self.assertEqual(sorted(os.path.basename(t) for t, _ in legacy.values()), ["x__20.md", "x__sub.md"])
+        self.assertTrue(inspect.isgenerator(conv._name_candidates(files[0], args, len(files))))
+
 
 if __name__ == "__main__":
     unittest.main()

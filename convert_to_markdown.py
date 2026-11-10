@@ -50,6 +50,7 @@ import functools
 import gzip
 import html.parser
 import io
+import itertools
 import json
 import math
 import os
@@ -1314,13 +1315,18 @@ def save_manifest(path, owners):
 def _name_candidates(path, args, n_files):
     """Output names for one input, best first: its plain name, then (for a clash) its
     source extension (notes.docx.md, not for Markdown), its folder name (media__p2.md)
-    and a number."""
+    and a number (__2 to __999). A generator: the first name is nearly always the one
+    used, and 22 are enough to recognise a name an earlier run gave."""
     target = plan_target(path, args, n_files)
     stem = target[:-3] if target.lower().endswith(".md") else target
     ext = os.path.basename(path).lower().replace(".gz", "").rsplit(".", 1)[-1]
     parent = re.sub(r"[^\w.-]+", "_", os.path.basename(os.path.dirname(os.path.abspath(path)))) or "folder"
-    candidates = [target] + ([] if _is_md(path) else [f"{stem}.{ext}.md"]) + [f"{stem}__{parent}.md"]
-    return candidates + [f"{stem}__{k}.md" for k in range(2, 1000)]
+    yield target
+    if not _is_md(path):
+        yield f"{stem}.{ext}.md"
+    yield f"{stem}__{parent}.md"
+    for k in range(2, 1000):
+        yield f"{stem}__{k}.md"
 
 
 def _is_md(path):
@@ -1337,7 +1343,7 @@ def legacy_outputs(files, args):
     for path in files:
         if _is_md(path):
             continue
-        for candidate in _name_candidates(path, args, len(files))[1:22]:
+        for candidate in itertools.islice(_name_candidates(path, args, len(files)), 1, 22):
             key = _norm(candidate)
             if key in names and key not in owners:
                 owners[key] = (names[key], os.path.abspath(path))
@@ -1370,17 +1376,19 @@ def plan_targets(files, args, owners=None):
     claimed = set(owners)
     chosen = {}
     for path in sorted(files, key=lambda f: not _is_md(f)):  # stable: keeps sorted order within each group
-        candidates = _name_candidates(path, args, len(files))
+        later = _name_candidates(path, args, len(files))
+        candidates = list(itertools.islice(later, 22))  # `later` goes on from the 23rd name
         if _norm(candidates[0]) == _norm(path):
             chosen[path] = candidates[0]  # reported as "would overwrite the input"
             continue
         mine = recorded.get(_norm(path))
-        if mine and _norm(mine) not in inputs and (_norm(mine) in {_norm(c) for c in candidates[:22]}
-                                                   or _kept_type_folder(path, mine, candidates[:22], args)):
+        if mine and _norm(mine) not in inputs and (_norm(mine) in {_norm(c) for c in candidates}
+                                                   or _kept_type_folder(path, mine, candidates, args)):
             target = mine  # the name an earlier run gave it (same folder and options)
         else:
-            target = next((c for c in candidates if _norm(c) not in claimed and _norm(c) not in inputs),
-                          candidates[-1])
+            for target in itertools.chain(candidates, later):  # the first free name, else the last one (__999)
+                if _norm(target) not in claimed and _norm(target) not in inputs:
+                    break
         claimed.add(_norm(target))
         chosen[path] = target
     return [(path, chosen[path]) for path in files]
