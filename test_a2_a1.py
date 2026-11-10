@@ -3,6 +3,7 @@ meter, evaluation, probes, generation). Target class in test_tiny_gpt.py: TestFi
 
     python -m unittest test_a2_a1
 """
+import dataclasses
 import inspect
 import io
 import math
@@ -99,6 +100,44 @@ class Audit2TinyGptA(unittest.TestCase):
         with self.assertRaises(SystemExit) as ctx:
             tiny_gpt.read_probes(path)
         self.assertIn("probes4.tsv:4:", str(ctx.exception.code))
+
+    def test_document_mask_is_restored_from_the_checkpoint(self):
+        """F329: a model built from the checkpoint of a --doc-mask run masks across documents again, so
+        evaluate() gives the value training reported; without the setting (or without a BOS id) it does not."""
+        trained = small_model(seed=4)  # ctx 16, vocab 50
+        tok = base.CharTok()  # bos_id 0
+
+        def checkpoint(**extra):
+            return {"format": tiny_gpt.CHECKPOINT_FORMAT, "format_version": tiny_gpt.FORMAT_VERSION,
+                    "checkpoint_type": "inference", "model_config": dataclasses.asdict(trained.cfg),
+                    "model": {k: v.clone() for k, v in trained.state_dict().items()}, "step": 7, **extra}
+
+        rng = np.random.default_rng(2)
+        tokens = rng.integers(1, 50, 200, dtype=np.int64)
+        tokens[::7] = tok.bos_id  # several documents in every window
+        evalset = tiny_gpt.EvalSet({"a": tokens}, 16, 64)
+        cpu = torch.device("cpu")
+        plain = tiny_gpt.evaluate(trained, evalset, cpu, None, 2)["loss"]
+        trained.doc_sep_id = tok.bos_id  # as _train sets it for --doc-mask on
+        masked = tiny_gpt.evaluate(trained, evalset, cpu, None, 2)["loss"]
+        self.assertNotAlmostEqual(plain, masked, places=4)
+        with unittest.mock.patch.object(tiny_gpt, "tokenizer_from_checkpoint", return_value=tok):
+            for assign in (False, True):
+                model = tiny_gpt.model_from_checkpoint(checkpoint(train_config={"doc_mask": True}), assign=assign)[0]
+                self.assertEqual(model.doc_sep_id, tok.bos_id, f"assign={assign}")
+                self.assertEqual(tiny_gpt.evaluate(model, evalset, cpu, None, 2)["loss"], masked)
+                for extra in ({"train_config": {"doc_mask": False}}, {"train_config": {}}, {"train_config": None},
+                              {}):
+                    model = tiny_gpt.model_from_checkpoint(checkpoint(**extra), assign=assign)[0]
+                    self.assertIsNone(model.doc_sep_id, extra)
+                    self.assertEqual(tiny_gpt.evaluate(model, evalset, cpu, None, 2)["loss"], plain)
+        no_bos = base.CharTok()
+        no_bos.bos_id = -1
+        model = small_model(seed=4)
+        tiny_gpt.apply_doc_mask(model, {"train_config": {"doc_mask": True}}, no_bos)
+        self.assertIsNone(model.doc_sep_id)
+        tiny_gpt.apply_doc_mask(model, {"train_config": {"doc_mask": True}}, tok)
+        self.assertEqual(model.doc_sep_id, 0)
 
 
 if __name__ == "__main__":

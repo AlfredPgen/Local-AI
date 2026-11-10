@@ -1323,7 +1323,9 @@ def model_from_checkpoint(obj, device="cpu", assign=False):
     if assign:
         model = _model_assigned(obj, cfg, device)
         if model is not None:
-            return model, tokenizer_from_checkpoint(obj), cfg
+            tok = tokenizer_from_checkpoint(obj)
+            apply_doc_mask(model, obj, tok)
+            return model, tok, cfg
     model = TinyGPT(cfg)
     missing, unexpected = model.load_state_dict(obj["model"], strict=False)
     missing = [m for m in missing if not (m == "lm_head.weight" and cfg.tie_embeddings)]
@@ -1331,7 +1333,19 @@ def model_from_checkpoint(obj, device="cpu", assign=False):
         raise SystemExit(f"Checkpoint weights do not match the architecture "
                          f"(missing {missing[:4]}, unexpected {unexpected[:4]}).")
     model.to(device).eval()
-    return model, tokenizer_from_checkpoint(obj), cfg
+    tok = tokenizer_from_checkpoint(obj)
+    apply_doc_mask(model, obj, tok)
+    return model, tok, cfg
+
+
+def apply_doc_mask(model, obj, tok):
+    """Give a model built from checkpoint `obj` the document mask its run trained with
+    (train_config "doc_mask", --doc-mask on): attention again stays within each document
+    of a window, so scoring outside training measures what training measured. Off for
+    every other checkpoint and for a tokenizer without a BOS id. KV-cached decoding
+    takes no mask, so generation is unchanged."""
+    bos = getattr(tok, "bos_id", None) if (obj.get("train_config") or {}).get("doc_mask") else None
+    model.doc_sep_id = bos if bos is not None and bos >= 0 else None
 
 
 def load_for_inference(path, device="cpu", trust=False):
