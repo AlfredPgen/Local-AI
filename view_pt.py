@@ -491,11 +491,6 @@ def eval_windows(ck, args, max_windows=None):
     return None, "no evaluation text: the checkpoint's dataset is not available; pass --dataset or --eval-text"
 
 
-def _fingerprint(ds_path):
-    """The fingerprint in a dataset folder's manifest (None if it has no readable manifest)."""
-    return tiny_gpt.dataset_fingerprint(ds_path)
-
-
 @torch.no_grad()
 def forward_stats(model, windows, vocab, device, bins=10, token_budget=4096, rows=1024):
     """Output-preference and calibration statistics over the windows. The model runs
@@ -695,7 +690,7 @@ def style_axes(ax, grid=True):
     ax.set_axisbelow(True)
 
 
-def heatmap(ax, fig, matrix, rows, cols, cmap, label, vmin=None, vmax=None, annotate=True, fmt_spec=".3g"):
+def heatmap(ax, matrix, rows, cols, cmap, label, vmin=None, vmax=None, annotate=True, fmt_spec=".3g"):
     ax.grid(False)
     im = ax.imshow(matrix, aspect="auto", cmap=cmap, vmin=vmin, vmax=vmax, interpolation="nearest")
     ax.set_yticks(range(len(rows)))
@@ -790,23 +785,23 @@ def create_dashboard(ck, args):
         ("How opinionated the model is", lambda ax: panel_confidence(ax, history, ck)),
         ("Token embeddings (PCA)", lambda ax: panel_pca(ax, ck, pieces, classes, fstats, args.pca_labels)),
         ("Token similarity (clustered)",
-         lambda ax: panel_similarity(ax, fig, ck, pieces, classes, fstats, div, args.sim_tokens)),
+         lambda ax: panel_similarity(ax, ck, pieces, classes, fstats, div, args.sim_tokens)),
         ("Token embedding norms", lambda ax: panel_norms(ax, ck, classes)),
-        ("Output preference", lambda ax: panel_preference(ax, ck, pieces, classes, fstats, fnote)),
-        ("Weight scale per block", lambda ax: panel_components(ax, fig, ck, seq)),
+        ("Output preference", lambda ax: panel_preference(ax, pieces, classes, fstats, fnote)),
+        ("Weight scale per block", lambda ax: panel_components(ax, ck, seq)),
         ("RMSNorm gains", lambda ax: panel_norm_gains(ax, ck)),
-        ("Singular value spectra", lambda ax: panel_spectra(ax, ck, getattr(args, "full", False))),
-        ("Per-head projection scale", lambda ax: panel_heads(ax, fig, ck, seq)),
-        ("Calibration", lambda ax: panel_calibration(ax, ck, fstats, fnote)),
-        ("Cloze fact probes", lambda ax: panel_probes(ax, ck, model, device, args, fnote)),
-        ("Attention entropy", lambda ax: panel_attention(ax, fig, model, windows, device, seq, fnote)),
-        ("Adam update size", lambda ax: panel_adam(ax, fig, ck, seq)),
+        ("Singular value spectra", lambda ax: panel_spectra(ax, ck, args.full)),
+        ("Per-head projection scale", lambda ax: panel_heads(ax, ck, seq)),
+        ("Calibration of the top prediction", lambda ax: panel_calibration(ax, ck, fstats, fnote)),
+        ("Fact benchmark", lambda ax: panel_probes(ax, ck, model, device, args, fnote)),
+        ("Attention entropy", lambda ax: panel_attention(ax, model, windows, device, seq, fnote)),
+        ("Adam update size", lambda ax: panel_adam(ax, ck, seq)),
     ]
     if ck.moe:
         panels += [
             ("Expert balance", lambda ax: panel_moe_balance(ax, history, ck)),
-            ("Expert load per block", lambda ax: panel_moe_load(ax, fig, ck, history, seq)),
-            ("Router bias", lambda ax: panel_router_bias(ax, fig, ck, div)),
+            ("Expert load per block", lambda ax: panel_moe_load(ax, ck, history, seq)),
+            ("Router bias", lambda ax: panel_router_bias(ax, ck, div)),
         ]
     for ax in axs[len(panels):]:
         ax.set_axis_off()
@@ -1006,7 +1001,7 @@ def panel_confidence(ax, history, ck):
 
 
 # ---- row 2: tokens ------------------------------------------------------------
-def _token_order(ck, classes, fstats, want):
+def _token_order(classes, fstats, want):
     """Most frequent tokens of the wanted classes (eval-text frequency, else low
     merge ID, which in BPE means an early/frequent merge)."""
     ids = [i for i, c in enumerate(classes) if c in want]
@@ -1018,10 +1013,7 @@ def _token_order(ck, classes, fstats, want):
 def place_labels(ax, points, texts, fontsize=6.5, max_labels=None):
     """Annotate points without overlapping labels: try a few offsets around each
     point and skip the label if every position collides with one already placed."""
-    root = ax.figure
-    while getattr(root, "figure", root) is not root:
-        root = root.figure
-    renderer = root.canvas.get_renderer()
+    renderer = _root_figure(ax.figure).canvas.get_renderer()
     ax.autoscale_view()
     placed, shown = [], 0
     offsets = [(4, 3), (4, -9), (-4, 3), (-4, -9), (6, 11), (6, -16), (-6, 11), (-6, -16)]
@@ -1161,7 +1153,7 @@ def panel_pca(ax, ck, pieces, classes, fstats, n_labels=50):
                    color=color, alpha=0.65, linewidths=0, label=f"{cls} ({len(idx):,})")
         counts[cls] = len(idx)
     # candidates beyond n_labels, because labels that would overlap one already placed are skipped
-    top = _token_order(ck, classes, fstats, {"word start", "word piece", "number", "punctuation"})[:3 * n_labels + 40]
+    top = _token_order(classes, fstats, {"word start", "word piece", "number", "punctuation"})[:3 * n_labels + 40]
     shown = place_labels(ax, [coords[i] for i in top], [label_text(pieces[i]) for i in top],
                          fontsize=6.5 if n_labels <= 25 else 5.5, max_labels=n_labels) if n_labels else 0
     ax.set_xlabel(f"PC 1 ({var[0]:.1%} of variance)")
@@ -1172,11 +1164,11 @@ def panel_pca(ax, ck, pieces, classes, fstats, n_labels=50):
     titled(ax, title, f"one dot per token; {shown} {which} labelled; \u2581 marks a word start")
 
 
-def panel_similarity(ax, fig, ck, pieces, classes, fstats, cmap, n_tokens=100):
+def panel_similarity(ax, ck, pieces, classes, fstats, cmap, n_tokens=100):
     title = "Token similarity (clustered)"
     if ck.embedding is None or classes is None:
         return message(ax, "no token embedding or tokenizer in this file", title)
-    ids = [i for i in _token_order(ck, classes, fstats, {"word start", "word piece"})
+    ids = [i for i in _token_order(classes, fstats, {"word start", "word piece"})
            if len(pieces[i].replace("\u2581", "")) >= 3][:n_tokens]
     if len(ids) < 4:
         return message(ax, "fewer than 4 word tokens", title)
@@ -1192,7 +1184,7 @@ def panel_similarity(ax, fig, ck, pieces, classes, fstats, cmap, n_tokens=100):
         order = np.argsort(np.linalg.eigh(sims)[1][:, -2])
     sims = sims[np.ix_(order, order)]
     labels = [label_text(pieces[ids[k]], 10) for k in order]
-    heatmap(ax, fig, sims, labels, labels, cmap, "cosine similarity", -1, 1, annotate=False)
+    heatmap(ax, sims, labels, labels, cmap, "cosine similarity", -1, 1, annotate=False)
     tick_size = min(4.5, 300 / len(ids))   # 4.5 pt up to ~65 tokens, then smaller so 100 rows still fit the panel
     ax.set_xticklabels(labels, fontsize=tick_size, rotation=90)
     ax.set_yticklabels(labels, fontsize=tick_size)
@@ -1223,7 +1215,7 @@ def panel_norms(ax, ck, classes):
     titled(ax, title, "tied: each row is also the token's output weights" if tied else None)
 
 
-def panel_preference(ax, ck, pieces, classes, fstats, fnote):
+def panel_preference(ax, pieces, classes, fstats, fnote):
     title = "Output preference"
     if fstats is None:
         return message(ax, "Needs a forward pass: " + fnote + "\n\nThis model has no output-bias tensor, so its\n"
@@ -1291,7 +1283,7 @@ def _rms_of(ck, b, rels):
     return math.sqrt(sq / n) if n else np.nan
 
 
-def panel_components(ax, fig, ck, cmap):
+def panel_components(ax, ck, cmap):
     title = "Weight scale per block"
     layers = _layers(ck)
     if not layers:
@@ -1301,8 +1293,7 @@ def panel_components(ax, fig, ck, cmap):
     for j, b in enumerate(layers):
         for i, (_, rels) in enumerate(comps):
             m[i, j] = _rms_of(ck, b, rels)
-    heatmap(ax, fig, m, [c for c, _ in comps], [f"block {b}" for b in layers], cmap, "RMS of weights",
-            annotate=m.size <= 160)
+    heatmap(ax, m, [c for c, _ in comps], [f"block {b}" for b in layers], cmap, "RMS of weights")
     titled(ax, title, "RMS of each weight matrix" + ("; an expert row is its gate_up and down together" if ck.moe
                                                     else ""))
 
@@ -1364,7 +1355,7 @@ def panel_spectra(ax, ck, full=False):
     titled(ax, title, "a fast drop means low effective rank")
 
 
-def panel_heads(ax, fig, ck, cmap):
+def panel_heads(ax, ck, cmap):
     title = "Per-head projection scale"
     if ck.cfg is None:
         return message(ax, "needs the architecture settings (head counts)", title)
@@ -1383,7 +1374,7 @@ def panel_heads(ax, fig, ck, cmap):
                 vals.append(part.float().square().mean().sqrt().item())
             rows.append(f"{proj}_proj head {h}")
             data.append(vals)
-    heatmap(ax, fig, np.array(data), rows, [f"block {b}" for b in layers], cmap, "RMS of head slice",
+    heatmap(ax, np.array(data), rows, [f"block {b}" for b in layers], cmap, "RMS of head slice",
             annotate=len(rows) * len(layers) <= 120)
     ax.set_yticklabels(rows, fontsize=5.5 if len(rows) > 24 else 7)
     share = c.n_heads // c.n_kv_heads
@@ -1480,18 +1471,18 @@ def panel_probes(ax, ck, model, device, args, fnote=""):
            f"{diff_text}; green = above its floor (question words shuffled)")
 
 
-def panel_attention(ax, fig, model, windows, device, cmap, fnote):
+def panel_attention(ax, model, windows, device, cmap, fnote):
     title = "Attention entropy"
     if model is None or windows is None:
         return message(ax, "Needs a forward pass: " + (fnote or "no model"), title)
     ent = attention_entropy(model, windows[0], device)
-    heatmap(ax, fig, ent, [f"block {b}" for b in range(ent.shape[0])], [f"head {h}" for h in range(ent.shape[1])],
+    heatmap(ax, ent, [f"block {b}" for b in range(ent.shape[0])], [f"head {h}" for h in range(ent.shape[1])],
             cmap, "normalised entropy", 0, 1, fmt_spec=".2f")
     ax.set_xlabel("query head")
     titled(ax, title, "0 = attends to one token, 1 = spread evenly")
 
 
-def panel_adam(ax, fig, ck, cmap):
+def panel_adam(ax, ck, cmap):
     title = "Adam update size"
     opt = ck.obj.get("optimizer") if isinstance(ck.obj, dict) else None
     if not isinstance(opt, dict) or not opt.get("state"):
@@ -1521,13 +1512,13 @@ def panel_adam(ax, fig, ck, cmap):
             got = [values[f"blocks.{b}.{rel}"] for rel in rels if f"blocks.{b}.{rel}" in values]
             grid[i, j] = float(np.mean(got)) if got else np.nan
     if muon:
-        heatmap(ax, fig, grid, [c for c, _ in comps], [f"block {b}" for b in layers], cmap,
-                "RMS of the momentum", fmt_spec=".2g", annotate=grid.size <= 160)
+        heatmap(ax, grid, [c for c, _ in comps], [f"block {b}" for b in layers], cmap,
+                "RMS of the momentum", fmt_spec=".2g")
         titled(ax, "Muon momentum size", "RMS of each matrix's averaged gradient"
                + ("; the routers are on AdamW and show blank" if ck.moe else ""))
         return
-    heatmap(ax, fig, grid, [c for c, _ in comps], [f"block {b}" for b in layers], cmap,
-            "mean |m| / (sqrt(v) + eps)", annotate=grid.size <= 160)
+    heatmap(ax, grid, [c for c, _ in comps], [f"block {b}" for b in layers], cmap,
+            "mean |m| / (sqrt(v) + eps)")
     titled(ax, title, "near 1 = gradient sign consistent across steps")
 
 
@@ -1565,7 +1556,7 @@ def panel_moe_balance(ax, history, ck):
                                        "that saw no token"))
 
 
-def panel_moe_load(ax, fig, ck, history, cmap):
+def panel_moe_load(ax, ck, history, cmap):
     """Tokens per expert relative to the block's mean since the last evaluation, per MoE block (last history row)."""
     title = "Expert load per block"
     rows = [h for h in history or [] if h.get("moe_load")]
@@ -1574,12 +1565,12 @@ def panel_moe_load(ax, fig, ck, history, cmap):
     load = np.array(rows[-1]["moe_load"], dtype=float)
     blocks = _moe_blocks(ck)
     cols = [f"block {b}" for b in blocks[:load.shape[0]]]
-    heatmap(ax, fig, load.T, [f"expert {e}" for e in range(load.shape[1])], cols, cmap, "tokens / mean tokens",
-            vmin=0.0, annotate=load.size <= 160)
+    heatmap(ax, load.T, [f"expert {e}" for e in range(load.shape[1])], cols, cmap, "tokens / mean tokens",
+            vmin=0.0)
     titled(ax, title, f"at step {rows[-1]['step']:,}: 1.0 = even; 0 = a dead expert")
 
 
-def panel_router_bias(ax, fig, ck, cmap):
+def panel_router_bias(ax, ck, cmap):
     """DeepSeek-V3's balancing bias per expert and MoE block (a buffer in the weights)."""
     title = "Router bias"
     items = [(b, ck.weights.get(f"blocks.{b}.ffn.router.bias")) for b in _moe_blocks(ck)]
@@ -1588,13 +1579,13 @@ def panel_router_bias(ax, fig, ck, cmap):
         return message(ax, "no router bias buffers in this file", title)
     grid = np.stack([t.float().numpy() for _, t in items], axis=1)  # (E, blocks)
     lim = max(float(np.abs(grid).max()), 1e-6)
-    heatmap(ax, fig, grid, [f"expert {e}" for e in range(grid.shape[0])], [f"block {b}" for b, _ in items], cmap,
-            "bias added to the routing score", vmin=-lim, vmax=lim, annotate=grid.size <= 160, fmt_spec=".2g")
+    heatmap(ax, grid, [f"expert {e}" for e in range(grid.shape[0])], [f"block {b}" for b, _ in items], cmap,
+            "bias added to the routing score", vmin=-lim, vmax=lim, fmt_spec=".2g")
     titled(ax, title, "negative = the expert was overloaded and is now chosen less (auxiliary-loss-free balancing)")
 
 
 # ---------------------------------------------------------------------------
-# HTML embedding explorer (hover labels)
+# GitHub push
 # ---------------------------------------------------------------------------
 def _git(*args):
     return subprocess.run(["git", "-C", HERE, *args], capture_output=True, text=True, timeout=300)
@@ -1621,6 +1612,9 @@ def push_dashboard(png, ck):
         print(f"WARNING: dashboard not pushed ({type(exc).__name__}: {exc})")
 
 
+# ---------------------------------------------------------------------------
+# HTML embedding explorer (hover labels)
+# ---------------------------------------------------------------------------
 def write_embedding_html(ck, out_path):
     if ck.embedding is None or ck.tok is None:
         print("--html needs token embeddings and a tokenizer.")
