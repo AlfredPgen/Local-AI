@@ -593,6 +593,31 @@ class Audit2Viewer(unittest.TestCase):
         self.assertEqual(scored, colours, "the scored panel uses the same rule")
         self.assertEqual(view_pt.floor_colour({"low": 0.4, "high": 0.75, "floor": 0.5}), view_pt.OTHER)
         self.assertEqual(view_pt.floor_colour({"low": 0.4, "high": 0.75, "floor": None}), view_pt.OTHER)
+        # F437: a best file that holds the EMA average. Its history rows are the raw weights' evaluations and so is
+        # the stored report, so the two history panels use it; as this file's own score it is still refused
+        ema = open_ck(toy_file(self.tmp, "F_ema_best.pt", rows, weights="ema", ema_decay=0.999))
+        ema.metrics["last_eval"] = {"step": ema.obj["step"], "probes": report}
+        self.assertIsNone(view_pt.probe_report(ema, None, None, args))
+        self.assertIsNone(view_pt.stored_probes(ema, args))
+        self.assertIs(view_pt.stored_probes(ema, args, raw_weights=True), report)
+        fig, ax = one_axes()
+        view_pt.panel_facts(ax, rows, ema, args)
+        self.assertIn("chance 25%", said(ax))
+        self.assertIn("easy 40%", said(ax))
+        fig, ax = one_axes()
+        view_pt.panel_facts_subjects(ax, rows, ema, args)
+        self.assertEqual({t.get_text().split(" (")[0]: p.get_facecolor()[:3] for t, p in zip(ax.get_yticklabels(), ax.patches)},
+                         colours)
+        self.assertIn("genetics (n=50)", [t.get_text() for t in ax.get_yticklabels()])
+        self.assertIn("clear of the subject's floor", said(ax))
+        fig, ax = one_axes()
+        view_pt.panel_facts(ax, stored.history, ema, args)
+        self.assertNotIn("40% correct", said(ax), "without a curve the single stored score would pass as the average's")
+        self.assertIn("--panels all", said(ax))
+        for change in ({"finetune": {"method": "sft", "base": "F.pt"}}, {"edit": {"chosen": {}}}):
+            other = open_ck(toy_file(self.tmp, "F_other.pt", rows, **change))
+            other.metrics["last_eval"] = {"step": other.obj["step"], "probes": report}
+            self.assertIsNone(view_pt.stored_probes(other, args, raw_weights=True), change)
 
     # ---------------- F428, F429, F414, F437, F392 ----------------
     def test_weight_and_behaviour_panels(self):

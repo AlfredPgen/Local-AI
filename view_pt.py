@@ -1327,10 +1327,12 @@ def trailing(values, k, mean=np.mean):
     return [float(mean(values[max(0, i - k + 1):i + 1])) for i in range(len(values))]
 
 
-def stored_probes(ck, args):
-    """The fact-benchmark report training stored for these weights (probe_report without a model), or None."""
+def stored_probes(ck, args, raw_weights=False):
+    """The fact-benchmark report training stored for these weights (probe_report without a model), or None.
+    raw_weights: for a panel that draws the history's scores, as probe_report."""
     try:
-        return probe_report(ck, None, None, args) if args.probes and os.path.isfile(args.probes) else None
+        return (probe_report(ck, None, None, args, raw_weights) if args.probes and os.path.isfile(args.probes)
+                else None)
     except (OSError, SystemExit):
         return None
 
@@ -1349,7 +1351,7 @@ def panel_facts(ax, history, ck, args):
     from matplotlib.ticker import PercentFormatter
     title = "Biology facts"
     acc, floor = _series(history, "probe_acc"), _series(history, "probe_floor")
-    report = stored_probes(ck, args)
+    report = stored_probes(ck, args, raw_weights=bool(acc))  # without a curve it would be shown as this file's score
     derived = ck.finetune or ck.edit
     if not acc:
         if report:
@@ -1414,7 +1416,7 @@ def panel_facts_subjects(ax, history, ck, args, fnote=""):
         got = [r[name] for r in rows if _finite(r.get(name))]
         if got:
             means[name] = float(np.mean(got))
-    report = stored_probes(ck, args)
+    report = stored_probes(ck, args, raw_weights=True)
     groups = report["category"] if report and set(report.get("category") or {}) == set(means) else {}
     names = sorted(means, key=means.get)
     y = np.arange(len(names))
@@ -2100,16 +2102,18 @@ def panel_calibration(ax, ck, fstats, fnote):
                       f"{source}")
 
 
-def probe_report(ck, model, device, args):
+def probe_report(ck, model, device, args, raw_weights=False):
     """The checkpoint's own probe results when training scored this probe file
-    at this step (no model run); otherwise score the probes now."""
+    at this step (no model run); otherwise score the probes now. raw_weights: the
+    caller shows the history's per-evaluation scores, which are the raw weights'
+    like the stored report, so a best file that holds the EMA average may use it."""
     sha = tiny_gpt.file_sha256(args.probes)
     last = ck.metrics.get("last_eval") or {}
     stored = last.get("probes")
     step = ck.obj.get("step") if isinstance(ck.obj, dict) else None
     # a fine-tuned or edited file carries the base model's last_eval (and step), and a best file that holds the
     # EMA average the raw weights': the stored report is not these weights'
-    derived = ck.finetune or ck.edit or holds_ema(ck)
+    derived = ck.finetune or ck.edit or (holds_ema(ck) and not raw_weights)
     if stored and stored.get("file_sha256") == sha and last.get("step") == step and not derived:
         return stored
     if model is None:
