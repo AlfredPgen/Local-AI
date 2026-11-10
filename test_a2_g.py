@@ -257,6 +257,18 @@ class Audit2FinetuneTools(unittest.TestCase):
         for key in finals[0]:
             self.assertTrue(torch.equal(finals[0][key], finals[1][key]), key)
 
+    def test_read_jsonl_names_the_line_that_is_not_an_object(self):
+        """F158: a JSON line that is valid but not an object ends with the file:line message, not an
+        AttributeError."""
+        import finetune
+        path = os.path.join(self.tmp, "not_objects.jsonl")
+        with open(path, "w", encoding="utf-8", newline="\n") as f:
+            f.write('{"prompt": "p", "response": "r"}\n["prompt", "response"]\n{"prompt": "q", "response": "s"}\n')
+        with self.assertRaises(SystemExit) as caught:
+            finetune.read_jsonl(path, ["prompt", "response"])
+        self.assertIn(":2:", str(caught.exception.code))
+        self.assertIn("JSON object", str(caught.exception.code))
+
     def test_dpo_checkpoint_keeps_the_sft_record(self):
         """F159: a DPO checkpoint made from an SFT checkpoint carries the SFT stage's record as
         finetune['previous']; a fine-tune of a pre-trained checkpoint has no such key."""

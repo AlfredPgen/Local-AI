@@ -62,6 +62,8 @@ def read_jsonl(path, fields):
                 row = json.loads(line)
             except json.JSONDecodeError as exc:
                 raise SystemExit(f"{path}:{line_no}: invalid JSON ({exc})")
+            if not isinstance(row, dict):
+                raise SystemExit(f"{path}:{line_no}: expected a JSON object")
             missing = [f for f in fields if not isinstance(row.get(f), str) or not row[f].strip()]
             if missing:
                 raise SystemExit(f"{path}:{line_no}: missing text field(s) {missing}")
