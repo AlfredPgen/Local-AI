@@ -4230,6 +4230,10 @@ class TestOtherScripts(unittest.TestCase):
             self.assertEqual(cmd[cmd.index("--near-dup-max-docs") + 1], "5000000")
             self.assertNotIn("--superbpe", cmd)
             self.assertEqual(data_prep.parse_args(cmd[2:]).near_dup_max_docs, 5_000_000)
+            with open(os.path.join(dataset, "manifest.json"), "w", encoding="utf-8") as f:
+                json.dump({"prep_args": {**prep, "tokenizer_weights": None}}, f)
+            self.assertNotIn("--tokenizer-weights", run_pipeline.build_command(),
+                             "a dataset built without tokenizer weights is not given the default ones")
             os.remove(os.path.join(dataset, "manifest.json"))
             cmd = run_pipeline.build_command()  # no manifest: the constants
             self.assertNotIn("--superbpe", cmd)
