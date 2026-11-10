@@ -2093,6 +2093,10 @@ def _validate(args, parser):
         parser.error(str(exc))
 
 
+class _Unresumable(SystemExit):
+    """A --resume that cannot continue (its spool is missing or cut short): no resume hint is printed for it."""
+
+
 def prepare(argv=None):
     """Build a dataset; returns its folder. A build interrupted or failed before
     pass 2 is complete deletes its work spool (the partial folder is rebuilt on
@@ -2104,15 +2108,16 @@ def prepare(argv=None):
     state = {}
     try:
         return _prepare(args, state)
-    except BaseException:
+    except BaseException as exc:
         work = state.get("work")  # only a spool this run created (never one kept by an earlier --keep-work)
-        if work and os.path.isdir(work) and not args.keep_work:
+        if work and os.path.isdir(work):
             if os.path.isfile(os.path.join(work, STATE_NAME)):
-                spool_dir = state.get("spool_dir", work)
-                print(f"Build stopped after pass 2; its work files are kept ({_spool_size(spool_dir) / 1e9:,.1f} GB "
-                      f"of spool in {spool_dir}). Continue from them with:\n"
-                      f"  python data_prep.py --out {args.out} --resume")
-            else:
+                if not isinstance(exc, _Unresumable):  # its own message says that --resume cannot continue
+                    spool_dir = state.get("spool_dir", work)
+                    print(f"Build stopped after pass 2; its work files are kept ({_spool_size(spool_dir) / 1e9:,.1f} "
+                          f"GB of spool in {spool_dir}). Continue from them with:\n"
+                          f"  python data_prep.py --out {args.out} --resume")
+            elif not args.keep_work:
                 _cleanup(work, state.get("spool_dir", work), False)
                 print(f"Build stopped; removed the work spool {work}. Rerun the same command to rebuild.")
         raise
@@ -2220,14 +2225,14 @@ def _prepare(args, state=None):
     if resumed:
         spool2 = st["spool2"]
         if not os.path.isfile(spool2):
-            raise SystemExit(f"--resume: the spool {spool2} is missing; the build cannot continue (start it again "
-                             "with --overwrite).")
+            raise _Unresumable(f"--resume: the spool {spool2} is missing; the build cannot continue (start it again "
+                               "with --overwrite).")
         print(f"Checking the kept spool ({_spool_size(os.path.dirname(spool2)) / 1e9:,.1f} GB) ...", flush=True)
         lines, complete = _spool_line_count(spool2)
         if lines != st["spool2_lines"] or not complete:
-            raise SystemExit(f"--resume: {spool2} holds {lines:,} records (expected {st['spool2_lines']:,})"
-                             f"{'' if complete else ' and is cut short'}; the build cannot continue (start it again "
-                             "with --overwrite).")
+            raise _Unresumable(f"--resume: {spool2} holds {lines:,} records (expected {st['spool2_lines']:,})"
+                               f"{'' if complete else ' and is cut short'}; the build cannot continue (start it "
+                               "again with --overwrite).")
         print(f"Resuming after stage '{st['stage']}': {len(st['docs']):,} documents in the spool.", flush=True)
         docs, roots, dropped, split_of = st["docs"], st["roots"], st["dropped"], st["split_of"]
         sources, ledger, duplicates, notes = st["sources"], st["ledger"], st["duplicates"], st["notes"]

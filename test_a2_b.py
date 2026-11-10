@@ -14,6 +14,7 @@ import shutil
 import sys
 import tempfile
 import unittest
+import unittest.mock
 from contextlib import redirect_stderr, redirect_stdout
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -219,6 +220,38 @@ class Audit2DataPrep(unittest.TestCase):
                         self.assertRaises(SystemExit):
                     data_prep.parse_args(["--out", stopped, "--resume"] + bad)
                 self.assertIn(bad[0], err.getvalue())
+
+    # ---------------- F102: the hint after a failure says what can be done ----------------
+    def test_failure_hints_after_pass2(self):
+        # a resume that cannot continue does not advise --resume again
+        out = os.path.join(self.tmp, "f102_cut")
+        self.stop_after_pass2(["--out", out] + self.base_args())
+        spool2 = data_prep._load_state(os.path.join(out, "_work", data_prep.STATE_NAME))["spool2"]
+        with open(spool2, "rb") as f:
+            raw = f.read()
+        with open(spool2, "wb") as f:
+            f.write(raw[:len(raw) // 2])
+        with redirect_stdout(io.StringIO()) as buf, self.assertRaises(SystemExit) as stop:
+            data_prep.prepare(["--out", out, "--resume", "--threads", "2", "--workers", "1"])
+        self.assertIn("cannot continue", str(stop.exception))
+        self.assertNotIn("Continue from them", buf.getvalue())
+        self.assertNotIn("--resume", buf.getvalue())
+        # with --keep-work a build stopped after pass 2 gets the hint too
+        out = os.path.join(self.tmp, "f102_keep")
+        printed = self.stop_after_pass2(["--out", out, "--keep-work"] + self.base_args())
+        self.assertIn("Continue from them", printed)
+        self.assertIn("--resume", printed)
+        with redirect_stdout(io.StringIO()):
+            data_prep.prepare(["--out", out, "--resume", "--threads", "2", "--workers", "1"])
+        self.assertEqual(data_prep.read_manifest(out)["fingerprint"],
+                         data_prep.read_manifest(self.plain())["fingerprint"])
+        # and a --keep-work build stopped before pass 2 ended keeps its work folder, with no hint (guard)
+        out = os.path.join(self.tmp, "f102_early")
+        with unittest.mock.patch.object(data_prep, "_pass2_chunk", side_effect=KeyboardInterrupt):
+            with redirect_stdout(io.StringIO()) as buf, self.assertRaises(KeyboardInterrupt):
+                data_prep.prepare(["--out", out, "--keep-work"] + self.base_args())
+        self.assertTrue(os.path.isdir(os.path.join(out, "_work")))
+        self.assertNotIn("--resume", buf.getvalue())
 
     def test_an_error_in_the_leakage_audit_still_only_skips_it(self):
         out = os.path.join(self.tmp, "f057err")
