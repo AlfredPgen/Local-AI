@@ -374,6 +374,35 @@ class Audit2FinetuneTools(unittest.TestCase):
         picked(4, parity=1, layout=layout)
         self.assertEqual(layout, {s: (n, 0) for s, n in sizes.items()})
 
+    # ---- detect_text.py ---------------------------------------------------------------------------------
+    def detect(self, argv, device="cpu", busy=False):
+        """detect_text.main() with `argv`; `device` is the device that is selected and `busy` the answer of
+        tiny_gpt.gpu_busy. Returns (printed text, exit message or None)."""
+        import detect_text
+        message = None
+        with unittest.mock.patch.object(tiny_gpt, "select_device", lambda preference="auto": torch.device(device)), \
+                unittest.mock.patch.object(tiny_gpt, "gpu_busy", lambda *dirs: busy), \
+                unittest.mock.patch.object(sys, "argv", ["detect_text.py", *argv]), \
+                redirect_stdout(io.StringIO()) as out, redirect_stderr(io.StringIO()):
+            try:
+                detect_text.main()
+            except SystemExit as exc:
+                message = str(exc.code)
+        return out.getvalue(), message
+
+    def test_detect_text_refuses_a_busy_gpu(self):
+        """F110: detect_text on an accelerator stops while another job uses it, like its sibling scripts; --force
+        and the CPU go on (here: to the checkpoint that does not exist)."""
+        missing = os.path.join(self.tmp, "no_such_checkpoint.pt")
+        argv = ["--calibrate", "--checkpoint", missing]
+        _, message = self.detect(argv + ["--device", "cuda"], device="cuda", busy=True)
+        self.assertEqual(message, tiny_gpt.GPU_BUSY_MESSAGE + " (Or use --device cpu, or pass --force.)")
+        for extra, device, busy in ((["--device", "cuda", "--force"], "cuda", True),
+                                    (["--device", "cuda"], "cuda", False), ([], "cpu", True)):
+            _, message = self.detect(argv + extra, device=device, busy=busy)
+            self.assertNotIn("GPU is busy", message or "", extra)
+            self.assertIn("no_such_checkpoint.pt", message or "", extra)  # the busy check was passed
+
     # ---- posttrain.py -----------------------------------------------------------------------------------
     def posttrain_data(self, tag):
         folder = os.path.join(self.tmp, tag)

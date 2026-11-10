@@ -96,6 +96,7 @@ def main():
     p.add_argument("--calibrate", action="store_true",
                    help="score 5 samples from the model and 5 validation passages to show typical values")
     p.add_argument("--device", choices=("cpu", "cuda", "mps", "auto"), default="cpu")
+    p.add_argument("--force", action="store_true", help="use the GPU even if another job seems to be using it")
     p.add_argument("--trust-checkpoint", action="store_true")
     args = p.parse_args()
     if not args.text and not args.calibrate:
@@ -103,6 +104,8 @@ def main():
     if not 0 < args.watermark_gamma < 1:
         p.error("--watermark-gamma must be between 0 and 1")
     device = tiny_gpt.select_device(args.device)
+    if device.type != "cpu" and not args.force and tiny_gpt.gpu_busy(HERE):
+        raise SystemExit(tiny_gpt.GPU_BUSY_MESSAGE + " (Or use --device cpu, or pass --force.)")
     model, tok, cfg, obj = tiny_gpt.load_for_inference(args.checkpoint, device, args.trust_checkpoint)
     ds = (obj.get("dataset") or {}).get("path") if isinstance(obj.get("dataset"), dict) else None
     del obj  # only the dataset path is needed; the raw weights would double the memory used
