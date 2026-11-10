@@ -99,6 +99,7 @@ GROUPS = [("biology", ("q-bio", "physics.bio-ph", "physics.med-ph")),
           ("mathematics", ("math",))]
 GROUP_RANK = {"biology": 0, "statistics": 1, "AI": 2, "mathematics": 2}  # AI and mathematics share a rank
 FINAL = {"ok", "too_short", "no_text"}  # statuses not retried on a rerun
+FETCH_FAILED = "fetch_failed"  # passed to convert_paper in place of the e-print when its download failed
 # "pdf_timeout" is retried only by a run with a larger --pdf-seconds; "error: ..." always
 _TIMEOUT_RE = re.compile(r"pdf took over ([\d.]+) s")
 # a PDF converter failure caused by the environment, not by the paper: retried on the next run (a MemoryError
@@ -758,10 +759,13 @@ def check_pdf_route():
 def convert_paper(row, blob, out_dir, min_body, pandoc, pdf_seconds=PDF_SECONDS, pdf_problem=None):
     """Convert one downloaded paper (falling back to its PDF) and write it.
     pdf_problem: why the PDF converter cannot run (from check_pdf_route); such
-    papers get a status that a later run retries."""
+    papers get a status that a later run retries. blob: the e-print's bytes,
+    None (no source), or FETCH_FAILED when its download failed: the PDF is used
+    then too, and the method says so, so that such papers can be found and
+    redone from their LaTeX."""
     base = {k: row.get(k, "") for k in ("id", "group", "year", "categories")}
     base.update(licence=row.get("licence", ""), chars=0, method="", file="")
-    md, method = None, ""
+    md, method = None, "source download failed" if isinstance(blob, str) and blob == FETCH_FAILED else ""
     if isinstance(blob, bytes):
         try:
             md, method = latex_markdown(blob, row["title"], row.get("abstract", ""), pandoc)
@@ -971,7 +975,7 @@ def main(argv=None):
                 try:
                     blob = http_get(EPRINT_URL.format(row["id"]))
                 except Exception as exc:  # noqa: BLE001 - network trouble: the PDF route may still work
-                    blob = None
+                    blob = FETCH_FAILED
                     print(f"  {row['id']}: source download failed ({type(exc).__name__})", flush=True)
                 pending[pool.submit(convert_paper, row, blob, args.out, args.min_body_chars, pandoc,
                                     args.pdf_seconds, pdf_problem)] = row

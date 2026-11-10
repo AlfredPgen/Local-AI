@@ -42,6 +42,20 @@ class Audit2Downloaders(unittest.TestCase):
         with unittest.mock.patch.multiple(ax, **stubs):
             return ax.convert_paper(dict(ROW), blob, self.tmp, 100, "pandoc")
 
+    def arxiv_folders(self, rows, columns=None, sets=("q-bio",)):
+        """(out, meta) for download_arxiv.main: a list.tsv with `rows` and a finished harvest of `sets`."""
+        out, meta = os.path.join(self.tmp, "out"), os.path.join(self.tmp, "meta")
+        os.makedirs(os.path.join(meta, "metadata"))
+        for name in sets:
+            with open(os.path.join(meta, "metadata", ax._set_file(name) + ".state.json"), "w", encoding="utf-8") as f:
+                json.dump({"token": None, "pages": 1, "records": 5, "complete": True,
+                           "harvested_until": "2026-01-01"}, f)
+        with open(os.path.join(meta, "list.tsv"), "w", encoding="utf-8", newline="\n") as f:
+            f.write("\t".join(columns or ax.LIST_COLUMNS) + "\n")
+            for row in rows:
+                f.write("\t".join(row) + "\n")
+        return out, meta
+
     # ---------------- download_arxiv.py ----------------
     def test_f113_corrupt_gzip_eprint_takes_the_pdf_route(self):
         """F113: a gzip e-print with a damaged deflate stream (zlib.error) falls back to the PDF."""
@@ -59,6 +73,30 @@ class Audit2Downloaders(unittest.TestCase):
         """F126: a file named MAIN.TEX is found as the main file."""
         self.assertEqual(ax.main_tex({"MAIN.TEX": r"\documentclass{article}\begin{document}x\end{document}"}),
                          "MAIN.TEX")
+
+    def test_f120_failed_source_download_is_recorded_in_the_method(self):
+        """F120: a paper converted from its PDF because the e-print download failed says so; a paper
+        without source (404) is a plain 'pdf' as before."""
+        failed = self.convert(ax.FETCH_FAILED)
+        self.assertEqual((failed["status"], failed["method"]), ("ok", "pdf (source download failed)"))
+        missing = self.convert(None)
+        self.assertEqual((missing["status"], missing["method"]), ("ok", "pdf"))
+        # main hands the marker over when the e-print request raises
+        out, meta = self.arxiv_folders([[ROW["id"], "biology", "1.000", "2021", "q-bio.PE", "", "Drift",
+                                         "An abstract."]])
+        blobs = []
+
+        def convert(row, blob, *rest):
+            blobs.append(blob)
+            return {"id": row["id"], "status": "ok", "chars": 1, "method": "pdf", "group": "", "year": "",
+                    "categories": "", "licence": "", "file": ""}
+
+        with unittest.mock.patch.multiple(ax, harvest=unittest.mock.Mock(return_value=0), pandoc_path=lambda: "pandoc",
+                                          check_pdf_route=lambda: None, convert_paper=convert,
+                                          http_get=unittest.mock.Mock(side_effect=OSError("no network"))), \
+                redirect_stdout(io.StringIO()):
+            ax.main(["--out", out, "--meta", meta, "--sets", "q-bio", "--wait", "0"])
+        self.assertEqual(blobs, [ax.FETCH_FAILED])
 
 
 if __name__ == "__main__":
