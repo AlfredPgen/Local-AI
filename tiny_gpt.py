@@ -2103,7 +2103,7 @@ class EvalSet:
             self.windows[name] = torch.from_numpy(
                 np.asarray(array[starts[:, None] + np.arange(ctx + 1)[None, :]], dtype=np.int64))
         if not self.windows:
-            raise SystemExit(f"No validation source has more than ctx+1 = {ctx + 1} tokens; "
+            raise SystemExit(f"No validation source has at least ctx+1 = {ctx + 1} tokens; "
                              "rebuild the dataset with a larger --val-fraction or lower --ctx.")
 
     def describe(self):

@@ -362,6 +362,12 @@ class Audit2TinyGptA(unittest.TestCase):
         self.assertEqual(tiny_gpt.LRSchedule("cosine", 100, 1e-3, 1e-4, 10).describe(),
                          "cosine: warmup 1-10, cosine to 1.00e-04 at 100")
 
+    def test_validation_too_short_message_names_the_real_limit(self):
+        """F304: a validation source needs ctx+1 tokens (one window), and the message says so."""
+        with self.assertRaises(SystemExit) as ctx:
+            tiny_gpt.EvalSet({"a": np.arange(16)}, 16, 32)
+        self.assertIn("at least ctx+1 = 17", str(ctx.exception.code))
+        self.assertEqual(tiny_gpt.EvalSet({"a": np.arange(17)}, 16, 32).windows["a"].shape, (1, 17))
 
 
 
