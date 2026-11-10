@@ -49,6 +49,71 @@ class Audit2DataPrep(unittest.TestCase):
         os.makedirs(path)
         return path
 
+    @classmethod
+    def base_args(cls):
+        """A two-source build (the text folders of the corpus), as test_resume_after_pass2 uses."""
+        c = cls.corpus()
+        return ["--md-dir", c.md, "--md-dir", f"notes={c.notes}", "--vocab-size", "600", "--val-fraction", "0.2",
+                "--threads", "2", "--workers", "1"]
+
+    @classmethod
+    def plain(cls):
+        """The uninterrupted build of base_args (made once): what a stopped and resumed build must equal."""
+        out = os.path.join(cls.tmp, "plain")
+        if not os.path.isdir(out):
+            with redirect_stdout(io.StringIO()):
+                data_prep.prepare(["--out", out] + cls.base_args())
+        return out
+
+    def stage(self, out):
+        return data_prep._load_state(os.path.join(out, "_work", data_prep.STATE_NAME))["stage"]
+
+    # ---------------- F057: Ctrl+C in the leakage audit stops the build, and --resume runs the audit ----------------
+    def test_ctrl_c_in_the_leakage_audit_stops_a_resumable_build(self):
+        plain = self.plain()
+        self.assertTrue(os.path.isfile(os.path.join(plain, "leakage.tsv")))
+        out = os.path.join(self.tmp, "f057")
+        real = data_prep._audit_chunk
+
+        def interrupt_once(texts):
+            data_prep._audit_chunk = real
+            raise KeyboardInterrupt
+
+        data_prep._audit_chunk = interrupt_once
+        try:
+            with redirect_stdout(io.StringIO()) as buf, self.assertRaises(KeyboardInterrupt):
+                data_prep.prepare(["--out", out] + self.base_args())
+        finally:
+            data_prep._audit_chunk = real
+        self.assertEqual(self.stage(out), "pass2", "the split and the audit are redone by --resume")
+        self.assertIn("--resume", buf.getvalue())
+        self.assertFalse(os.path.exists(os.path.join(out, "manifest.json")))
+        with redirect_stdout(io.StringIO()) as buf:
+            data_prep.prepare(["--out", out, "--resume", "--threads", "2", "--workers", "1"])
+        self.assertIn("Leakage audit:", buf.getvalue())
+        self.assertEqual(data_prep.read_manifest(out)["fingerprint"], data_prep.read_manifest(plain)["fingerprint"])
+        self.assertEqual(read_file(os.path.join(out, "leakage.tsv")), read_file(os.path.join(plain, "leakage.tsv")))
+
+    def test_an_error_in_the_leakage_audit_still_only_skips_it(self):
+        out = os.path.join(self.tmp, "f057err")
+        real = data_prep._audit_chunk
+
+        def fail_once(texts):
+            data_prep._audit_chunk = real
+            raise ValueError("simulated")
+
+        data_prep._audit_chunk = fail_once
+        try:
+            with redirect_stdout(io.StringIO()) as buf:
+                data_prep.prepare(["--out", out] + self.base_args())
+        finally:
+            data_prep._audit_chunk = real
+        self.assertIn("Leakage audit failed (ValueError)", buf.getvalue())
+        self.assertIn("were not moved", buf.getvalue())
+        self.assertIn("The leakage audit failed (ValueError) and was skipped.", read_file(os.path.join(out, "report.md")))
+        self.assertTrue(os.path.isfile(os.path.join(out, "manifest.json")))
+        self.assertFalse(os.path.exists(os.path.join(out, "leakage.tsv")))
+
     # ---------------- F043: a damaged .json.gz shard ends that file, not the build ----------------
     def jsonl_shard(self, path, n=4000):
         with gzip.open(path, "wt", encoding="utf-8", newline="\n") as f:

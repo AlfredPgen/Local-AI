@@ -2575,18 +2575,19 @@ def _prepare(args, state=None):
         # ------------------------------------------------------------------
         leakage.clear()
         if args.leakage_check == "on":
-            try:  # informational at heart: its failure or a Ctrl+C must not throw away the build
+            # informational at heart: its failure must not throw away the build. A Ctrl+C is not swallowed: it
+            # stops the build at stage 'pass2', and --resume redoes the split and this audit
+            try:
                 rows = _leakage_audit(spool2, docs, split_of, dropped, workers=args.workers, warmup=args.worker_warmup)
                 leakage.extend(_move_leaks_to_train(rows, docs, roots, clusters, split_of, dropped, settled_val,
                                                     sources, forced_train))
                 moved = forced_train.get("leaks_into_train", 0)
                 print(f"  {len(leakage):,} validation documents checked; {moved:,} with >= {LEAK_MOVE_OVERLAP:.0%} "
                       f"overlap moved to training (leakage.tsv)", flush=True)
-            except SystemExit:
-                raise
-            except BaseException as exc:  # noqa: BLE001 - KeyboardInterrupt included: it only skips the audit
-                what = "was interrupted" if isinstance(exc, KeyboardInterrupt) else f"failed ({type(exc).__name__})"
-                print(f"Leakage audit {what}: {exc}; the build goes on without it.", flush=True)
+            except Exception as exc:  # noqa: BLE001
+                what = f"failed ({type(exc).__name__})"
+                print(f"Leakage audit {what}: {exc}; the build goes on without it (leaking validation documents "
+                      "were not moved to training).", flush=True)
                 notes.append(f"The leakage audit {what} and was skipped.")
         st["stage"] = "split"
         _save_state(state_path, st)
@@ -3545,7 +3546,7 @@ def _leakage_audit(spool2, docs, split_of, dropped, n=13, keep_mod=16, workers=1
     try:
         val = [(i, sh) for (i, _), sh in _ordered(texts(SPLIT_VAL), lambda it: it[1], _audit_chunk, pool,
                                                   chunk=32, size_of=lambda it: len(it[1]))]
-    finally:  # on an error or Ctrl+C the queued work is cancelled, so the build can finish without it
+    finally:  # on an error or Ctrl+C the queued work is cancelled: no worker goes on for a caller that has left
         pool.close(cancel=True)
     val_set = np.unique(np.concatenate([sh for _, sh in val])) if val else np.zeros(0, dtype=np.uint64)
     found = []
