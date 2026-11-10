@@ -353,23 +353,6 @@ def evaluate(checkpoints, args):
 # ---------------------------------------------------------------------------
 # run
 # ---------------------------------------------------------------------------
-def gpu_busy():
-    """Another training job on this machine, on any device (tiny_gpt.gpu_busy)."""
-    try:
-        import tiny_gpt
-        return tiny_gpt.gpu_busy()
-    except Exception:  # noqa: BLE001
-        return False
-
-
-def _busy_message(extra=""):
-    try:
-        import tiny_gpt
-        return tiny_gpt.GPU_BUSY_MESSAGE + extra
-    except Exception:  # noqa: BLE001
-        return "The GPU is busy (another training run?); wait for the other job or stop it first." + extra
-
-
 def reusable_sft(args):
     """<out-dir>/<name>_sft.pt for --reuse-sft: only an SFT checkpoint made from this --base (by its path);
     anything else ends the run with a message."""
@@ -392,11 +375,12 @@ def reusable_sft(args):
 
 def run(args):
     import finetune
+    import tiny_gpt
     for f in ("sft.jsonl", "dpo.jsonl", "eval_mcq.jsonl"):
         if not os.path.isfile(os.path.join(args.data_dir, f)):
             raise SystemExit(f"{os.path.join(args.data_dir, f)} is missing: run `python posttrain.py data` first.")
-    if args.device != "cpu" and gpu_busy():
-        raise SystemExit(_busy_message())
+    if args.device != "cpu" and finetune.gpu_busy(args.out_dir):
+        raise SystemExit(tiny_gpt.GPU_BUSY_MESSAGE)
     # --force: the GPU was checked above; this process's own cached memory from SFT must not count as busy for DPO
     common = ["--out-dir", args.out_dir, "--device", args.device, "--force"] \
         + (["--overwrite"] if args.overwrite else []) + (["--trust-checkpoint"] if args.trust_checkpoint else [])
@@ -460,8 +444,10 @@ def main(argv=None):
     elif args.cmd == "run":
         run(args)
     else:
-        if args.device != "cpu" and not args.force and gpu_busy():
-            raise SystemExit(_busy_message(" (Or use --device cpu, or pass --force.)"))
+        import finetune
+        import tiny_gpt
+        if args.device != "cpu" and not args.force and finetune.gpu_busy():
+            raise SystemExit(tiny_gpt.GPU_BUSY_MESSAGE + " (Or use --device cpu, or pass --force.)")
         evaluate(args.checkpoints, args)
 
 
