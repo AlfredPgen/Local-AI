@@ -3470,9 +3470,9 @@ def parse_args(argv=None):
     g.add_argument("--layers", type=int, help="transformer blocks (default: d_model / 64 + 2, between 4 and 32)")
     g.add_argument("--heads", type=int, help="query heads (default: heads of width 32, 64 or 128 by d_model)")
     g.add_argument("--kv-heads", type=int,
-                   help="key/value heads (default: heads / 4 from 8 heads on, grouped-query attention); equal to "
-                        "--heads gives ordinary multi-head attention, about 10 %% slower for about 10 %% more "
-                        "parameters")
+                   help="key/value heads (default: heads / 4 from 8 heads on when the head count is divisible by 4, "
+                        "grouped-query attention; otherwise ordinary multi-head attention); equal to --heads gives "
+                        "ordinary multi-head attention, about 10 %% slower for about 10 %% more parameters")
     g.add_argument("--ctx", type=int,
                    help="context length in tokens (default by width: 256 up to d 192, 512 up to d 512, 1024 up to "
                         "d 1024, 2048 up to d 2048, 4096 above)")
