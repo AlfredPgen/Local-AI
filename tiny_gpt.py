@@ -1927,7 +1927,9 @@ class EnergyMeter:
         now = time.perf_counter()
         dt = now - self._last_t
         # a gap far longer than the period means the machine slept with the run alive: no power was drawn
-        # then, so at most three periods (plus 15 s of slack) are counted
+        # then, so at most three periods (plus 15 s of slack) are counted. Known limit: this thread also asks
+        # for the tariff (_price, at most one request per 10 minutes); a request that hangs for longer than
+        # that with no evaluation or save sampling meanwhile loses the excess, although power was drawn
         hours = min(dt, 3 * self.period + 15) / 3600
         gpu_w = self._gpu_watts() if self.gpu_measured else None
         cpu_w = ram_w = 0.0
