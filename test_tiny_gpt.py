@@ -1847,12 +1847,27 @@ class TestFixes(unittest.TestCase):
             f.write("# Packed\n\nAllele frequencies.")
         with open(os.path.join(folder, "broken.txt.gz"), "wb") as f:
             f.write(b"not gzip")
+        # damaged deflate data raises zlib.error, which is no OSError: flip bytes until gzip answers with it
+        import zlib
+        good = gzip.compress(paragraphs(3).encode())
+        for k in range(10, len(good) - 8):
+            bad = good[:k] + bytes([good[k] ^ 0xFF]) + good[k + 1:]
+            try:
+                gzip.GzipFile(fileobj=io.BytesIO(bad)).read()
+            except zlib.error:
+                break
+            except (OSError, EOFError):
+                continue
+        else:
+            self.fail("no byte flip gave a zlib.error")
+        with open(os.path.join(folder, "corrupt.md.gz"), "wb") as f:
+            f.write(bad)
         stats = {"scanned": 0, "skipped": collections.Counter(), "cleaning": collections.Counter()}
         docs = list(data_prep.iter_markdown([folder], list(data_prep.MD_PATTERNS_DEFAULT), [], False, stats, []))
         self.assertEqual([(d[0], d[1], d[2]) for d in docs],
                          [("packed.md", "packed", "# Packed\n\nAllele frequencies."),
                           ("plain.md", "plain", "# Plain\n\nGenetic drift.")])
-        self.assertEqual(stats["skipped"]["bad_gzip"], 1)
+        self.assertEqual(stats["skipped"]["bad_gzip"], 2)
 
     def test_keyword_covered_terms(self):
         """tools/kw_covered.py: a term whose every match is another term's match only double-counts."""

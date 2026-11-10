@@ -65,6 +65,7 @@ import shutil
 import sys
 import time
 import unicodedata
+import zlib
 
 import numpy as np
 
@@ -955,7 +956,7 @@ def iter_markdown(dirs, patterns, excludes, recursive, stats, ledger, source="md
                 try:
                     with gzip.GzipFile(fileobj=io.BytesIO(raw)) as unpacked:
                         raw = unpacked.read(512 * 1024 * 1024 + 1)
-                except (OSError, EOFError) as exc:
+                except (OSError, EOFError, zlib.error) as exc:  # zlib.error (damaged deflate data) is no OSError
                     stats["skipped"]["bad_gzip"] += 1
                     ledger.append(_ledger_row(source, doc_id, rel, "skipped", f"bad_gzip: {exc}"[:80], size))
                     continue
@@ -1320,11 +1321,28 @@ def _jsonl_arrow_block(block, row0, path, text_key, title_key, id_key, kw):
 
 def _jsonl_python(path, text_key, title_key, id_key, max_docs, stats, kw, batch, skip_rows, report):
     """The line-by-line reader (json.loads); skips the first `skip_rows` records.
-    Records without an id are named <file>:<record number>, as in the fast reader."""
+    Records without an id are named <file>:<record number>, as in the fast reader.
+    A damaged .gz (cut short, failed checksum, broken deflate data) ends that
+    file only: it is counted as bad_gzip, the records read before the damage are
+    kept and stats["warnings"] gets a line for the report."""
     opener = gzip.open if path.lower().endswith(".gz") else open
     with opener(path, "rt", encoding="utf-8", errors="replace") as handle:
         pending, seen = [], 0
-        for line in handle:
+        lines = iter(handle)
+        while True:
+            try:  # only the read is guarded (not the yields), and not for a plain OSError: that is a disk error
+                line = next(lines, None)
+            except (EOFError, zlib.error, gzip.BadGzipFile) as exc:
+                stats["skipped"]["bad_gzip"] += 1
+                warning = (f"{os.path.basename(path)} is damaged after record {seen:,} ({type(exc).__name__}: "
+                           f"{exc}); the rest was not read; download it again")
+                if not isinstance(exc, EOFError):  # a failed checksum or broken data, not a plain truncation
+                    warning += " (records already read from it may be garbled)"
+                stats.setdefault("warnings", []).append(warning)
+                print(f"  WARNING: {warning}", flush=True)
+                break
+            if line is None:
+                break
             if not line.strip():
                 continue
             seen += 1
@@ -2313,6 +2331,7 @@ def _prepare(args, state=None):
                     stats["scanned"], stats["skipped"] = stop_at[0], collections.Counter(stop_at[1])
                     stats["stopped_early"] = True
                 stats["skipped"].update(checked)
+            notes.extend(f"`{name}`: {w}" for w in stats.get("warnings", ()))  # a damaged shard: into report.md
             print(f"[{name}] scanned {stats['scanned']:,} | kept {stats['accepted']:,} | skipped "
                   f"{sum(stats['skipped'].values()):,} {dict(stats['skipped'].most_common())} "
                   f"({time.time() - t0:,.0f} s)", flush=True)
