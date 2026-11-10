@@ -4402,10 +4402,24 @@ class TestOtherScripts(unittest.TestCase):
                 BatchTok.calls += 1
                 return [self.encode(t) for t in texts]
         for tok in (CharTok(), BatchTok()):
-            for prompt, answer, ctx in (("What is drift?", "Random change.", 64), ("Q" * 50, "A" * 30, 32)):
+            marker = tok.encode("### Answer:\n")
+            for prompt, answer, ctx, cut in (("What is drift?", "Random change.", 64, False),
+                                             ("Q" * 50, "A" * 30, 32, True)):
                 question = tok.encode(finetune.TEMPLATE.format(prompt=prompt.strip()))
-                self.assertEqual(finetune.pair_from_ids(tok, question, tok.encode(answer), ctx),
-                                 finetune.encode_pair(tok, prompt, answer, ctx))
+                whole = tok.encode(answer) + ([tok.eos_id] if tok.eos_id >= 0 else [])
+                ids, n_prompt, truncated = finetune.pair_from_ids(tok, question, tok.encode(answer), ctx)
+                self.assertEqual(truncated, cut)
+                self.assertLessEqual(len(ids), ctx + 1)
+                self.assertEqual(len(ids), ctx + 1 if cut else 1 + len(question) + len(whole))
+                self.assertEqual(ids[0], tok.bos_id)
+                # the question is cut from the left: the template's answer marker stays next to the answer
+                self.assertEqual(ids[n_prompt - len(marker):n_prompt], marker)
+                self.assertEqual(ids[1:n_prompt], question[-(n_prompt - 1):])
+                # then the end of the answer: training always covers answer tokens, from the answer's start
+                self.assertLess(n_prompt, len(ids))
+                self.assertEqual(ids[n_prompt:], whole[:len(ids) - n_prompt])
+                if not cut and tok.eos_id >= 0:
+                    self.assertEqual(ids[-1], tok.eos_id)
             self.assertEqual(finetune.encode_texts(tok, ["ab", "c"]), [tok.encode("ab"), tok.encode("c")])
         self.assertEqual(BatchTok.calls, 1)
 

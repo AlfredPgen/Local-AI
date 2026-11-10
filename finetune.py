@@ -73,14 +73,6 @@ def read_jsonl(path, fields):
     return rows
 
 
-def encode_pair(tok, prompt, response, ctx):
-    """(ids, number of prompt tokens, truncated?); the response ends with EOS so the
-    model learns to stop. If the pair is longer than the context, the question is
-    cut from the left (keeping the template's '### Answer:' next to the answer) and
-    then the end of the answer, so training always covers answer tokens."""
-    return pair_from_ids(tok, tok.encode(TEMPLATE.format(prompt=prompt.strip())), tok.encode(response.strip()), ctx)
-
-
 def encode_texts(tok, texts):
     """Token ids of many texts in one call, on every CPU thread (tokenizer's
     encode_batch: ~15x faster than one encode per text); one at a time for a
@@ -93,8 +85,12 @@ def encode_texts(tok, texts):
 
 
 def pair_from_ids(tok, question, response_ids, ctx):
-    """encode_pair from already tokenised parts: `question` is the template with
-    the prompt, `response_ids` the answer without its end token."""
+    """(ids, number of prompt tokens, truncated?) from already tokenised parts:
+    `question` is the template with the prompt, `response_ids` the answer without
+    its end token. The response ends with EOS so the model learns to stop. If the
+    pair is longer than the context, the question is cut from the left (keeping
+    the template's '### Answer:' next to the answer) and then the end of the
+    answer, so training always covers answer tokens."""
     bos = [tok.bos_id] if tok.bos_id >= 0 else []
     question = list(question)
     answer = list(response_ids) + ([tok.eos_id] if tok.eos_id >= 0 else [])
