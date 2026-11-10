@@ -684,6 +684,24 @@ def prefilter_cache_path(keyword_spec):
     return None
 
 
+KEYWORDS_USED_NAME = "keywords.used.txt"  # in the dataset folder: the include list the documents were chosen with
+
+
+def keyword_list_record(value, terms):
+    """(what the manifest records about an --include-keywords or
+    --exclude-keywords value, the bytes of that list). One existing file gives
+    its path, the SHA-256 of its bytes and the number of terms; anything else
+    (terms on the command line, several files) gives no path and the SHA-256 of
+    the terms written one per line."""
+    if os.path.isfile(value):
+        with open(value, "rb") as handle:
+            data = handle.read()
+        name = os.path.abspath(value)
+    else:
+        data, name = ("\n".join(terms) + "\n").encode("utf-8"), None
+    return {"file": name, "sha256": hashlib.sha256(data).hexdigest(), "terms": len(terms)}, data
+
+
 def cached_prefilter_patterns(terms, cache_path=None):
     """_prefilter_patterns(terms), read from the cache file when its key matches:
     the SHA-256 of the terms (in order) plus PREFILTER_TERMS_PER_PATTERN and
@@ -2301,6 +2319,13 @@ def _prepare(args, state=None):
     exclude = read_terms(args.exclude_keywords)
     kw = KeywordFilter(include, exclude, args.keyword_min_hits, args.keyword_min_distinct, args.title_weight,
                        pattern_cache=prefilter_cache_path(args.include_keywords))
+    # which lists these are goes into the manifest, and the include list into the dataset folder: the keyword
+    # file goes on changing after the build
+    keywords_used, include_bytes = {}, None
+    if args.include_keywords:
+        keywords_used["include"], include_bytes = keyword_list_record(args.include_keywords, include)
+    if args.exclude_keywords:
+        keywords_used["exclude"] = keyword_list_record(args.exclude_keywords, exclude)[0]
     text_sources = parse_text_sources(args.md_dir)
     spec = args.keyword_sources.strip().lower()
     wanted = None if spec in ("all", "web") else {s.strip() for s in spec.split(",") if s.strip()}
@@ -2374,6 +2399,11 @@ def _prepare(args, state=None):
     # (a state saved before these keys existed gives the resume command and this session's time)
     command = (st.get("command", " ".join(sys.argv)) + " (resumed)") if resumed else " ".join(sys.argv)
     earlier = float(st.get("seconds", 0.0)) if resumed else 0.0
+    if resumed:  # the lists pass 1 read, not today's files (None: the state was saved before it held them)
+        keywords_used = st.get("keywords")
+    elif include_bytes is not None:
+        with open(os.path.join(out, KEYWORDS_USED_NAME), "wb") as handle:
+            handle.write(include_bytes)
     if resumed:
         spool_dir = os.path.dirname(st["spool2"])
     elif args.work_dir:
@@ -2673,7 +2703,7 @@ def _prepare(args, state=None):
               "line_examples": line_examples, "keyword_totals": keyword_totals, "clusters": clusters,
               "cross_source": cross_source, "forced_train": forced_train, "leakage": leakage,
               "settled_val": settled_val, "kept_split": kept_split,
-              "command": command, "seconds": time.time() - t_start}
+              "command": command, "seconds": time.time() - t_start, "keywords": keywords_used}
         if not args.scan_only:
             _save_state(state_path, st)  # from here on a failure keeps the work files for --resume
 
@@ -2941,6 +2971,8 @@ def _prepare(args, state=None):
         "prep_args": {k: v for k, v in vars(args).items()},
         "command": command,
     }
+    if keywords_used:  # an optional key: {"include": {"file", "sha256", "terms"}, "exclude": {...}}
+        manifest["keywords"] = keywords_used
     # docs.tsv first, then manifest.json, each written whole and renamed into place: a dataset with a manifest is
     # complete (never deleted as an interrupted build) and its docs.tsv is never cut short (--keep-split-from)
     _write_ledger(out, ledger, docs, split_of, roots, dropped, doc_tokens)
@@ -2980,7 +3012,8 @@ def _prepare(args, state=None):
 LOCK_NAME = "_build.lock"
 _OUTPUT_NAMES = {"_work", "tokenizer.model", "report.md", "docs.tsv", "duplicates.tsv", "boilerplate.tsv",
                  "token_counts.tsv", "token_summary.png",
-                 "keyword_hits.tsv", "leakage.tsv", "manifest.json.tmp", "docs.tsv.tmp", "report.md.tmp", LOCK_NAME}
+                 "keyword_hits.tsv", "leakage.tsv", "manifest.json.tmp", "docs.tsv.tmp", "report.md.tmp", LOCK_NAME,
+                 KEYWORDS_USED_NAME}
 
 
 def _lock_owner_alive(lock):

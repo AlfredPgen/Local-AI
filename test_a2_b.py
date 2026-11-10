@@ -1331,6 +1331,48 @@ class Audit2DataPrep(unittest.TestCase):
         self.assertEqual(data_prep.superbpe_extra(700, argparse.Namespace(superbpe=False, superbpe_fraction=0.25)), 0)
         self.assertEqual(data_prep.superbpe_extra(700, argparse.Namespace()), 0)
 
+    # ---------------- F103: the dataset says which keyword list built it ----------------
+    def test_manifest_and_dataset_keep_the_keyword_list_that_was_used(self):
+        folder = self.folder("f103_in")
+        listed = os.path.join(folder, "terms.txt")
+        first = "# biology\ngenetic*\nallele*\nthe\n"
+        with open(listed, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write(first)
+        argv = self.base_args() + ["--include-keywords", listed, "--exclude-keywords", "zzzunused, qqqunused",
+                                   "--keyword-sources", "all"]
+        out = os.path.join(self.tmp, "f103")
+        self.stop_after_pass2(["--out", out] + argv)
+        used = os.path.join(out, "keywords.used.txt")
+        self.assertEqual(read_file(used), first, "written when the build starts")
+        with open(listed, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write(first + "protein\nmore\nterms\n")  # the list goes on growing while the build is stopped
+        with redirect_stdout(io.StringIO()):
+            data_prep.prepare(["--out", out, "--resume"])
+        expected = {"include": {"file": os.path.abspath(listed), "terms": 3,
+                                "sha256": hashlib.sha256(first.encode("utf-8")).hexdigest()},
+                    "exclude": {"file": None, "terms": 2,
+                                "sha256": hashlib.sha256(b"zzzunused\nqqqunused\n").hexdigest()}}
+        manifest = data_prep.read_manifest(out)
+        self.assertEqual(manifest["keywords"], expected)
+        self.assertEqual(read_file(used), first, "the list the documents were chosen with, not today's file")
+        self.assertEqual(data_prep.read_terms(used), ["genetic*", "allele*", "the"])
+        # terms given on the command line: the file holds them one per line
+        inline = os.path.join(self.tmp, "f103_inline")
+        with redirect_stdout(io.StringIO()):
+            data_prep.prepare(["--out", inline, "--include-keywords", "the, genetic*,allele*", "--keyword-sources", "all",
+                               "--scan-only"] + self.base_args())
+        self.assertEqual(read_file(os.path.join(inline, "keywords.used.txt")), "the\ngenetic*\nallele*\n")
+        # no keyword option: no key, no file, and an interrupted build with the file is still seen as one
+        plain = data_prep.read_manifest(self.plain())
+        self.assertNotIn("keywords", plain)
+        self.assertFalse(os.path.exists(os.path.join(self.plain(), "keywords.used.txt")))
+        self.assertEqual(plain["format_version"], manifest["format_version"])
+        partial = self.folder("f103_partial")
+        for name in ("keywords.used.txt", "docs.tsv"):
+            with open(os.path.join(partial, name), "w", encoding="utf-8") as handle:
+                handle.write("x\n")
+        self.assertTrue(data_prep._is_incomplete_build(partial))
+
 
 if __name__ == "__main__":
     unittest.main()
