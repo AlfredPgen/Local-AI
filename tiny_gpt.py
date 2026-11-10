@@ -1786,8 +1786,8 @@ def parse_mix(text, sources):
             weights[name] = float(value)
         except ValueError:
             raise SystemExit(f"--mix: weight for {name} is not a number: {value!r}")
-        if weights[name] < 0:
-            raise SystemExit("--mix weights must be >= 0")
+        if not math.isfinite(weights[name]) or weights[name] < 0:
+            raise SystemExit("--mix weights must be finite numbers >= 0")
     if sum(weights.values()) <= 0:
         raise SystemExit("--mix: at least one weight must be positive")
     return weights

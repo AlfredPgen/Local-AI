@@ -243,6 +243,14 @@ class Audit2TinyGptA(unittest.TestCase):
             self.assertEqual(call[0][0][0], sys.executable, "without nice: normal priority")
             self.assertNotIn("preexec_fn", call[1])
 
+    def test_parse_mix_refuses_nan_and_inf(self):
+        """F335: --mix weights must be finite."""
+        for bad in ("a=nan", "a=inf", "a=1,b=-inf", "b=NaN"):
+            with self.assertRaises(SystemExit, msg=bad) as ctx:
+                tiny_gpt.parse_mix(bad, ["a", "b"])
+            self.assertIn("finite", str(ctx.exception.code), bad)
+        self.assertEqual(tiny_gpt.parse_mix("a=2.5,b=0", ["a", "b"]), {"a": 2.5, "b": 0.0})
+
 
 if __name__ == "__main__":
     unittest.main()
