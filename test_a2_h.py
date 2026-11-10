@@ -458,6 +458,59 @@ class Audit2PipelineTools(unittest.TestCase):
                           {"tool": "gamma", "url": "", "status": None, "ok": False, "error": "no url"}])
         self.assertEqual(report["redirected"], [])  # the stripped url is the one reported
 
+    def test_edit_weights_copy_drops_the_training_state(self):
+        """F377: the edited copy is an inference file; it keeps neither the optimizer state nor the source's
+        averaged (EMA) weights, a second, unedited copy of every weight. main runs on a tiny model; the search
+        for candidates (collect, loop_stats, quick_bpb) is replaced so that one candidate always wins."""
+        import torch
+        import edit_weights as ew
+        model = T.TestOtherScripts.model(seed=3)
+        obj = {"model": model.state_dict(), "step": 7, "checkpoint_type": "training",
+               "metrics": {"history": [1], "last_eval": {"loss": 2.0, "step": 7}},
+               "optimizer": {"state": 1}, "rng": {"python": 1}, "batcher": {"pos": 1}, "interval": {"n": 1},
+               "ema": {"decay": 0.99, "state": {k: v.clone() for k, v in model.state_dict().items()}}}
+        prompts = [(0,) + tuple(1 + (3 * r + c) % 40 for c in range(8)) for r in range(8)]
+
+        class Stats:
+            def __init__(self, dim):
+                self.dim = dim
+
+            def effect(self, li):
+                diff = torch.randn(self.dim, generator=torch.Generator().manual_seed(li)).double()
+                return diff, diff
+
+        calls = []
+
+        def loop_stats(seqs, start, eos):  # the original's two scores first, then a lower share per candidate
+            calls.append(len(seqs))
+            share = 0.5 if len(calls) <= 2 else 0.5 - 0.01 * len(calls)
+            return {"repeat_token_share": share, "looping_texts": 0.0, "texts": len(seqs)}
+
+        saved = {}
+        dst = os.path.join(self.tmp, "edited.pt")
+        with unittest.mock.patch.object(ew.tg, "load_for_inference",
+                                        return_value=(model, T.CharTok(), model.cfg, obj)), \
+                unittest.mock.patch.object(ew.tg, "resolve_dataset", return_value="dataset"), \
+                unittest.mock.patch.object(ew, "prompts_from_validation", return_value=prompts), \
+                unittest.mock.patch.object(ew.cm, "validation_documents", return_value=[("md", 0, "text")]), \
+                unittest.mock.patch.object(ew, "collect", return_value=(
+                    Stats(model.cfg.d_model), Stats(model.cfg.ffn_hidden),
+                    {"loop_positions": 5, "fresh_positions": 9})), \
+                unittest.mock.patch.object(ew, "loop_stats", loop_stats), \
+                unittest.mock.patch.object(ew, "quick_bpb", return_value=1.0), \
+                unittest.mock.patch.object(ew.tg, "atomic_save", lambda out, path: saved.update(out) or path), \
+                redirect_stdout(io.StringIO()) as out:
+            ew.main([os.path.join(self.tmp, "source.pt"), dst, "--device", "cpu", "--prompts", "4",
+                     "--dev-prompts", "4", "--prompt-tokens", "8", "--new-tokens", "8", "--batch", "4",
+                     "--layers", "2"])
+        self.assertIn("Chose layer", out.getvalue())
+        self.assertEqual((saved["checkpoint_type"], saved["step"], saved["metrics"]["last_eval"]),
+                         ("inference", 7, None))
+        self.assertIn("chosen", saved["edit"])
+        self.assertEqual(sorted(set(obj) - set(saved)), ["batcher", "ema", "interval", "optimizer", "rng"])
+        self.assertIn("ema", obj, "the loaded checkpoint dict itself is left as it was")
+        self.assertTrue(os.path.exists(os.path.join(self.tmp, "edited_edit.json")))
+
 
 if __name__ == "__main__":
     unittest.main()

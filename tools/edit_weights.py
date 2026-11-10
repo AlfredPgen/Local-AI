@@ -382,7 +382,7 @@ def main(argv=None):
     out["edit"] = record
     out["metrics"] = edited_metrics(obj.get("metrics"))
     out["checkpoint_type"] = "inference"
-    for key in ("optimizer", "optimizer_param_names", "scaler", "rng", "batcher", "interval"):
+    for key in ("optimizer", "optimizer_param_names", "scaler", "rng", "batcher", "interval", "ema"):
         out.pop(key, None)  # an edited copy is for evaluation only, never for --resume
     written = tg.atomic_save(out, dst)
     with open(report, "w", encoding="utf-8") as handle:
