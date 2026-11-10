@@ -4928,6 +4928,19 @@ class TestBenchmarkSuite(unittest.TestCase):
         self.assertIn("~", text)
         self.assertEqual(len(b.read_results(path)), 14)
         self.assertEqual(len(b.latest_rows(b.read_results(path), "tinyGPT_best.pt")), 7)
+        # the same file scored again later, at step 3000 and on medqa only: that step's rows, never a mix of steps
+        read = b.read_results(path)
+        two_steps = read + [dict(read[4], step="3000", accuracy="0.5")]
+        latest = b.latest_rows(two_steps, "tinyGPT_best.pt")
+        self.assertEqual([(r["benchmark"], r["category"], r["step"]) for r in latest], [("medqa", "all", "3000")])
+        self.assertEqual({r["step"] for r in b.latest_rows(two_steps[:7] + two_steps[-1:])}, {"3000"})
+        said = []
+        b.latest_rows(two_steps, "tinyGPT_best.pt", log=said.append)
+        self.assertEqual(len(said), 1)
+        self.assertIn("step 3000", said[0])
+        self.assertIn("humaneval, medcalc, mmlu", said[0])
+        b.latest_rows(read, "tinyGPT_best.pt", log=said.append)
+        self.assertEqual(len(said), 1, "one step: nothing to say")
         item_csv = os.path.join(self.tmp, "items.csv")
         b.write_item_csv(item_csv, [{"id": "a", "correct": True, "tags": ["x", "y"]}, {"id": "b", "extra": 1}])
         with open(item_csv, encoding="utf-8-sig") as handle:

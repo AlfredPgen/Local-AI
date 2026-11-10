@@ -1230,14 +1230,24 @@ def _f(x):
         return None
 
 
-def latest_rows(rows, checkpoint=None):
-    """The most recent result of each (benchmark, category) for one checkpoint (default: the last one run)."""
+def latest_rows(rows, checkpoint=None, log=None):
+    """The most recent result of each (benchmark, category) for one checkpoint (default: the last one run), from
+    the training step of its last run only: a checkpoint file scored again at a later step never has rows of
+    different steps mixed. `log` (print) is told which benchmarks that leaves out."""
     if checkpoint:
         want = os.path.basename(checkpoint).lower()
         rows = [r for r in rows if os.path.basename(r["checkpoint"].replace("\\", "/")).lower() == want]
     elif rows:
         last = rows[-1]["checkpoint"]
         rows = [r for r in rows if r["checkpoint"] == last]
+    if rows:
+        step = rows[-1]["step"]
+        kept = [r for r in rows if r["step"] == step]
+        older = sorted({r["benchmark"] for r in rows} - {r["benchmark"] for r in kept})
+        if older and log:
+            log(f"Only the results of step {step} are used; scored at older steps only and left out: "
+                f"{', '.join(older)}")
+        rows = kept
     best = {}
     for r in rows:
         best[(r["benchmark"], r["category"])] = r
@@ -1266,7 +1276,7 @@ def cmd_plot(args):
                          "axes.titlecolor": vp.INK, "figure.facecolor": vp.SURFACE, "legend.fontsize": 7,
                          "legend.frameon": False})
     os.makedirs(args.out_dir, exist_ok=True)
-    latest = latest_rows(rows, args.checkpoint)
+    latest = latest_rows(rows, args.checkpoint, log=print)
     if not latest:
         raise SystemExit(f"No results for {args.checkpoint} in {args.results}.")
     ck = os.path.basename(latest[0]["checkpoint"].replace("\\", "/"))
