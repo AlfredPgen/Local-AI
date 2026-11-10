@@ -3793,15 +3793,15 @@ def write_safetensors(tensors, path, metadata=None):
     """Minimal writer for the safetensors format (8-byte header length, JSON
     header, raw little-endian data). No pickle, so loading can never run code."""
     import struct
-    header, blobs, offset = {}, [], 0
+    header, kept, offset = {}, [], 0
     for name in sorted(tensors):
         t = tensors[name].detach().cpu().contiguous()
         if t.dtype not in _ST_DTYPES:
             raise ValueError(f"unsupported dtype {t.dtype} for {name}")
-        raw = (t.view(torch.int16) if t.dtype == torch.bfloat16 else t).numpy().tobytes()
-        header[name] = {"dtype": _ST_DTYPES[t.dtype], "shape": list(t.shape), "data_offsets": [offset, offset + len(raw)]}
-        blobs.append(raw)
-        offset += len(raw)
+        size = t.numel() * t.element_size()
+        header[name] = {"dtype": _ST_DTYPES[t.dtype], "shape": list(t.shape), "data_offsets": [offset, offset + size]}
+        kept.append(t)
+        offset += size
     header["__metadata__"] = {str(k): str(v) for k, v in (metadata or {}).items()}
     encoded = json.dumps(header, separators=(",", ":")).encode("utf-8")
     encoded += b" " * (-len(encoded) % 8)
@@ -3809,8 +3809,9 @@ def write_safetensors(tensors, path, metadata=None):
     with open(tmp, "wb") as handle:
         handle.write(struct.pack("<Q", len(encoded)))
         handle.write(encoded)
-        for raw in blobs:
-            handle.write(raw)
+        for t in kept:  # each tensor's own memory, without a bytes copy of the model (numpy has no bfloat16)
+            flat = (t.view(torch.int16) if t.dtype == torch.bfloat16 else t).reshape(-1)
+            handle.write(memoryview(flat.numpy()).cast("B"))
     os.replace(tmp, path)
 
 

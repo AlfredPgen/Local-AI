@@ -41,6 +41,11 @@ def budget_of(gib):
                                       return_value=(int(gib * GIB), f"{gib:g} GiB (test)"))
 
 
+def glob_tmp(folder):
+    """Temporary files of an interrupted write (<name>.tmp-<pid>) in `folder`."""
+    return sorted(name for name in os.listdir(folder) if ".tmp-" in name)
+
+
 class Audit2TinyGptB(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -458,3 +463,51 @@ class Audit2TinyGptB(unittest.TestCase):
         args = tiny_gpt.parse_args(["--name", "x", "--out-dir", self.tmp, "--stop-after-steps", "3"])
         self.assertEqual(args.stop_after_steps, 3)
         self.assertIsNone(tiny_gpt.parse_args(["--name", "x", "--out-dir", self.tmp]).stop_after_steps)
+
+    def _safetensors_samples(self):
+        torch.manual_seed(3)
+        return {"f32": torch.randn(5, 7), "f16": torch.randn(4, 3).half(), "bf16": torch.randn(6, 2).bfloat16(),
+                "i64": torch.arange(11), "i32": torch.arange(6, dtype=torch.int32).reshape(2, 3),
+                "i16": torch.arange(5, dtype=torch.int16), "u8": torch.arange(9, dtype=torch.uint8),
+                "bool": torch.tensor([[True, False], [False, True]]), "scalar": torch.tensor(2.5),
+                "empty": torch.empty(0, 4), "strided": torch.randn(6, 8)[::2, 1::3], "grad": torch.nn.Parameter(
+                    torch.randn(3, 3))}
+
+    def test_write_safetensors_streams_the_tensors(self):
+        """F373: write_safetensors writes each tensor's memory straight to the file (no bytes copy of the whole
+        model first); the file is byte for byte what the copying writer produced."""
+        import struct
+        import tracemalloc
+        tensors = self._safetensors_samples()
+        path = os.path.join(self.tmp, "samples.safetensors")
+        tiny_gpt.write_safetensors(tensors, path, {"format": "tinyGPT", "n": 3})
+        # the reference: the format written by hand with a full copy of every tensor
+        header, blobs, offset = {}, [], 0
+        for name in sorted(tensors):
+            t = tensors[name].detach().cpu().contiguous()
+            raw = (t.view(torch.int16) if t.dtype == torch.bfloat16 else t).numpy().tobytes()
+            header[name] = {"dtype": tiny_gpt._ST_DTYPES[t.dtype], "shape": list(t.shape),
+                            "data_offsets": [offset, offset + len(raw)]}
+            blobs.append(raw)
+            offset += len(raw)
+        header["__metadata__"] = {"format": "tinyGPT", "n": "3"}
+        encoded = json.dumps(header, separators=(",", ":")).encode("utf-8")
+        encoded += b" " * (-len(encoded) % 8)
+        with open(path, "rb") as handle:
+            self.assertEqual(handle.read(), struct.pack("<Q", len(encoded)) + encoded + b"".join(blobs))
+        back, meta = tiny_gpt.read_safetensors(path)
+        self.assertEqual(meta, {"format": "tinyGPT", "n": "3"})
+        for name, t in tensors.items():
+            self.assertEqual((back[name].dtype, back[name].shape), (t.dtype, t.shape), name)
+            self.assertTrue(torch.equal(back[name], t.detach()), name)
+        self.assertEqual(glob_tmp(self.tmp), [], "no temporary file is left")
+        # 16 MiB of weights: the writer allocates far less than a copy of them
+        big = {"w": torch.zeros(4 * 2 ** 20), "v": torch.ones(2 ** 20).bfloat16()}
+        tracemalloc.start()
+        try:
+            tiny_gpt.write_safetensors(big, os.path.join(self.tmp, "big.safetensors"))
+            peak = tracemalloc.get_traced_memory()[1]
+        finally:
+            tracemalloc.stop()
+        self.assertLess(peak, 2 * 2 ** 20, f"{peak:,} bytes allocated while writing 18 MiB of tensors")
+        self.assertEqual(os.path.getsize(os.path.join(self.tmp, "big.safetensors")) % 8, 0)
