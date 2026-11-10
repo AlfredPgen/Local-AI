@@ -275,3 +275,68 @@ class Audit2TinyGptB(unittest.TestCase):
         with budget_of(0.01), self.assertRaises(SystemExit) as caught:
             tiny_gpt.plan_run(tiny, manifest, CPU, torch.bfloat16)
         self.assertIn("does not fit in memory even at batch 1", str(caught.exception))
+
+    def test_time_budget_retries_memory_options_for_a_given_shape(self):
+        """F347: with an explicit shape or --init-from (fixed_cfg) an out-of-memory speed test is repeated with
+        activation checkpointing first, then with the micro-batch halved, as on the ladder; only a shape that fits
+        with nothing is an error."""
+        one = {"tokenizer": {"vocab_size": 16384},
+               "sources": {"md": {"train": {"tokens": 1_000_000_000}, "doc_tokens_percentiles": {"90": 1000}}}}
+        seen = []
+
+        def measure(fails):
+            def fake(cfg, micro, accum, device, amp_dtype, attn_pref="auto", warmup=2, timed=3, checkpointing=False,
+                     loss_chunk=0, settings=None):
+                seen.append((cfg.d_model, cfg.n_layers, micro, checkpointing))
+                if fails(micro, checkpointing):
+                    raise RuntimeError("CUDA out of memory (simulated)")
+                return micro * accum * cfg.ctx * tiny_gpt.count_params(cfg)[0] * 1e-13, GIB
+            return fake
+
+        def plan(argv, fails, fixed_cfg=None):
+            del seen[:]
+            args = tiny_gpt.parse_args(["--name", "x", "--compile", "off", "--time-budget-hours", "1"] + argv)
+            with budget_of(64), \
+                    unittest.mock.patch.object(tiny_gpt, "measure_seconds_per_step", side_effect=measure(fails)), \
+                    unittest.mock.patch.object(tiny_gpt, "sustained_speed", return_value=(None, "no table")), \
+                    unittest.mock.patch.object(tiny_gpt, "have_triton", return_value=False):
+                return tiny_gpt.plan_with_time_budget(args, one, CPU, None, fixed_cfg=fixed_cfg)
+
+        # explicit shape, out of memory unless checkpointing: one retry, no halving
+        cfg, st, lines = plan(["--d-model", "512"], lambda micro, ck: not ck)
+        self.assertEqual(cfg.d_model, 512)
+        self.assertTrue(st["activation_checkpointing"])
+        self.assertEqual([ck for _, _, _, ck in seen], [False, True])
+        self.assertTrue(any("d_model 512 ran out of memory in the speed test; measured again with activation "
+                            "checkpointing on" in ln for ln in lines), lines)
+        # only --layers given: the notes name the planned width, never 'd_model None'
+        cfg_l, st_l, lines_l = plan(["--layers", "5"], lambda micro, ck: not ck)
+        self.assertTrue(st_l["activation_checkpointing"])
+        self.assertFalse(any("None" in ln for ln in lines_l), lines_l)
+        self.assertTrue(any(ln.startswith("time budget: d_model ") and "ran out of memory in the speed test; "
+                            "measured again with activation checkpointing on" in ln for ln in lines_l), lines_l)
+        # checkpointing switched off on the command line: the micro-batch is halved instead
+        cfg_h, st_h, lines_h = plan(["--d-model", "512", "--activation-checkpointing", "off"],
+                                    lambda micro, ck: micro > 4)
+        self.assertEqual((st_h["micro_batch"], st_h["activation_checkpointing"]), (4, False))
+        self.assertTrue(all(not ck for _, _, _, ck in seen))
+        # --init-from: the checkpoint's architecture is measured (not a ladder shape), with the same retries
+        fixed = tiny_gpt.ModelConfig(vocab_size=16384, ctx=256, d_model=192, n_layers=3, n_heads=6, n_kv_heads=6)
+        cfg_f, st_f, lines_f = plan([], lambda micro, ck: not ck, fixed_cfg=fixed)
+        self.assertEqual((cfg_f.d_model, cfg_f.n_layers, cfg_f.ctx), (192, 3, 256))
+        self.assertTrue(st_f["activation_checkpointing"])
+        self.assertEqual({(d, layers) for d, layers, _, _ in seen}, {(192, 3)})
+        self.assertTrue(any("d_model 192 ran out of memory" in ln for ln in lines_f), lines_f)
+        # nothing helps: the error of the explicit branch, after checkpointing and every halving were tried
+        with self.assertRaises(SystemExit) as caught:
+            plan(["--d-model", "512"], lambda micro, ck: True)
+        self.assertIn("runs out of memory on this device even at micro-batch 1", str(caught.exception))
+        self.assertTrue(any(ck for _, _, _, ck in seen))
+        self.assertEqual(seen[-1][2], 1)
+        # a shape the planner itself refuses keeps the planner's message
+        args = tiny_gpt.parse_args(["--name", "x", "--compile", "off", "--time-budget-hours", "1", "--d-model",
+                                    "2560"])
+        with budget_of(1), self.assertRaises(SystemExit) as refused, \
+                unittest.mock.patch.object(tiny_gpt, "sustained_speed", return_value=(None, "no table")):
+            tiny_gpt.plan_with_time_budget(args, one, CPU, None)
+        self.assertIn("does not fit in memory even at batch 1", str(refused.exception))

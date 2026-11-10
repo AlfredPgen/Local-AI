@@ -3334,22 +3334,42 @@ def plan_with_time_budget(args, manifest, device, amp_dtype, fixed_cfg=None, ver
 
     explicit = fixed_cfg is not None or any(v is not None for v in (args.d_model, args.layers, args.heads,
                                                                      args.kv_heads))
-    if explicit:
-        chosen_args = args
-        while True:  # the given shape must be measured: on out-of-memory, halve the micro-batch and measure again
+
+    def measured(a):
+        """(reaches the target, tokens, peak, time binds, args): trial(a), and when the speed test runs out of
+        memory the same shape again with activation checkpointing on (unless the command line turned it off),
+        then with the micro-batch halved down to 1, before the shape counts as not fitting (tokens None). Without
+        the retries an out-of-memory error would silently pick a smaller MODEL, or refuse a given shape, where a
+        memory option would do."""
+        while True:
             try:
-                _, tokens, peak, time_binds = trial(chosen_args)
-                break
+                return trial(a) + (a,)
+            except SystemExit:
+                if explicit:  # a given shape the planner refuses: its own message
+                    raise
+                return False, None, 0, True, a
             except RuntimeError as exc:
                 if not is_oom(exc):
                     raise
-                micro = plan_run(chosen_args, manifest, device, amp_dtype, fixed_cfg=fixed_cfg)[1]["micro_batch"]
-                if micro == 1:
-                    raise SystemExit("time budget: this model shape runs out of memory on this device even at "
-                                     "micro-batch 1; choose a smaller --d-model/--layers/--ctx.")
-                notes.append(f"time budget: micro-batch {micro} ran out of memory in the speed test; using "
-                             f"{micro // 2}")
-                chosen_args = halved(chosen_args, micro)
+                c, st, _ = plan_run(a, manifest, device, amp_dtype, fixed_cfg=fixed_cfg)
+                if not st["activation_checkpointing"] and a.activation_checkpointing != "off":
+                    notes.append(f"time budget: d_model {c.d_model} ran out of memory in the speed test; "
+                                 "measured again with activation checkpointing on")
+                    a = argparse.Namespace(**{**vars(a), "activation_checkpointing": "on"})
+                elif st["micro_batch"] > 1:
+                    notes.append(f"time budget: d_model {c.d_model} ran out of memory in the speed test at "
+                                 f"micro-batch {st['micro_batch']}; measured again with {st['micro_batch'] // 2}")
+                    a = halved(a, st["micro_batch"])
+                else:
+                    notes.append(f"time budget: d_model {c.d_model} does not fit in memory even at micro-batch "
+                                 "1 with activation checkpointing; a smaller shape is used")
+                    return False, None, 0, True, a
+
+    if explicit:
+        _, tokens, peak, time_binds, chosen_args = measured(args)  # the given shape must be measured
+        if tokens is None:
+            raise SystemExit("time budget: this model shape runs out of memory on this device even at "
+                             "micro-batch 1; choose a smaller --d-model/--layers/--ctx.")
     else:
         ladder = shape_ladder(int(manifest["tokenizer"]["vocab_size"]))
         top = max(i for i, c in enumerate(ladder) if c.d_model <= cfg.d_model)
@@ -3360,33 +3380,6 @@ def plan_with_time_budget(args, manifest, device, amp_dtype, fixed_cfg=None, ver
                                          "heads": c.n_heads, "kv_heads": c.n_kv_heads})
 
         results = {}
-
-        def measured(a):
-            """(reaches the target, tokens, peak, time binds, args): trial(a), and when the speed test runs out of
-            memory the same shape again with activation checkpointing on (unless the command line turned it off),
-            then with the micro-batch halved down to 1, before the shape counts as not fitting. Without the
-            retries an out-of-memory error would silently pick a smaller MODEL where a memory option would do."""
-            while True:
-                try:
-                    return trial(a) + (a,)
-                except SystemExit:
-                    return False, 0, 0, True, a
-                except RuntimeError as exc:
-                    if not is_oom(exc):
-                        raise
-                    st = plan_run(a, manifest, device, amp_dtype)[1]
-                    if not st["activation_checkpointing"] and a.activation_checkpointing != "off":
-                        notes.append(f"time budget: d_model {a.d_model} ran out of memory in the speed test; "
-                                     "measured again with activation checkpointing on")
-                        a = argparse.Namespace(**{**vars(a), "activation_checkpointing": "on"})
-                    elif st["micro_batch"] > 1:
-                        notes.append(f"time budget: d_model {a.d_model} ran out of memory in the speed test at "
-                                     f"micro-batch {st['micro_batch']}; measured again with {st['micro_batch'] // 2}")
-                        a = halved(a, st["micro_batch"])
-                    else:
-                        notes.append(f"time budget: d_model {a.d_model} does not fit in memory even at micro-batch "
-                                     "1 with activation checkpointing; a smaller shape is used")
-                        return False, 0, 0, True, a
 
         def ok(i):
             if i not in results:
@@ -3411,9 +3404,10 @@ def plan_with_time_budget(args, manifest, device, amp_dtype, fixed_cfg=None, ver
                                 "on this data; it trains on what the data supports"))
         _, tokens, peak, time_binds, chosen_args = results[best]  # with the memory options the retries settled on
     # the cap is passed (and named in the plan) only when the time, not the data, limits the tokens; without it the
-    # plan is the one the speed test measured
-    cfg, settings, lines = plan_run(chosen_args, manifest, device, amp_dtype, token_cap=tokens if time_binds else None,
-                                    fixed_cfg=fixed_cfg, verbose=verbose)
+    # plan is the one the speed test measured (tokens None: the smallest ladder shape did not fit, nothing to train)
+    cfg, settings, lines = plan_run(chosen_args, manifest, device, amp_dtype,
+                                    token_cap=(tokens or 0) if time_binds else None, fixed_cfg=fixed_cfg,
+                                    verbose=verbose)
     # the shape note sits in the 'token budget D' line, which a warning or note printed before it can shift
     shape_note = ("largest ladder shape that satisfies the data AND the time budget" if not explicit
                   else "command-line values, tokens capped by the time budget" if time_binds
