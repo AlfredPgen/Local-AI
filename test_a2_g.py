@@ -774,6 +774,13 @@ class Audit2FinetuneTools(unittest.TestCase):
                 posttrain.main(common + ["--base", other, "--reuse-sft"])
             self.assertIn("R_sft.pt", str(caught.exception.code))
             self.assertEqual(calls, [])
+            # --overwrite beside --reuse-sft changes nothing, so the message must not offer it as a way out
+            with self.assertRaises(SystemExit) as again:
+                posttrain.main(common + ["--base", other, "--reuse-sft", "--overwrite"])
+            self.assertEqual(str(again.exception.code), str(caught.exception.code))
+            self.assertEqual(calls, [])
+            self.assertIn("without --reuse-sft", str(caught.exception.code))
+            self.assertNotIn("or with --overwrite", str(caught.exception.code))
             posttrain.main(common + ["--base", base])
             self.assertEqual([c[0] for c in calls[:-1]], ["sft", "dpo"], "without --reuse-sft: as before")
 

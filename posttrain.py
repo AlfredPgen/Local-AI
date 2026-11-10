@@ -366,8 +366,8 @@ def reusable_sft(args):
     same_base = os.path.normcase(str(info.get("base", ""))) == os.path.normcase(os.path.abspath(args.base))
     if info.get("method") != "sft" or not same_base:
         raise SystemExit(f"--reuse-sft: {path} is not an SFT checkpoint made from {args.base} (method "
-                         f"{info.get('method')}, base {info.get('base')}); run without --reuse-sft, or with "
-                         "--overwrite to replace it.")
+                         f"{info.get('method')}, base {info.get('base')}); run without --reuse-sft, adding "
+                         "--overwrite to replace the file.")
     print(f"reusing {path}: SFT of {info.get('base')} on {info.get('data')} ({info.get('examples')} examples, "
           f"{info.get('epochs')} epochs, created {obj.get('created')})")
     return path
