@@ -325,6 +325,18 @@ class Audit2FinetuneTools(unittest.TestCase):
             self.assertNotEqual(pair["chosen"][3:].lower(), pair["rejected"][3:].lower(), pair)
         self.assertEqual({p["rejected"] for p in m_dpo}, {"C. Tibia", "D. Ulna"})
 
+    def test_posttrain_eval_before_data_names_the_missing_file(self):
+        """F178: `posttrain.py eval` without eval_mcq.jsonl ends with the 'run data first' message, not with a
+        FileNotFoundError traceback."""
+        import posttrain
+        empty = os.path.join(self.tmp, "no_posttrain_data")
+        os.makedirs(empty)
+        with self.assertRaises(SystemExit) as caught:
+            posttrain.main(["eval", os.path.join(self.tmp, "x.pt"), "--data-dir", empty, "--device", "cpu"])
+        message = str(caught.exception.code)
+        self.assertIn(os.path.join(empty, "eval_mcq.jsonl"), message)
+        self.assertIn("posttrain.py data", message)
+
     def test_posttrain_reuse_sft(self):
         """F163: posttrain run --reuse-sft skips SFT when <name>_sft.pt is an SFT made from this --base, and DPO
         starts from it; with another --base it exits; without the flag SFT runs as before."""

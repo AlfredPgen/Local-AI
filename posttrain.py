@@ -292,11 +292,15 @@ def build_data(args):
 # eval
 # ---------------------------------------------------------------------------
 def evaluate(checkpoints, args):
+    path = os.path.join(args.data_dir, "eval_mcq.jsonl")
+    if not os.path.isfile(path):
+        raise SystemExit(f"{path} is missing: run `python posttrain.py data` first.")
     import finetune
     import tiny_gpt
     device = tiny_gpt.select_device(args.device)
     amp_dtype, amp_name, _ = tiny_gpt.choose_precision(device, "auto", training=False)  # scoring only
-    evals = [json.loads(line) for line in open(os.path.join(args.data_dir, "eval_mcq.jsonl"), encoding="utf-8")]
+    with open(path, encoding="utf-8") as handle:
+        evals = [json.loads(line) for line in handle]
     mcq = [{"category": r["category"].split(":")[0], "difficulty": "unrated",
             "prompt": finetune.TEMPLATE.format(prompt=r["prompt"]), "answer": r["answer"],
             "distractors": r["distractors"]} for r in evals]
