@@ -1897,8 +1897,10 @@ def _structural_line(line, next_line=None):
     without sentence-final punctuation whose next non-blank line is a paragraph
     (>= 80 characters): "Materials and Methods" or "Etymology" before its section
     text stays; the category lists that end web articles (short line after short
-    line) are still boilerplate. Callers pass that next line; without it the
-    heading rule is off."""
+    line) are still boilerplate. A heading starts with a letter or a digit and
+    holds none of < > | `: "<!-- Start of picture text -->", a table row or a
+    banner in markup before a paragraph is not one. Callers pass that next line;
+    without it the heading rule is off."""
     if not re.search(r"[A-Za-z0-9]", line) or line.startswith("#"):
         return True
     if any(mark in line for mark in _MATHS_MARKS):
@@ -1908,7 +1910,8 @@ def _structural_line(line, next_line=None):
         return False
     if line.isupper():
         return True
-    return (next_line is not None and len(next_line) >= 80 and not line.endswith(tuple(_SENTENCE_END)))
+    return (next_line is not None and len(next_line) >= 80 and line[0].isalnum()
+            and not any(c in line for c in "<>|`") and not line.endswith(tuple(_SENTENCE_END)))
 
 
 def _next_nonblank(lines, i):
@@ -1939,7 +1942,7 @@ def _boilerplate_candidate(stripped, lines, idx):
         return True
     if stripped.isupper():
         return False
-    if stripped.endswith(_SENTENCE_ENDS):
+    if stripped.endswith(_SENTENCE_ENDS) or not stripped[0].isalnum() or any(c in stripped for c in "<>|`"):
         return True
     return len(_next_nonblank(lines, idx)) < 80
 

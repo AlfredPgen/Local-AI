@@ -2117,6 +2117,10 @@ class TestFixes(unittest.TestCase):
         self.assertFalse(sl("This item is not available for download.", para), "a sentence is not a heading")
         self.assertFalse(sl("one two three four five six seven eight nine", para), "more than 8 words")
         self.assertFalse(sl("Please sign in to access the full text", "Category: x"))
+        self.assertFalse(sl("<!-- Start of picture text -->", para), "markup before a paragraph is not a heading")
+        self.assertFalse(sl("| a | b |", para), "nor is a table row")
+        self.assertFalse(sl("`pip install` instructions", para), "nor a line with code marks")
+        self.assertTrue(sl("Chap. 5 Diagonalization", para))
         lines = ["Materials and Methods", "", para, "Category: Genetics", "", "Category: Biology"]
         self.assertEqual(data_prep._next_nonblank(lines, 0), para)
         self.assertEqual(data_prep._next_nonblank(lines, 3), "Category: Biology")
