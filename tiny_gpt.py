@@ -94,10 +94,13 @@ class Tee:
             self.console.flush()
         except (OSError, ValueError):
             pass
-        if not self.log.closed:
-            self.log.write(text)
-            if "\n" in text:
-                self.log.flush()
+        try:
+            if not self.log.closed:
+                self.log.write(text)
+                if "\n" in text:
+                    self.log.flush()
+        except (OSError, ValueError):  # a full or lost disk: the line is missing from the log, the run goes on
+            pass
         return len(text)
 
     def flush(self):
