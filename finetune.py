@@ -49,10 +49,6 @@ sys.path.insert(0, HERE)
 import tiny_gpt  # noqa: E402
 
 
-def _hms(seconds):
-    seconds = int(max(seconds, 0))
-    return f"{seconds // 3600}:{seconds % 3600 // 60:02d}:{seconds % 60:02d}"
-
 TEMPLATE = "### Question:\n{prompt}\n\n### Answer:\n"
 
 
@@ -278,11 +274,8 @@ def train(args):
               "the left, then the end of the answer")
 
     if args.mode == "dpo":
-        # The reference is the starting model and never changes: score every pair once with the model itself
-        # before its first update (log ref(c), log ref(r): two numbers per pair, exactly what a frozen copy would
-        # give), so no copy of the weights is kept and no reference forward runs per step.
+        # the reference is the starting model; score every pair once before the first update
         model.eval()
-        reference = model
         with torch.no_grad():
             for items in (train_items, val_items):
                 i = 0
@@ -292,8 +285,8 @@ def train(args):
                     try:
                         xc, yc = batch_tensors([c for c, *_ in chunk], device)
                         xr, yr = batch_tensors([r for _, r, *_ in chunk], device)
-                        rc = sequence_logp(reference, xc, yc, amp_dtype, device).tolist()
-                        rr = sequence_logp(reference, xr, yr, amp_dtype, device).tolist()
+                        rc = sequence_logp(model, xc, yc, amp_dtype, device).tolist()
+                        rr = sequence_logp(model, xr, yr, amp_dtype, device).tolist()
                     except RuntimeError as exc:
                         if not is_oom(exc) or mem["micro"] == 1:
                             raise
@@ -305,7 +298,6 @@ def train(args):
                         continue
                     items[i:i + len(chunk)] = [(c, r, a, b) for (c, r, *_), a, b in zip(chunk, rc, rr)]
                     i += len(chunk)
-        del reference
         model.train()
         free_memory(device)
     val_items.sort(key=item_length)  # held-out batches of similar length: less padding, same averages
@@ -412,7 +404,8 @@ def train(args):
                 recent = running[-50:]
                 print(f"  ... step {step:,}/{total:,} | epoch {epoch} | train loss {sum(recent) / len(recent):.4f} "
                       f"(last {len(recent)} steps) | lr {schedule.lr_at(step):.2e} | {rate:.2f} s/step | "
-                      f"elapsed {_hms(now - t0)} | left {_hms(rate * (total - step))}", flush=True)
+                      f"elapsed {tiny_gpt.fmt_hms(now - t0)} | left {tiny_gpt.fmt_hms(rate * (total - step))}",
+                      flush=True)
                 last_beat = now
         val_loss, val_info = evaluate_items(val_items)
         history.append({"epoch": epoch, "step": step, "train_loss": sum(running) / len(running),
