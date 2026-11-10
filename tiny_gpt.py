@@ -3559,7 +3559,9 @@ def parse_args(argv=None):
     g.add_argument("--activation-checkpointing", choices=("auto", "on", "off"), default="auto",
                    help="recompute each block in the backward pass instead of storing its activations: much less "
                         "memory, 21-32 %% more step time (auto: only when the model would not otherwise fit with a "
-                        "micro-batch of about 2,048 tokens, 2 sequences at ctx 1024); may be changed on --resume")
+                        "micro-batch of about 2,048 tokens, 2 sequences at ctx 1024; on Apple GPUs (MPS) at ctx >= "
+                        "2048 auto prefers it, since the attention scores dominate memory); may be changed on "
+                        "--resume")
     g.add_argument("--loss-chunk-tokens", type=int,
                    help="compute the output layer and loss this many tokens at a time, so the full tokens x "
                         "vocabulary table never exists (0 = off; default: auto, %d when it is needed to fit); may be "
