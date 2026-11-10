@@ -369,6 +369,24 @@ class Audit2TinyGptA(unittest.TestCase):
         self.assertIn("at least ctx+1 = 17", str(ctx.exception.code))
         self.assertEqual(tiny_gpt.EvalSet({"a": np.arange(17)}, 16, 32).windows["a"].shape, (1, 17))
 
+    def test_atomic_save_failure_keeps_the_old_file_and_removes_the_temp(self):
+        """F269 (guard): a write that fails inside atomic_save (disk full during torch.save) leaves the previous
+        file as it was and no temp file behind; the error reaches the caller."""
+        path = os.path.join(self.tmp, "atomic.pt")
+        tiny_gpt.atomic_save({"step": 1, "w": torch.arange(4)}, path)
+
+        def failing_save(obj, handle, *args, **kwargs):
+            handle.write(b"half a checkpoint")
+            raise OSError(28, "No space left on device")
+
+        with unittest.mock.patch("torch.save", failing_save):
+            with self.assertRaises(OSError) as ctx:
+                tiny_gpt.atomic_save({"step": 2, "w": torch.arange(8)}, path)
+        self.assertEqual(ctx.exception.errno, 28)
+        old = torch.load(path, weights_only=True)
+        self.assertEqual((old["step"], old["w"].tolist()), (1, [0, 1, 2, 3]))
+        self.assertEqual(glob.glob(path + ".tmp-*"), [])
+        self.assertEqual(os.listdir(os.path.dirname(path)).count("atomic.pt"), 1)
 
 
 if __name__ == "__main__":
