@@ -388,6 +388,19 @@ class Audit2TinyGptA(unittest.TestCase):
         self.assertEqual(glob.glob(path + ".tmp-*"), [])
         self.assertEqual(os.listdir(os.path.dirname(path)).count("atomic.pt"), 1)
 
+    def test_load_any_passes_mmap_to_the_safe_loader(self):
+        """F405 (the tiny_gpt half): load_any(path, trust, mmap) hands mmap to safe_load; the default reads the
+        file as before."""
+        path = os.path.join(self.tmp, "any.pt")
+        torch.save({"step": 3, "w": torch.arange(4)}, path)
+        with unittest.mock.patch.object(tiny_gpt, "safe_load", wraps=tiny_gpt.safe_load) as safe:
+            self.assertEqual(tiny_gpt.load_any(path)["step"], 3)
+            self.assertEqual(safe.call_args[0], (path, False, False))
+            mapped = tiny_gpt.load_any(path, trust=False, mmap=True)
+            self.assertEqual(safe.call_args[0], (path, False, True))
+        self.assertEqual(mapped["w"].tolist(), [0, 1, 2, 3])
+        del mapped
+
 
 if __name__ == "__main__":
     unittest.main()

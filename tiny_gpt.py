@@ -3802,11 +3802,11 @@ def load_exported(folder):
             "metrics": config.get("metrics", {}), "exported_from": config.get("source_checkpoint")}
 
 
-def load_any(path, trust=False):
-    """A .pt checkpoint (safe loader) or an --export folder."""
+def load_any(path, trust=False, mmap=False):
+    """A .pt checkpoint (safe loader; mmap as in safe_load) or an --export folder."""
     if os.path.isdir(path) and os.path.isfile(os.path.join(path, "model.safetensors")):
         return load_exported(path)
-    return safe_load(path, trust)
+    return safe_load(path, trust, mmap)
 
 
 def _home_short(path):
