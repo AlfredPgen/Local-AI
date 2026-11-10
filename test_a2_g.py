@@ -400,6 +400,47 @@ class Audit2FinetuneTools(unittest.TestCase):
             entries[a] = {"path": "datasets/other", "fingerprint": "f2"}
             asked.clear()
 
+    def test_compare_models_verdict_is_for_all_documents(self):
+        """F026: the verdict reports the 'all documents' line also when a source of the dataset is itself named
+        'all' (its own line carries the same label)."""
+        import re
+        import compare_models
+        folder = os.path.join(self.tmp, "verdict_all")
+        os.makedirs(folder)
+        a, b = (os.path.join(folder, name) for name in ("A.pt", "B.pt"))
+        for path in (a, b):
+            open(path, "wb").close()
+        # source 'all': B a little better on every document; source 'wiki': A far better; all 60 together: A better
+        docs = [(source, k, f"{source} " + "x" * (200 + 10 * k)) for source in ("all", "wiki") for k in range(30)]
+        rate = {("A", "all"): 1.05, ("B", "all"): 1.0, ("A", "wiki"): 0.5, ("B", "wiki"): 1.0}
+
+        def nll(model, tok, text, device, amp=None):
+            n = len(text.encode("utf-8"))
+            return rate[model, text.split()[0]] * n, n
+        notes = []
+        with unittest.mock.patch.object(tiny_gpt, "load_for_inference",
+                                        lambda path, device, trust=False: ("A" if path == a else "B", None, None,
+                                                                           {"dataset": None})), \
+                unittest.mock.patch.object(compare_models, "validation_documents",
+                                           lambda dataset, per_source, max_chars, layout=None, parity=None: docs), \
+                unittest.mock.patch.object(compare_models, "training_overlap",
+                                           lambda docs, dataset, layout, trained_on: (set(), {}, {})), \
+                unittest.mock.patch.object(compare_models, "document_nll", nll), \
+                unittest.mock.patch.object(tiny_gpt, "record_experiment", lambda folder, row: notes.append(row)), \
+                unittest.mock.patch.object(sys, "argv", ["compare_models.py", a, b, "--dataset", folder, "--device",
+                                                         "cpu", "--reps", "200"]), \
+                redirect_stdout(io.StringIO()) as out:
+            compare_models.main()
+        lines = out.getvalue().splitlines()
+        table = [line.split() for line in lines if line.startswith("all ")]
+        self.assertEqual([row[1] for row in table], ["60", "30"], "all documents, then the source named 'all'")
+        self.assertLess(float(table[0][4]), 0)
+        self.assertGreater(float(table[1][4]), 0)
+        verdict = next(line for line in lines if line.startswith("Verdict: "))
+        self.assertTrue(verdict.startswith("Verdict: A is better"), verdict)
+        self.assertEqual(re.search(r"bits per byte ([+-][\d.]+),", verdict).group(1), table[0][4])
+        self.assertTrue(notes[0]["notes"].startswith("A is better"), notes)
+
     def test_validation_documents_by_parity_are_disjoint(self):
         """F381 (compare_models half): validation_documents(parity=0) and (parity=1) take documents with an
         even / odd index within their source, so two tools never share one whatever number each asks for; a
