@@ -420,10 +420,10 @@ def choose_attention(device, cfg, amp_dtype, preference="auto"):
 
     'gqa_native' passes enable_gqa=True to SDPA; 'repeat_kv' expands K/V to all
     query heads (a small copy) first. Both compute the same attention. Which is
-    faster depends on which SDPA kernels this PyTorch build dispatches to: on
-    PyTorch 2.5.1 for Windows, enable_gqa falls back to the MATH kernel and was
-    measured ~13x slower per attention call (RTX 3070 Laptop GPU). So on CUDA
-    the two are simply timed on the model's real head shape and the faster wins.
+    faster depends on which SDPA kernels this PyTorch build dispatches to: some
+    builds (measured on Windows CUDA) send enable_gqa to the slow MATH kernel, so
+    on CUDA the two are timed on the model's real head shape and the faster wins;
+    the run header prints the timing.
     """
     if cfg.n_kv_heads == cfg.n_heads:
         return "repeat_kv", "multi-head attention (no K/V sharing)"
@@ -488,7 +488,7 @@ class ModelConfig:
     dropout: float = 0.0
     norm_eps: float = 1e-6
     tie_embeddings: bool = True
-    # QK-norm (an RMSNorm over each query and key head before RoPE). False is the dense default every checkpoint
+    # QK-norm (an RMSNorm over each query and key head before RoPE). False is the default every checkpoint
     # written before the field existed loads with; the planner turns it on for new runs.
     qk_norm: bool = False
     # Mixture of experts (n_experts 0 = the dense SwiGLU every checkpoint written before these fields existed
@@ -612,8 +612,8 @@ class RotaryEmbedding(nn.Module):
         """pos: the absolute position of the first token in q and k (KV-cached decoding)."""
         t = q.size(-2)
         cos, sin = self.cos[:, :, pos:pos + t], self.sin[:, :, pos:pos + t]
-        # The rotation is done in fp32 and rounded once at the end: cos/sin stay exact and the products are not
-        # rounded to bf16 twice (about a quarter less rounding error). torch.compile fuses the casts, so under
+        # The rotation is done in fp32 and rounded once at the end: cos/sin stay exact, so the products are
+        # rounded to bf16 once instead of twice. torch.compile fuses the casts, so under
         # autocast this costs nothing; in eager mode it is about 1% more memory traffic.
         qf, kf = q.float(), k.float()
         return ((qf * cos + rotate_half(qf) * sin).to(q.dtype), (kf * cos + rotate_half(kf) * sin).to(k.dtype))
@@ -1463,11 +1463,8 @@ def ema_decay_at(decay, n):
     b_n = d (1 - d^(n-1)) / (1 - d^n). So b_1 = 0 (the first update copies the
     weights, whatever the average held before), b_2 = d / (1 + d) (two snapshots
     nearly equal), and b_n -> d once d^n is small (after ~460 updates at d = 0.990).
-    Without it the average started as a copy of the initial weights still held
-    d^n of them: 74 % after 30 updates (step 300), which made the EMA score 1.1
-    bits per byte worse than the raw weights in the 2026-11-05 A/B. n None: the
-    plain decay d (an average restored from a checkpoint written before the update
-    count was saved, which continues exactly as it did)."""
+    n None: the plain decay d (an average restored from a checkpoint written before
+    the update count was saved, which continues exactly as it did)."""
     if n is None:
         return decay
     if n <= 1:
@@ -2337,11 +2334,9 @@ def watermark_green(key, prev_token, vocab_size, gamma=0.25, _cache={}):
 
 class IncrementalDecoder:
     """Next-token logits for a growing token list, with a KV cache for TinyGPT models:
-    the prompt is processed once, then one token per step. When the text outgrows the
-    context window, the cache restarts from the last 7/8 of a window (the old way
-    recomputed the last full window at every step, so texts longer than the context
-    can differ slightly from it). Other models (wrappers, legacy) are recomputed in
-    full at every step, as before."""
+    the prompt is processed once, then one token per step. Texts longer than the
+    context are approximated by restarting the cache from the last 7/8 window;
+    non-TinyGPT models (wrappers, legacy) are recomputed in full each step."""
 
     def __init__(self, model, device, amp_dtype=None):
         self.model, self.device, self.amp_dtype = model, device, amp_dtype
