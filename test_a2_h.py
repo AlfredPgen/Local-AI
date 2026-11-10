@@ -533,6 +533,33 @@ class Audit2PipelineTools(unittest.TestCase):
         self.assertEqual(ew.per_text_rates([empty], start, eos, keep_empty=False).tolist(), [])
         self.assertFalse(hasattr(compare_edit, "per_text_rates"), "compare_edit uses edit_weights' function")
 
+    def test_keyword_batch_tools_share_one_reader(self):
+        """F382: kw_check and term_evidence read a batch file with one read_batch -> [(term, category)]. The
+        kw_check report on a sample batch is a guard: the same before and after."""
+        import kw_check
+        import term_evidence
+        here = os.path.join(self.tmp, "kw")
+        os.makedirs(here, exist_ok=True)
+        with open(os.path.join(here, "keywords.txt"), "w", encoding="utf-8", newline="\n") as handle:
+            handle.write("# genomics\nPolymerase\nhelicase\n\n# proteins\n=MET\n")
+        batch = os.path.join(here, "batch.txt")
+        with open(batch, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write("#comment without a space\n# genomics\npolymerase\n=MET\nab\ngen*\n  polymerase  \n\n"
+                         "# new things\nsome new phrase\n+-\nof the\n")
+        with unittest.mock.patch.object(kw_check, "HERE", here):
+            report = json.loads(self.tool_main(kw_check, ["kw_check.py", batch, "0"]))
+        self.assertEqual(report, {
+            "batch": batch, "terms": 8, "flagged": 6,
+            "flags": {"+-": ["parse_error: no words"], "=MET": ["duplicate"], "ab": ["short_token"],
+                      "gen*": ["short_token", "short_prefix"], "of the": ["short_token"],
+                      "polymerase": ["duplicate", "in_batch_twice", "duplicate"]},
+            "categories": {"genomics": 5, "new things": 3}, "new_categories": ["new things"]})
+        rows = [("polymerase", "genomics"), ("=MET", "genomics"), ("ab", "genomics"), ("gen*", "genomics"),
+                ("polymerase", "genomics"), ("some new phrase", "new things"), ("+-", "new things"),
+                ("of the", "new things")]
+        self.assertEqual(term_evidence.read_batch(batch), rows)
+        self.assertIs(kw_check.read_batch, term_evidence.read_batch)
+
 
 if __name__ == "__main__":
     unittest.main()

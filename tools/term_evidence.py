@@ -17,21 +17,12 @@ import time
 
 import requests
 
+from _kw import read_batch
+
 API = "https://www.ebi.ac.uk/europepmc/webservices/rest/search"
 UA = "tinyGPT-keyword-check/1.0 (personal research)"
 _lock = threading.Lock()
 _last = [0.0]
-
-
-def read_batch(path):
-    out, cat = [], None
-    for line in open(path, encoding="utf-8").read().splitlines():
-        s = line.strip()
-        if s.startswith("# "):
-            cat = s[2:].strip()
-        elif s and not s.startswith("#"):
-            out.append((s, cat))
-    return out
 
 
 def query_for(term):
