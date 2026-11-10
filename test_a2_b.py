@@ -545,6 +545,27 @@ class Audit2DataPrep(unittest.TestCase):
             self.assertEqual([d[0] for d in docs], ids)
             self.assertEqual(stats["skipped"]["keyword_min_hits"], skipped)
 
+    # ---------------- F093: callers that never use the RE2 patterns do not build them ----------------
+    def test_keyword_filter_without_prefilter_builds_no_patterns(self):
+        terms = ["=MET", "*mab", "genom*", "Hardy-Weinberg", "genetic drift"]
+        texts = [("", "Genomes and genomics under the Hardy Weinberg law."), ("MET", "A met gene; genetic drift."),
+                 ("Antibodies", "Rituximab and other drugs."), ("", "A football match report.")]
+        folder = self.folder("f093")
+        cache = os.path.join(folder, "keywords.txt.prefilter.json")
+        with unittest.mock.patch.object(data_prep, "_prefilter_patterns",
+                                        side_effect=AssertionError("patterns were built")):
+            plain = data_prep.KeywordFilter(terms, ["football"], 1, 1, prefilter=False, pattern_cache=cache)
+        self.assertEqual(plain.include_patterns, [])
+        self.assertFalse(os.path.exists(cache), "nothing is built, so nothing is cached")
+        self.assertFalse(data_prep._use_prefilter(plain))
+        full = data_prep.KeywordFilter(terms, ["football"], 1, 1)
+        self.assertEqual(full.include_patterns, data_prep._prefilter_patterns(terms))
+        self.assertTrue(plain.active)
+        for title, text in texts:
+            self.assertEqual(plain.evaluate(title, text), full.evaluate(title, text))
+        with self.assertRaises(TypeError):  # keyword-only: a seventh positional argument is still pattern_cache's place
+            data_prep.KeywordFilter(terms, [], 1, 1, 3, 100_000, None, False)
+
 
 if __name__ == "__main__":
     unittest.main()

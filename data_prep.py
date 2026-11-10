@@ -848,14 +848,17 @@ class KeywordFilter:
     reveal their topic early). The include terms also compile to a few RE2
     patterns (include_patterns) for the vectorised C++ prefilter over
     Arrow/Parquet/JSONL data; exclusions are decided by the full check only.
+    A caller that only calls evaluate() passes prefilter=False: the patterns
+    are then not built (minutes for a long keyword file) and include_patterns
+    is empty, which every reader takes as 'the full check decides'.
     """
 
     def __init__(self, include, exclude, min_hits=3, min_distinct=2, title_weight=3,
-                 scan_chars=100_000, pattern_cache=None):
+                 scan_chars=100_000, pattern_cache=None, *, prefilter=True):
         self.include, self.exclude = include, exclude
         self.min_hits, self.min_distinct = max(0, min_hits), max(0, min_distinct)
         self.title_weight, self.scan_chars = title_weight, scan_chars
-        self.include_patterns = cached_prefilter_patterns(include, pattern_cache)
+        self.include_patterns = cached_prefilter_patterns(include, pattern_cache) if prefilter else []
         self._include = _TermMatcher(include) if include else None
         self._exclude = _TermMatcher(exclude) if exclude else None
 
