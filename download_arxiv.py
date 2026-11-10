@@ -286,14 +286,16 @@ def harvest(set_spec, cache_dir, update=False):
             state.update(json.load(handle))
     # "bytes": the cache size when the progress file was last written. Anything after it is a page whose
     # progress was never saved (possibly a gzip member cut off by a crash): cut it off, it is fetched again.
-    # Progress files from before this field have none and are left as they are.
     if state.get("bytes") is not None and os.path.isfile(cache_path) and os.path.getsize(cache_path) > state["bytes"]:
         with open(cache_path, "r+b") as handle:
             handle.truncate(state["bytes"])
+    if state["complete"] and update and not state.get("harvested_until"):
+        # no day to continue from: the set starts again (its cache file is removed just below)
+        print(f"  [{set_spec}] cached: {state['records']:,} records, but not the day that harvest ended; "
+              "harvesting the set again", flush=True)
+        state.update(token=None, pages=0, records=0, bytes=0, complete=False, **{"from": None})
     if state["complete"] and update:
-        # sets finished before this field existed: the state file was last written when the harvest ended
-        since = state.get("harvested_until") or datetime.date.fromtimestamp(os.path.getmtime(state_path)).isoformat()
-        start = (datetime.date.fromisoformat(since) - datetime.timedelta(days=3)).isoformat()
+        start = (datetime.date.fromisoformat(state["harvested_until"]) - datetime.timedelta(days=3)).isoformat()
         print(f"  [{set_spec}] cached: {state['records']:,} records; adding papers new or changed since {start}",
               flush=True)
         state.update(token=None, complete=False, **{"from": start})
@@ -369,9 +371,8 @@ _ID_PREFIX = '{"id": "'
 
 
 def _cache_lines(path, warn=True):
-    """(line number, line) of one metadata cache file. A damaged file (a page
-    cut off by a crash before the cache was guarded against that) is read up
-    to the damage, with a warning, instead of stopping the run."""
+    """(line number, line) of one metadata cache file. A damaged file is read
+    up to the damage, with a warning, instead of stopping the run."""
     try:
         with gzip.open(path, "rt", encoding="utf-8") as handle:
             for number, line in enumerate(handle):
@@ -469,6 +470,11 @@ def build_list(cache_dir, sets, keyword_path, min_hits, min_distinct, path):
 
 
 _TEXT_COLUMNS = ("title", "abstract")  # most of list.tsv: about 1.3 GB of memory for the whole arXiv list
+
+
+def _list_columns(path):
+    with open(path, encoding="utf-8") as handle:
+        return handle.readline().rstrip("\n").split("\t")
 
 
 def read_list(path, text=True):
@@ -954,7 +960,8 @@ def main(argv=None):
         was_complete = os.path.isfile(state) and json.load(open(state, encoding="utf-8")).get("complete")
         harvest(set_spec, cache, update=args.update)
         fresh |= not was_complete or args.update
-    if fresh or args.rebuild_list or not os.path.isfile(list_path):
+    # a list.tsv without the abstract column (the abstract goes into each paper's Markdown) is selected again
+    if fresh or args.rebuild_list or not os.path.isfile(list_path) or "abstract" not in _list_columns(list_path):
         rows = build_list(cache, args.sets, args.keywords, args.min_hits, args.min_distinct, list_path)
     else:
         rows = read_list(list_path, text=False)
@@ -981,15 +988,6 @@ def main(argv=None):
     if args.max_papers:
         todo = todo[:max(0, args.max_papers - len([1 for r in rows if done.get(r["id"]) == "ok"]))]
     add_list_text(list_path, todo)  # the title and abstract go into each paper's Markdown
-    missing = {r["id"] for r in todo if "abstract" not in r}  # a list.tsv written before it held the abstracts
-    if missing:
-        abstracts = {}
-        for rec in read_cache(cache, args.sets):
-            if rec["id"] in missing:  # only the papers to fetch: the whole cache would take GBs
-                abstracts[rec["id"]] = rec["abstract"]
-        for row in todo:
-            row.setdefault("abstract", abstracts.get(row["id"], ""))
-        del abstracts
     per_paper = max(MIN_REQUEST_GAP, sum(args.wait) / 2)
     print(f"{len(rows) - len(todo):,} papers done or not wanted; fetching {len(todo):,} into {args.out} "
           f"(a random {args.wait[0]:g}-{args.wait[1]:g} s pause before each paper: about {3600 / per_paper:,.0f} "

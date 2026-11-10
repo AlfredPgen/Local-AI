@@ -216,6 +216,62 @@ class Audit2Downloaders(unittest.TestCase):
         self.assertEqual(os.listdir(out), ["2101.00002__Allele selection.md"])
         self.assertEqual(["abstract" in row for row in loaded], [False, True, False])
 
+    OAI_PAGE = (b'<OAI-PMH xmlns="http://www.openarchives.org/OAI/2.0/"><ListRecords><record><header/><metadata>'
+                b'<arXiv xmlns="http://arxiv.org/OAI/arXiv/"><id>2101.00009</id><created>2021-01-01</created>'
+                b'<title>Genetic drift and allele selection</title><categories>q-bio.PE</categories>'
+                b'<abstract>Genetic drift changes allele frequencies under selection.</abstract>'
+                b'</arXiv></metadata></record></ListRecords></OAI-PMH>')
+
+    def test_f119_old_list_is_rebuilt_and_old_state_is_harvested_again(self):
+        """F119: a list.tsv from before it held the abstracts is selected again (not patched up from the
+        cache), and --update on a finished set whose progress file has no 'harvested_until' harvests the
+        set again instead of guessing the date from the file's time stamp."""
+        # main: the old list has no abstract column
+        old_columns = [c for c in ax.LIST_COLUMNS if c != "abstract"]
+        out, meta = self.arxiv_folders([["2101.00001", "biology", "1.500", "2021", "q-bio.PE", "", "An old row"]],
+                                       columns=old_columns)
+        with gzip.open(os.path.join(meta, "metadata", "q-bio.jsonl.gz"), "wt", encoding="utf-8") as f:
+            f.write(json.dumps({"id": "2101.00009", "created": "2021-01-01", "title": "Genetic drift and allele "
+                                "selection", "abstract": "Genetic drift changes allele frequencies under selection.",
+                                "categories": "q-bio.PE", "license": "", "doi": ""}) + "\n")
+        keywords = os.path.join(self.tmp, "kw.txt")
+        with open(keywords, "w", encoding="utf-8") as f:
+            f.write(self.KEYWORDS)
+        text = self.run_arxiv(out, meta, "--list-only", "--keywords", keywords)
+        with open(os.path.join(meta, "list.tsv"), encoding="utf-8") as f:
+            lines = f.read().splitlines()
+        self.assertEqual(lines[0].split("\t"), ax.LIST_COLUMNS)
+        self.assertEqual([line.split("\t")[0] for line in lines[1:]], ["2101.00009"])
+        self.assertEqual(lines[1].split("\t")[-1], "Genetic drift changes allele frequencies under selection.")
+        self.assertIn("1 of 1 papers match", text)
+        # a list with the abstract column is read, not rebuilt
+        text = self.run_arxiv(out, meta, "--list-only", "--keywords", keywords)
+        self.assertIn("(--rebuild-list selects again)", text)
+        # harvest: a finished set without 'harvested_until', updated
+        cache = os.path.join(self.tmp, "cache")
+        os.makedirs(cache)
+        with gzip.open(os.path.join(cache, "q-bio.jsonl.gz"), "wt", encoding="utf-8") as f:
+            f.write(json.dumps({"id": "0901.00001", "title": "old"}) + "\n")
+        size = os.path.getsize(os.path.join(cache, "q-bio.jsonl.gz"))
+        with open(os.path.join(cache, "q-bio.state.json"), "w", encoding="utf-8") as f:
+            json.dump({"token": None, "pages": 3, "records": 1, "complete": True, "bytes": size}, f)
+        urls = []
+
+        def get(url, **kwargs):
+            urls.append(url)
+            return self.OAI_PAGE
+
+        with unittest.mock.patch.object(ax, "http_get", side_effect=get), redirect_stdout(io.StringIO()) as buf:
+            self.assertEqual(ax.harvest("q-bio", cache, update=True), 1)
+        self.assertEqual(len(urls), 1)
+        self.assertNotIn("from=", urls[0])  # the whole set, not a window from a guessed date
+        self.assertIn("harvesting the set again", buf.getvalue())
+        with open(os.path.join(cache, "q-bio.state.json"), encoding="utf-8") as f:
+            state = json.load(f)
+        self.assertEqual((state["complete"], state["records"], state["pages"]), (True, 1, 1))
+        self.assertRegex(state["harvested_until"], r"^\d{4}-\d{2}-\d{2}$")
+        self.assertEqual([r["id"] for r in ax.read_cache(cache, ["q-bio"])], ["2101.00009"])
+
     # ---------------- download_pmc.py ----------------
     QUERY = "OPEN_ACCESS:y AND TEST:y"
 
