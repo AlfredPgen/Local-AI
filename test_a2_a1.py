@@ -251,6 +251,37 @@ class Audit2TinyGptA(unittest.TestCase):
             self.assertIn("finite", str(ctx.exception.code), bad)
         self.assertEqual(tiny_gpt.parse_mix("a=2.5,b=0", ["a", "b"]), {"a": 2.5, "b": 0.0})
 
+    def test_energy_is_not_integrated_over_a_long_gap(self):
+        """F300: a gap between two samples far longer than the sampling period (the laptop slept with the run
+        alive) counts as at most 3 periods + 15 s of power; the CPU share still divides by the true gap."""
+        class Proc:
+            cpu_seconds = 0.0
+
+            def cpu_times(self):
+                return (self.cpu_seconds, 0.0)
+
+            def memory_info(self):
+                return types.SimpleNamespace(rss=0)
+
+        meter = tiny_gpt.EnergyMeter(torch.device("cpu"), 40.0, 125.0, period=5.0)
+        meter._stop.set()  # no background samples: only the ones taken below
+        meter._thread.join(timeout=15)
+        meter.gpu_measured, meter._gpu_watts = True, lambda: 80.0
+        meter._proc, meter._ncpu, meter._cpu_time = Proc(), 4, 0.0
+        meter.wh, meter.pending = {"gpu": 0.0, "cpu": 0.0, "ram": 0.0}, {}
+        Proc.cpu_seconds = 0.5 * 8 * 3600 * 4  # half of the 4 CPUs for the 8 hours
+        meter._last_t -= 8 * 3600
+        meter._sample()
+        cap_hours = (3 * 5.0 + 15) / 3600
+        self.assertAlmostEqual(meter.wh["gpu"], 80.0 * cap_hours, places=9)  # 0.67 Wh, not 640
+        self.assertAlmostEqual(meter.wh["cpu"], 0.5 * 40.0 * cap_hours, places=4)
+        self.assertAlmostEqual(sum(meter.pending.values()), meter.wh["gpu"] + meter.wh["cpu"], places=9)
+        before = meter.wh["gpu"]
+        meter._last_t -= 10  # an ordinary gap is counted in full
+        meter._sample()
+        self.assertGreaterEqual(meter.wh["gpu"] - before, 80.0 * 10 / 3600)
+        self.assertLess(meter.wh["gpu"] - before, 80.0 * 12 / 3600)
+
 
 if __name__ == "__main__":
     unittest.main()

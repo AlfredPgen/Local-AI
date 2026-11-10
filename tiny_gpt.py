@@ -1921,13 +1921,16 @@ class EnergyMeter:
 
     def _sample_locked(self):
         now = time.perf_counter()
-        hours = (now - self._last_t) / 3600
+        dt = now - self._last_t
+        # a gap far longer than the period means the machine slept with the run alive: no power was drawn
+        # then, so at most three periods (plus 15 s of slack) are counted
+        hours = min(dt, 3 * self.period + 15) / 3600
         gpu_w = self._gpu_watts() if self.gpu_measured else None
         cpu_w = ram_w = 0.0
         if self._proc is not None:
             try:
                 cpu_time = sum(self._proc.cpu_times()[:2])
-                share = (cpu_time - self._cpu_time) / max((now - self._last_t) * self._ncpu, 1e-9)
+                share = (cpu_time - self._cpu_time) / max(dt * self._ncpu, 1e-9)
                 self._cpu_time = cpu_time
                 cpu_w = self.cpu_watts * min(max(share, 0.0), 1.0)
                 ram_w = RAM_W_PER_GB * self._proc.memory_info().rss / 2 ** 30
