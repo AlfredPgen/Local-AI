@@ -68,10 +68,9 @@ import unicodedata
 
 import numpy as np
 
-HERE = os.path.dirname(os.path.abspath(__file__))
 FORMAT = "tiny_gpt_dataset"
 FORMAT_VERSION = 1
-MD_PATTERNS_DEFAULT = ("*.md", "*.markdown", "*.rmd", "*.Rmd", "*.txt",  # and gzip-compressed copies of them:
+MD_PATTERNS_DEFAULT = ("*.md", "*.markdown", "*.rmd", "*.txt",  # and gzip-compressed copies of them:
                        "*.md.gz", "*.markdown.gz", "*.rmd.gz", "*.txt.gz")
 SOURCE_NAME_RE = r"[A-Za-z][A-Za-z0-9_-]{0,31}"
 
@@ -1322,7 +1321,6 @@ def _jsonl_arrow_block(block, row0, path, text_key, title_key, id_key, kw):
 def _jsonl_python(path, text_key, title_key, id_key, max_docs, stats, kw, batch, skip_rows, report):
     """The line-by-line reader (json.loads); skips the first `skip_rows` records.
     Records without an id are named <file>:<record number>, as in the fast reader."""
-    import gzip
     opener = gzip.open if path.lower().endswith(".gz") else open
     with opener(path, "rt", encoding="utf-8", errors="replace") as handle:
         pending, seen = [], 0
@@ -1656,16 +1654,15 @@ def _examine(title, text, use_kw):
         reason = "replacement_chars"
     elif bad:
         text = strip_replacement_chars(text, cleaning)
-    if reason:
-        pass
-    elif not text:
-        reason = "empty"
-    elif len(text) < cfg["min_chars"]:
-        reason = "too_short"
-    elif use_kw and _W_KW is not None:
-        keep, why, hits, terms = _W_KW.evaluate(title, text)
-        if not keep:
-            reason = why
+    if not reason:
+        if not text:
+            reason = "empty"
+        elif len(text) < cfg["min_chars"]:
+            reason = "too_short"
+        elif use_kw and _W_KW is not None:
+            keep, why, hits, terms = _W_KW.evaluate(title, text)
+            if not keep:
+                reason = why
     key, line_keys = None, []
     if not reason:
         key = normalised_hash(text)  # the exact-duplicate key, also kept in docs.tsv (see --keep-split-from)
@@ -2207,7 +2204,7 @@ def _prepare(args, state=None):
 
         workers = _Pool(args.workers, _init_worker, (kw, {
             "language": args.language, "max_replacement_ratio": args.max_replacement_ratio,
-            "min_chars": args.min_chars, "exact_dedup": args.exact_dedup, "boilerplate": args.boilerplate,
+            "min_chars": args.min_chars, "boilerplate": args.boilerplate,
             "boilerplate_min_len": args.boilerplate_min_len}), args.worker_warmup)
         for name, kind in readers:
             stats = _new_stats()
@@ -2544,7 +2541,7 @@ def _prepare(args, state=None):
             notes.append("No document passed the filters, so nothing was tokenized.")
         if args.scan_only or nothing_kept:
             _write_ledger(out, ledger, docs, split_of, roots, dropped, None)
-            _write_report(out, args, sources, ledger, duplicates, removed_lines, line_examples, keyword_totals,
+            _write_report(out, args, sources, duplicates, removed_lines, line_examples, keyword_totals,
                           None, {}, forced_train, [], None, t_start, scan_only=args.scan_only, notes=notes)
             _cleanup(work, spool_dir, args.keep_work)
             if nothing_kept and not args.scan_only:
@@ -2760,7 +2757,7 @@ def _prepare(args, state=None):
 
     tok_stats = _tokenizer_stats(tok, docs, split_of, doc_tokens)
     tok_stats["distribution"] = tok_dist
-    _write_report(out, args, sources, ledger, duplicates, removed_lines, line_examples, keyword_totals,
+    _write_report(out, args, sources, duplicates, removed_lines, line_examples, keyword_totals,
                   manifest, tok_stats, forced_train, leakage, tok, t_start, notes=notes)
     _cleanup(work, spool_dir, args.keep_work)
     t = manifest["totals"]
@@ -3332,19 +3329,16 @@ def superbpe_extend(proto, corpus, extra, max_words=4, sample_tokens=20_000_000,
     return out, info
 
 
-def _token_distribution(out, tok, top=30, sample_tokens=40):
+def _token_distribution(out, tok, top=30):
     """How the vocabulary is used on the finished training token files: the most
-    frequent pieces, how many pieces cover 50/90/99% of all tokens, unused and
-    rare pieces, token share by piece type, the longest pieces, and the first
-    tokens of each source exactly as the model sees them. Also writes
-    token_counts.tsv (every piece with its count) for plots."""
-    _, arrays = open_token_files(out, verify=False)
+    frequent pieces, how many pieces cover 50/90/99% of all tokens, unused
+    pieces, token share by piece type and characters per token for each source.
+    Also writes token_counts.tsv (every piece with its count) for plots."""
+    manifest, arrays = open_token_files(out, verify=False)
     counts = np.zeros(tok.vocab_size, dtype=np.int64)
-    samples = {}
-    for name, arr in arrays["train"].items():
+    for arr in arrays["train"].values():
         for s in range(0, len(arr), 1 << 26):  # 64M tokens at a time: bounded memory on any dataset size
             counts += np.bincount(np.asarray(arr[s:s + (1 << 26)]), minlength=tok.vocab_size)[:tok.vocab_size]
-        samples[name] = [tok.piece(int(i)) for i in np.asarray(arr[:sample_tokens])]
     total = int(counts.sum())
     order = np.argsort(-counts, kind="stable")
     cum = np.cumsum(counts[order]) / max(total, 1)
@@ -3353,27 +3347,21 @@ def _token_distribution(out, tok, top=30, sample_tokens=40):
     by_cat = collections.Counter()
     for i, c in enumerate(counts):
         by_cat[cats[i]] += int(c)
-    words = [i for i in range(tok.vocab_size) if cats[i] not in ("special", "byte fallback", "whitespace/newline")]
-    longest = sorted(words, key=lambda i: (-len(tok.piece(i).replace("\u2581", "")), i))[:12]
     with open(os.path.join(out, "token_counts.tsv"), "w", encoding="utf-8", newline="\n") as handle:
         handle.write("id\tpiece\ttype\tcount\tshare\n")
         for i in order:
             handle.write(f"{int(i)}\t{tok.piece(int(i))!r}\t{cats[i]}\t{int(counts[i])}\t"
                          f"{counts[i] / max(total, 1):.3e}\n")
-    manifest, _ = open_token_files(out, verify=False)
     per_source = {}
     for name, entry in manifest["sources"].items():
         t = entry.get("train") or {}
         if t.get("tokens") and t.get("chars"):
             per_source[name] = t["chars"] / t["tokens"]
-    curve = np.cumsum(counts[order]) / max(total, 1)
     plot_ranks = np.unique(np.geomspace(1, tok.vocab_size, 300).astype(int))
     return {"total": total, "vocab": tok.vocab_size, "cover": cover, "unused": int((counts == 0).sum()),
-            "chars_per_token": per_source, "curve": [(int(r), float(curve[r - 1])) for r in plot_ranks],
-            "rare": int(((counts > 0) & (counts < 100)).sum()),
+            "chars_per_token": per_source, "curve": [(int(r), float(cum[r - 1])) for r in plot_ranks],
             "top": [(tok.piece(int(i)), int(counts[i]), counts[i] / max(total, 1)) for i in order[:top]],
-            "by_type": {k: v / max(total, 1) for k, v in by_cat.most_common()},
-            "longest": [(tok.piece(i), int(counts[i])) for i in longest], "samples": samples}
+            "by_type": {k: v / max(total, 1) for k, v in by_cat.most_common()}}
 
 
 def _distribution_line(d):
@@ -3646,7 +3634,7 @@ def _write_ledger(out, ledger, docs, split_of, roots, dropped, doc_tokens):
     os.replace(tmp, path)
 
 
-def _write_report(out, args, sources, ledger, duplicates, removed_lines, line_examples, keyword_totals,
+def _write_report(out, args, sources, duplicates, removed_lines, line_examples, keyword_totals,
                   manifest, tok_stats, forced_train, leakage, tok, t_start, scan_only=False, notes=()):
     L = []
     L.append(f"# Dataset report: {os.path.basename(out)}\n")
