@@ -2788,7 +2788,7 @@ def estimate_train_bytes(cfg, micro_batch, amp=True, checkpointing=False, loss_c
         logits += t * cfg.d_model * (4 + 4)  # the (FP32) hidden states and their gradient, kept whole
     state = 8 * n_total if optimizer != "muon" else 8 * (n_total - n_nonembed) + 4 * n_nonembed
     weight_cache = (2 if amp else 0) * n_total
-    return int((activations + logits) * 1.0 + n_total * 8 + weight_cache + state + 400 * 2 ** 20)
+    return int(activations + logits + n_total * 8 + weight_cache + state + 400 * 2 ** 20)
 
 
 def memory_options(checkpointing="auto", loss_chunk=None):
