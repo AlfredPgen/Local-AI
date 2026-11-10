@@ -299,8 +299,7 @@ def harvest(set_spec, cache_dir, update=False):
         print(f"  [{set_spec}] cached: {state['records']:,} records; adding papers new or changed since {start}",
               flush=True)
         state.update(token=None, complete=False, **{"from": start})
-    elif state["complete"]:
-        print(f"  [{set_spec}] cached: {state['records']:,} records")
+    elif state["complete"]:  # cached: nothing to fetch, nothing printed (main sums these sets up in one line)
         return state["records"]
     if not state["token"] and not state["pages"] and os.path.exists(cache_path):
         os.remove(cache_path)  # an interrupted first page: start clean
@@ -953,13 +952,17 @@ def main(argv=None):
     os.makedirs(cache, exist_ok=True)
     os.makedirs(args.out, exist_ok=True)
     list_path = os.path.join(args.meta, "list.tsv")
-    fresh = False
+    fresh, cached = False, []  # cached: the record counts of the sets that needed no request
     print(f"Harvesting arXiv metadata for {len(args.sets)} subject areas into {cache} ...", flush=True)
     for set_spec in args.sets:
         state = os.path.join(cache, _set_file(set_spec) + ".state.json")
         was_complete = os.path.isfile(state) and json.load(open(state, encoding="utf-8")).get("complete")
-        harvest(set_spec, cache, update=args.update)
+        records = harvest(set_spec, cache, update=args.update)
+        if was_complete and not args.update:
+            cached.append(records)
         fresh |= not was_complete or args.update
+    if cached:
+        print(f"arXiv metadata: {len(cached)} of {len(args.sets)} sets cached ({sum(cached):,} records)", flush=True)
     # a list.tsv without the abstract column (the abstract goes into each paper's Markdown) is selected again
     if fresh or args.rebuild_list or not os.path.isfile(list_path) or "abstract" not in _list_columns(list_path):
         rows = build_list(cache, args.sets, args.keywords, args.min_hits, args.min_distinct, list_path)

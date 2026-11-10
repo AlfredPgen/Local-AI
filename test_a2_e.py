@@ -287,6 +287,36 @@ class Audit2Downloaders(unittest.TestCase):
         checked = [line for line in buf.getvalue().splitlines() if line.startswith("  checked ")]
         self.assertEqual([line.split(" papers")[0] for line in checked], ["  checked 200,000", "  checked 400,000"])
 
+    def test_f121_cached_sets_are_reported_in_one_line(self):
+        """F121: a start with all metadata cached prints one summary line, not one line per subject area;
+        a set that is harvested or updated keeps its own lines."""
+        out, meta = self.arxiv_folders(self.LISTED, sets=("q-bio", "stat"))
+        with unittest.mock.patch.multiple(ax, pandoc_path=lambda: "pandoc",
+                                          http_get=unittest.mock.Mock(side_effect=AssertionError("no request"))), \
+                redirect_stdout(io.StringIO()) as buf:
+            ax.main(["--out", out, "--meta", meta, "--sets", "q-bio,stat", "--list-only"])
+        text = buf.getvalue()
+        self.assertNotIn("] cached:", text)
+        self.assertIn("arXiv metadata: 2 of 2 sets cached (10 records)", text)
+        self.assertEqual(ax.harvest("q-bio", os.path.join(meta, "metadata")), 5)  # still the number of records
+        # one set cached, one harvested now: the summary counts the cached one, the other prints its progress
+        os.remove(os.path.join(meta, "metadata", "stat.state.json"))
+        with unittest.mock.patch.multiple(ax, pandoc_path=lambda: "pandoc", build_list=lambda *a: [],
+                                          http_get=unittest.mock.Mock(return_value=self.OAI_PAGE)), \
+                redirect_stdout(io.StringIO()) as buf:
+            ax.main(["--out", out, "--meta", meta, "--sets", "q-bio,stat", "--list-only"])
+        text = buf.getvalue()
+        self.assertIn("arXiv metadata: 1 of 2 sets cached (5 records)", text)
+        self.assertIn("  [stat] 1 records, 1 pages", text)
+        # --update: each set says from when it adds papers; no summary of cached sets
+        with unittest.mock.patch.multiple(ax, pandoc_path=lambda: "pandoc", build_list=lambda *a: [],
+                                          http_get=unittest.mock.Mock(return_value=self.OAI_PAGE)), \
+                redirect_stdout(io.StringIO()) as buf:
+            ax.main(["--out", out, "--meta", meta, "--sets", "q-bio", "--list-only", "--update"])
+        text = buf.getvalue()
+        self.assertIn("  [q-bio] cached: 5 records; adding papers new or changed since 2025-12-29", text)
+        self.assertNotIn("sets cached", text)
+
     # ---------------- download_pmc.py ----------------
     QUERY = "OPEN_ACCESS:y AND TEST:y"
 
