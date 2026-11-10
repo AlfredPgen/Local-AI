@@ -1297,6 +1297,40 @@ class Audit2DataPrep(unittest.TestCase):
         self.assertEqual(manifest["tokenizer"]["composition"], dict(kinds))
         self.assertEqual(list(manifest["tokenizer"]["composition"]), list(kinds), "and in the same order")
 
+    # ---------------- F075: the SentencePiece options are one constant ----------------
+    def test_tokenizer_file_records_the_options_of_the_constant(self):
+        """The tokenizer of a build was trained with SPM_TRAIN_OPTIONS: the model file records every one of
+        them (the token files of the golden builds show that the bytes did not change)."""
+        try:
+            from sentencepiece import sentencepiece_model_pb2 as spm_pb
+        except Exception as exc:  # noqa: BLE001 - protobuf is optional for the build itself
+            self.skipTest(f"sentencepiece_model_pb2 not importable ({exc})")
+        import argparse
+        proto = spm_pb.ModelProto()
+        with open(os.path.join(self.plain(), "tokenizer.model"), "rb") as handle:
+            proto.ParseFromString(handle.read())
+        options = dict(data_prep.SPM_TRAIN_OPTIONS)
+        spec, norm = proto.trainer_spec, proto.normalizer_spec
+        self.assertEqual(options.pop("model_type"), "bpe")
+        self.assertEqual(spec.model_type, spm_pb.TrainerSpec.BPE)
+        self.assertAlmostEqual(spec.character_coverage, options.pop("character_coverage"), places=6)
+        self.assertEqual(list(spec.user_defined_symbols), options.pop("user_defined_symbols"))
+        self.assertEqual(norm.name, options.pop("normalization_rule_name"))
+        self.assertEqual(norm.remove_extra_whitespaces, options.pop("remove_extra_whitespaces"))
+        self.assertEqual(options.pop("minloglevel"), 2)  # not stored in the file
+        for name, value in options.items():
+            self.assertEqual(getattr(spec, name), value, name)
+        self.assertEqual(sorted(options), ["allow_whitespace_only_pieces", "bos_id", "byte_fallback", "eos_id",
+                                           "hard_vocab_limit", "max_sentence_length", "pad_id",
+                                           "shuffle_input_sentence", "split_digits", "unk_id"])
+        self.assertEqual(spec.vocab_size, 600)
+        self.assertEqual(spec.input_sentence_size, 6_000_000)
+        with_superbpe = argparse.Namespace(superbpe=True, superbpe_fraction=0.25)
+        self.assertEqual(data_prep.superbpe_extra(700, with_superbpe), 175)
+        self.assertEqual(data_prep.superbpe_extra(1, with_superbpe), 1)
+        self.assertEqual(data_prep.superbpe_extra(700, argparse.Namespace(superbpe=False, superbpe_fraction=0.25)), 0)
+        self.assertEqual(data_prep.superbpe_extra(700, argparse.Namespace()), 0)
+
 
 if __name__ == "__main__":
     unittest.main()

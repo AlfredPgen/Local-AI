@@ -3240,6 +3240,21 @@ def parse_tokenizer_weights(spec, names=None):
     return weights
 
 
+# how every tokenizer is trained (a build here, the estimate in estimate_dataset.py); the callers add input,
+# model_prefix, vocab_size, input_sentence_size and num_threads
+SPM_TRAIN_OPTIONS = dict(
+    model_type="bpe", character_coverage=0.9995, byte_fallback=True, split_digits=True,
+    unk_id=0, bos_id=1, eos_id=2, pad_id=-1, user_defined_symbols=["\n", "\t"],
+    remove_extra_whitespaces=False, allow_whitespace_only_pieces=True,
+    normalization_rule_name="identity", max_sentence_length=16384, hard_vocab_limit=False,
+    shuffle_input_sentence=True, minloglevel=2)
+
+
+def superbpe_extra(vocab, args):
+    """How many of `vocab` pieces are left for SuperBPE's second stage (0 without --superbpe)."""
+    return max(1, round(vocab * args.superbpe_fraction)) if getattr(args, "superbpe", False) else 0
+
+
 def _train_tokenizer(spool2, docs, split_of, sources, vocab, args, work):
     import sentencepiece as spm
     # --tokenizer-weights multiplies a source's share of the sample (default 1: each source in proportion
@@ -3271,21 +3286,14 @@ def _train_tokenizer(spool2, docs, split_of, sources, vocab, args, work):
             for piece in tokenizer_sample_lines(rec["x"], rec["s"], rec["id"], args.seed, keep_prob[rec["s"]]):
                 dst.write(piece + "\n")
                 written[rec["s"]] += len(piece)
-    extra = max(1, round(vocab * args.superbpe_fraction)) if getattr(args, "superbpe", False) else 0
+    extra = superbpe_extra(vocab, args)
     plan = f"{vocab - extra:,} + {extra:,} SuperBPE" if extra else f"{vocab:,}"
     print(f"\nTraining SentencePiece BPE (vocab {plan}) on {sum(written.values()) / 1e6:,.1f}M characters "
           f"from training documents {dict(written)} ...", flush=True)
     t0 = time.time()
     prefix = os.path.join(work, "spm")
-    spm.SentencePieceTrainer.train(
-        input=corpus, model_prefix=prefix, model_type="bpe", vocab_size=vocab - extra,
-        character_coverage=0.9995, byte_fallback=True, split_digits=True,
-        unk_id=0, bos_id=1, eos_id=2, pad_id=-1, user_defined_symbols=["\n", "\t"],
-        remove_extra_whitespaces=False, allow_whitespace_only_pieces=True,
-        normalization_rule_name="identity", max_sentence_length=16384, hard_vocab_limit=False,
-        input_sentence_size=6_000_000, shuffle_input_sentence=True,
-        num_threads=args.threads, minloglevel=2,
-    )
+    spm.SentencePieceTrainer.train(input=corpus, model_prefix=prefix, vocab_size=vocab - extra,
+                                   input_sentence_size=6_000_000, num_threads=args.threads, **SPM_TRAIN_OPTIONS)
     try:  # the model records where and how it was trained (folder, threads): clear that, so identical data
         # gives an identical tokenizer file and dataset fingerprint wherever and however it is built
         from sentencepiece import sentencepiece_model_pb2 as spm_pb
