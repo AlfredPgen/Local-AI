@@ -386,6 +386,12 @@ class Audit2Viewer(unittest.TestCase):
         plan = dict(view_pt.plan_lines(sparse, ck))
         self.assertIn("improving 1.0000 per 1,000 steps", plan)
         self.assertRegex(plan["improving 1.0000 per 1,000 steps"], r"^\d+\.\d{3} per 24 h of training$")
+        # the Plan line of a validation loss that falls, rises, or does not move at all (no "-0.0e+00")
+        for slope, want in ((-0.5, "improving 0.5000 per 1,000 steps"),
+                            (0.5, "not improving (validation up 0.5000 per 1,000 steps)"),
+                            (0.0, "not improving (validation flat: 0 per 1,000 steps)")):
+            moved = [dict(h, val_loss=50.0 + slope * h["step"] / 1000) for h in full]
+            self.assertEqual([head for head, _ in view_pt.plan_lines(moved, ck) if "improving" in head], [want])
         # by source: the last row's bits per byte, one bar each, the share in the label
         fig, ax = one_axes()
         view_pt.panel_sources(ax, full, ck)
@@ -791,6 +797,10 @@ class Audit2Viewer(unittest.TestCase):
                       ("--html", "--out", os.path.join(self.tmp, "x.html")),
                       ("--plot-tokens", "--out", os.path.join(self.tmp, "x.html"))):
             self.assertEqual(viewer_args(path, *flags).out, flags[-1])
+        # --out without an output that uses it is ignored as before, wherever it points
+        for flags in ((), ("--tensor", "token_embedding.weight"), ("--similar", "gene")):
+            self.assertEqual(viewer_args(path, *flags, "--out", os.path.join(missing, "x.png")).out,
+                             os.path.join(missing, "x.png"))
 
     # ---------------- F439 ----------------
     def test_push_finds_the_repository_through_a_linked_folder(self):

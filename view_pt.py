@@ -126,7 +126,8 @@ def parse_args():
         value = getattr(args, name)
         if value and not os.path.exists(value):
             p.error(f"--{name.replace('_', '-')} not found: {value}")
-    if args.out:  # checked here, not when the finished picture is saved
+    # checked here, not when the finished picture is saved; without an output that uses it --out is ignored
+    if args.out and (args.plot or args.plot_tokens or args.html):
         folder = os.path.dirname(os.path.abspath(args.out))
         if not os.path.isdir(folder):
             p.error(f"--out: the folder does not exist: {folder}")
