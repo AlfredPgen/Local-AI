@@ -45,6 +45,7 @@ videos are Creative Commons, and --creative-commons-only keeps only those.
 """
 
 import argparse
+import glob
 import html
 import json
 import os
@@ -266,9 +267,14 @@ def safe_name(text, limit=90):
 # Whisper
 # ---------------------------------------------------------------------------
 def gpu_busy():
-    """True if another job uses the GPU (a training run holds GBs of memory);
-    None without an NVIDIA GPU. Three samples, so a moment of desktop use does
-    not count."""
+    """True if another job uses the GPU (a training run holds GBs of memory, and
+    its <name>.train.lock beside this script counts even before it does); None
+    without an NVIDIA GPU. Three samples, so a moment of desktop use does not
+    count."""
+    sys.path.insert(0, HERE)
+    import data_prep  # not tiny_gpt: that would load torch
+    if any(data_prep._lock_owner_alive(lock) for lock in glob.glob(os.path.join(HERE, "*.train.lock"))):
+        return True
     samples = []
     try:
         for k in range(3):

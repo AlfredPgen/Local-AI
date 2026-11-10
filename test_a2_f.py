@@ -125,6 +125,38 @@ class Audit2DocsYoutubeConvert(unittest.TestCase):
             yt.main([specs[0], "--list-only", "--keywords", "none", "--out", out])
         self.assertEqual(asked, [specs[0]])
 
+    def test_youtube_gpu_busy_sees_train_lock(self):
+        """F442: a live training lock beside the script means the GPU is busy, whatever nvidia-smi shows."""
+        import json
+        import subprocess
+        import youtube_transcripts as yt
+        here = os.path.join(self.tmp, "f442")
+        os.makedirs(here)
+        quiet = subprocess.CompletedProcess([], 0, stdout="5, 100\n", stderr="")  # 5 % used, 100 MiB held
+
+        def no_nvidia(*a, **k):
+            raise OSError("no nvidia-smi")
+
+        path = list(sys.path)
+        try:
+            with unittest.mock.patch.object(yt, "HERE", here), unittest.mock.patch.object(yt.time, "sleep"):
+                with unittest.mock.patch.object(yt.subprocess, "run", return_value=quiet):
+                    self.assertIs(yt.gpu_busy(), False)  # no lock, an idle GPU
+                with unittest.mock.patch.object(yt.subprocess, "run", no_nvidia):
+                    self.assertIsNone(yt.gpu_busy())  # no lock, no NVIDIA GPU
+                with open(os.path.join(here, "other.train.lock"), "w", encoding="utf-8") as handle:
+                    json.dump({"pid": os.getppid()}, handle)
+                with unittest.mock.patch.object(yt.subprocess, "run", return_value=quiet):
+                    self.assertIs(yt.gpu_busy(), True)
+                with unittest.mock.patch.object(yt.subprocess, "run", no_nvidia):
+                    self.assertIs(yt.gpu_busy(), True)
+                with open(os.path.join(here, "other.train.lock"), "w", encoding="utf-8") as handle:
+                    json.dump({"pid": os.getpid()}, handle)  # a lock this process left: not another job
+                with unittest.mock.patch.object(yt.subprocess, "run", return_value=quiet):
+                    self.assertIs(yt.gpu_busy(), False)
+        finally:
+            sys.path[:] = path
+
 
 if __name__ == "__main__":
     unittest.main()
