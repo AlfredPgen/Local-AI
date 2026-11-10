@@ -183,3 +183,34 @@ class Audit2TinyGptB(unittest.TestCase):
         _, _, fixed = self._time_plan(["--time-budget-hours", "1", "--d-model", "512", "--lr", "1e-3", "--lr-scale",
                                        "2"], one)
         self.assertTrue(any("command-line values, tokens capped by the time budget" in ln for ln in fixed), fixed)
+
+    def test_time_budget_names_the_limit_that_binds(self):
+        """F339: a time budget the data does not fill is not called a cap: no 'capped ... by --time-budget-hours',
+        no 'tokens capped by the time budget', and the smallest-shape note says 'on this data', not 'in time'."""
+        one = {"tokenizer": {"vocab_size": 16384},
+               "sources": {"md": {"train": {"tokens": 1_000_000_000}, "doc_tokens_percentiles": {"90": 1000}}}}
+        cfg_n, st_n, _ = self._time_plan([], one)
+        cfg, st, lines = self._time_plan(["--time-budget-hours", "1000"], one)
+        text = "\n".join(lines)
+        self.assertIn("tokens fit in time", text)
+        self.assertNotIn("capped", text)
+        self.assertNotIn("even the smallest shape", text)
+        self.assertEqual((cfg, st), (cfg_n, st_n), "time does not bind: the plan the data gives, as measured")
+        _, st_x, lines_x = self._time_plan(["--time-budget-hours", "1000", "--d-model", "512"], one)
+        self.assertNotIn("capped", "\n".join(lines_x))
+        self.assertEqual(st_x, self._time_plan(["--d-model", "512"], one)[1])
+        # too little data for the smallest shape, plenty of time: the data is the reason
+        tiny = toy_manifest(tokens=50_000, vocab=16384)
+        _, _, lines_d = self._time_plan(["--time-budget-hours", "1000"], tiny)
+        note = [ln for ln in lines_d if "even the smallest shape" in ln]
+        self.assertEqual(len(note), 1, lines_d)
+        self.assertIn("on this data", note[0])
+        self.assertNotIn("in time", note[0])
+        self.assertNotIn("capped", "\n".join(lines_d))
+        # time binds: both say so, as before
+        _, st_h, lines_h = self._time_plan(["--time-budget-hours", "0.01", "--tokens-per-param", "1000"], one)
+        text_h = "\n".join(lines_h)
+        self.assertRegex(text_h, r"capped to [\d,]+ by --time-budget-hours")
+        self.assertIn("cannot reach the tokens-per-parameter target in time", text_h)
+        _, _, lines_e = self._time_plan(["--time-budget-hours", "1", "--d-model", "512"], one)
+        self.assertIn("command-line values, tokens capped by the time budget", "\n".join(lines_e))

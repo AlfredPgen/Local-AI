@@ -3289,7 +3289,8 @@ def plan_with_time_budget(args, manifest, device, amp_dtype, fixed_cfg=None, ver
                      f"by {COMPILE_SPEEDUP:g} (compiled/eager measured on this GPU)")
 
     def trial(shape_args):
-        """(reaches tokens >= r x N, tokens that fit, peak memory of the speed test in bytes) for this shape."""
+        """(reaches tokens >= r x N, tokens that fit, peak memory of the speed test in bytes, whether the time
+        and not the data limits the tokens) for this shape."""
         c, st, _ = plan_run(shape_args, manifest, device, amp_dtype, fixed_cfg=fixed_cfg)
         raw, peak = measure_seconds_per_step(c, st["micro_batch"], st["grad_accum"], device, amp_dtype, args.attn,
                                              checkpointing=st["activation_checkpointing"],
@@ -3307,7 +3308,7 @@ def plan_with_time_budget(args, manifest, device, amp_dtype, fixed_cfg=None, ver
                      + f"; {st['tokens_per_step']:,} tokens/step) -> {fit_tokens:,} tokens fit in time; memory: "
                      f"estimated {est / 2 ** 30:.2f} GiB, probe measured {peak / 2 ** 30:.2f} GiB "
                      f"(ratio {peak / max(est, 1):.2f})")
-        return n * r <= tokens, tokens, peak
+        return n * r <= tokens, tokens, peak, fit_tokens < st["planned_train_tokens"]
 
     def is_oom(exc):  # torch.cuda.OutOfMemoryError and the MPS "out of memory" error are RuntimeErrors
         if "out of memory" not in str(exc).lower():
@@ -3325,7 +3326,7 @@ def plan_with_time_budget(args, manifest, device, amp_dtype, fixed_cfg=None, ver
         chosen_args = args
         while True:  # the given shape must be measured: on out-of-memory, halve the micro-batch and measure again
             try:
-                _, tokens, peak = trial(chosen_args)
+                _, tokens, peak, time_binds = trial(chosen_args)
                 break
             except RuntimeError as exc:
                 if not is_oom(exc):
@@ -3349,7 +3350,7 @@ def plan_with_time_budget(args, manifest, device, amp_dtype, fixed_cfg=None, ver
         results = {}
 
         def measured(a):
-            """(reaches the target, tokens, peak, args measured): trial(a), and when the speed test runs out of
+            """(reaches the target, tokens, peak, time binds, args): trial(a), and when the speed test runs out of
             memory the same shape again with activation checkpointing on (unless the command line turned it off),
             then with the micro-batch halved down to 1, before the shape counts as not fitting. Without the
             retries an out-of-memory error would silently pick a smaller MODEL where a memory option would do."""
@@ -3357,7 +3358,7 @@ def plan_with_time_budget(args, manifest, device, amp_dtype, fixed_cfg=None, ver
                 try:
                     return trial(a) + (a,)
                 except SystemExit:
-                    return False, 0, 0, a
+                    return False, 0, 0, True, a
                 except RuntimeError as exc:
                     if not is_oom(exc):
                         raise
@@ -3373,7 +3374,7 @@ def plan_with_time_budget(args, manifest, device, amp_dtype, fixed_cfg=None, ver
                     else:
                         notes.append(f"time budget: d_model {a.d_model} does not fit in memory even at micro-batch "
                                      "1 with activation checkpointing; a smaller shape is used")
-                        return False, 0, 0, a
+                        return False, 0, 0, True, a
 
         def ok(i):
             if i not in results:
@@ -3394,13 +3395,17 @@ def plan_with_time_budget(args, manifest, device, amp_dtype, fixed_cfg=None, ver
                 best = 0
                 ok(0)
                 notes.append("time budget: even the smallest shape cannot reach the tokens-per-parameter target "
-                             "in time; it trains on what fits")
-        _, tokens, peak, chosen_args = results[best]  # with the memory options the retries settled on
-    cfg, settings, lines = plan_run(chosen_args, manifest, device, amp_dtype, token_cap=tokens, fixed_cfg=fixed_cfg,
-                                    verbose=verbose)
+                             + ("in time; it trains on what fits" if results[0][3] else
+                                "on this data; it trains on what the data supports"))
+        _, tokens, peak, time_binds, chosen_args = results[best]  # with the memory options the retries settled on
+    # the cap is passed (and named in the plan) only when the time, not the data, limits the tokens; without it the
+    # plan is the one the speed test measured
+    cfg, settings, lines = plan_run(chosen_args, manifest, device, amp_dtype, token_cap=tokens if time_binds else None,
+                                    fixed_cfg=fixed_cfg, verbose=verbose)
     # the shape note sits in the 'token budget D' line, which a warning or note printed before it can shift
     shape_note = ("largest ladder shape that satisfies the data AND the time budget" if not explicit
-                  else "command-line values, tokens capped by the time budget")
+                  else "command-line values, tokens capped by the time budget" if time_binds
+                  else "command-line values, ladder defaults for the rest")
     lines = [line.replace("command-line values, ladder defaults for the rest", shape_note)
              if line.startswith("token budget D") else line for line in lines]
     if peak > budget_bytes:
