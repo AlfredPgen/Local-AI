@@ -1779,8 +1779,7 @@ def _examine(title, text, use_kw):
         lines = text.split("\n") if cfg["boilerplate"] != "off" else []
         for idx, line in enumerate(lines):
             stripped = line.strip()
-            if len(stripped) >= cfg["boilerplate_min_len"] and not _structural_line(stripped,
-                                                                                    _next_nonblank(lines, idx)):
+            if len(stripped) >= cfg["boilerplate_min_len"] and _boilerplate_candidate(stripped, lines, idx):
                 k = _line_key(stripped)
                 if k not in seen:
                     seen.add(k)
@@ -1867,9 +1866,9 @@ def _pass2_doc(source, text):
         lines = text.split("\n")
         for idx, ln in enumerate(lines):
             stripped = ln.strip()
-            if len(stripped) >= p["min_len"] and not _structural_line(stripped, _next_nonblank(lines, idx)):
-                k = _line_key(stripped)
-                if k in table:
+            if len(stripped) >= p["min_len"]:
+                k = _line_key(stripped)  # the lookup first: few lines are in the table, the rule runs only for those
+                if k in table and _boilerplate_candidate(stripped, lines, idx):
                     removed.append(k)
                     if p["mode"] == "strip":
                         continue
@@ -1920,6 +1919,29 @@ def _next_nonblank(lines, i):
         if stripped:
             return stripped
     return ""
+
+
+_LETTER_OR_DIGIT_RE = re.compile(r"[A-Za-z0-9]")
+_SENTENCE_ENDS = tuple(_SENTENCE_END)
+
+
+def _boilerplate_candidate(stripped, lines, idx):
+    """not _structural_line(stripped, _next_nonblank(lines, idx)), for the line
+    loops of both passes: the same rule with the cheap tests first, at most
+    nine words split off, and the next line looked up only for the few lines
+    that reach the heading rule. A test holds the two functions together; a
+    change of the rule is made in both."""
+    if stripped.startswith("#") or not _LETTER_OR_DIGIT_RE.search(stripped):
+        return False
+    if "$$" in stripped or "\\begin{" in stripped or "\\end{" in stripped:
+        return False
+    if len(stripped.split(None, 8)) > 8:
+        return True
+    if stripped.isupper():
+        return False
+    if stripped.endswith(_SENTENCE_ENDS):
+        return True
+    return len(_next_nonblank(lines, idx)) < 80
 
 
 def _line_key(line):

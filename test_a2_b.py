@@ -853,6 +853,57 @@ class Audit2DataPrep(unittest.TestCase):
                          [("a.md", "skipped", "duplicate_id"), ("a.md", "train", "")])
         self.assertIn("duplicate_id 1", read_file(os.path.join(out, "report.md")))
 
+    # ---------------- F071: the fast boilerplate test is the structural rule, for every line ----------------
+    def boilerplate_test_lines(self):
+        """Documents (lists of lines) that reach every branch of the rule."""
+        para = "We fitted a linear mixed model to every trait and estimated the additive variance from the kinship."
+        docs = []
+        c = self.corpus()
+        for folder in (c.md, c.notes):
+            for name in sorted(os.listdir(folder))[:12]:
+                docs.append(read_file(os.path.join(folder, name)).split("\n"))
+        heads = ["## Materials and Methods", "-----", "MATERIALS AND METHODS", "$$ \\hat{\\beta} = (X^T X)^{-1} X^T y $$",
+                 "\\begin{equation} E = mc^2", "x \\end{align}", "Materials and Methods", "Etymology",
+                 "This item is not available for download.", "one two three four five six seven eight nine",
+                 "one two three four five six seven eight", "Please sign in to access the full text",
+                 "<!-- Start of picture text -->", "| a | b |", "**Methods**", "(Results)", "`code` sample", "> quoted",
+                 "#hashtag", "1. Introduction", "ÉTUDE", "étude", "A B", "x", "tab\tseparated\twords here",
+                 "nine  words   with    wide     gaps      a  b   c", "UPPER CASE WITH MORE THAN EIGHT WORDS IN THE LINE"]
+        heads += ["Ends with " + ch for ch in ".!?;:,"] + ["Chap. 5 Diagonalization", "Category: Genetics"]
+        for nxt in (para, para[:80], para[:79], "Category: Genetics", ""):
+            for head in heads:
+                docs.append([head, "", nxt])
+                docs.append([head, nxt])
+                docs.append(["  " + head + "  ", "", "", "   " + nxt])
+        docs.append(heads)  # each followed by a short line, the last one by nothing
+        return docs
+
+    def test_boilerplate_candidate_is_the_structural_rule(self):
+        checked = candidates = 0
+        for lines in self.boilerplate_test_lines():
+            for idx, line in enumerate(lines):
+                stripped = line.strip()
+                if not stripped:
+                    continue
+                expected = not data_prep._structural_line(stripped, data_prep._next_nonblank(lines, idx))
+                self.assertEqual(data_prep._boilerplate_candidate(stripped, lines, idx), expected, (stripped, lines))
+                checked += 1
+                candidates += expected
+        self.assertGreater(checked, 1000)
+        self.assertTrue(200 < candidates < checked - 200, (checked, candidates))  # both answers, many times
+        # pass 2 looks the line up first and applies the rule only to a line that is in the table
+        para = "We fitted a linear mixed model to every trait and estimated the additive variance from the kinship."
+        banner, heading = "Please sign in to access the full text", "Materials and Methods"
+        text = "\n".join([heading, "", para, "", banner, "", "## " + banner, "", heading, "", "Short line."])
+        table = {data_prep._line_key(banner): 30, data_prep._line_key(heading): 30,
+                 data_prep._line_key("## " + banner): 30}
+        for mode, kept in (("strip", [heading, "", para, "", "## " + banner, "", "Short line."]), ("report", None)):
+            data_prep._init_pass2({"md": table}, mode, 20, 1, False, 1)
+            out, removed, sig = data_prep._pass2_doc("md", text)
+            self.assertEqual(removed, [data_prep._line_key(banner), data_prep._line_key(heading)], mode)
+            self.assertEqual(out, "\n".join(kept) if kept else text)
+            self.assertIsNone(sig)
+
 
 if __name__ == "__main__":
     unittest.main()
