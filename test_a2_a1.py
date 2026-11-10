@@ -143,6 +143,47 @@ class Audit2TinyGptA(unittest.TestCase):
         tiny_gpt.apply_doc_mask(model, {"train_config": {"doc_mask": True}}, tok)
         self.assertEqual(model.doc_sep_id, 0)
 
+    def test_document_mask_of_a_trained_run_is_restored(self):
+        """F329 on a real run: _train stores --doc-mask on under the key model_from_checkpoint reads, so the
+        model rebuilt from the run's checkpoint masks again and evaluate() gives the validation loss training
+        reported. Trains on a dataset (in test_tiny_gpt.py that is TestPipeline, with cls.ds and cls.common)."""
+        import contextlib
+        import gc
+        import data_prep
+        root = os.path.join(self.tmp, "docmask")
+        corpus, ds, runs = base.Corpus(root), os.path.join(root, "dataset"), os.path.join(root, "runs")
+        os.makedirs(runs)
+        with contextlib.redirect_stdout(io.StringIO()):
+            data_prep.prepare(["--out", ds, "--md-dir", corpus.md, "--md-dir", f"notes={corpus.notes}",
+                               "--vocab-size", "600", "--val-fraction", "0.2", "--max-doc-chars", "1000",
+                               "--boilerplate-min-docs", "20", "--threads", "2"])
+        code, out = base.run(["tiny_gpt.py", "--dataset", ds, "--out-dir", runs, "--log-file",
+                              os.path.join(runs, "log.txt"), "--device", "cpu", "--compile", "off", "--name", "dm",
+                              "--d-model", "32", "--layers", "2", "--heads", "2", "--kv-heads", "1", "--ctx", "64",
+                              "--batch-size", "4", "--grad-accum", "1", "--steps", "2", "--eval-every", "2",
+                              "--eval-tokens", "8192", "--save-every", "1000", "--sample-tokens", "8",
+                              "--dropout", "0.1", "--tariff", "25", "--no-probes", "--dashboard", "off",
+                              "--heartbeat-seconds", "0", "--doc-mask", "on"])
+        self.assertEqual(code, 0, out)
+        self.assertIn("document mask on", out)
+        obj = tiny_gpt.load_any(os.path.join(runs, "dm.pt"))
+        self.assertIs(obj["train_config"]["doc_mask"], True)
+        last = obj["metrics"]["history"][-1]
+        self.assertEqual(last["step"], 2)
+        cpu = torch.device("cpu")
+        model, tok, cfg = tiny_gpt.model_from_checkpoint(obj)
+        self.assertGreaterEqual(tok.bos_id, 0)
+        self.assertEqual(model.doc_sep_id, tok.bos_id)
+        arrays = data_prep.open_token_files(ds, verify=False)[1]
+        evalset = tiny_gpt.EvalSet(arrays["val"], cfg.ctx, 8192)  # every validation window, as the run scored
+        del arrays  # memory maps: Windows cannot delete the folder while they are open
+        gc.collect()
+        masked = tiny_gpt.evaluate(model, evalset, cpu, None, 4)["loss"]
+        model.doc_sep_id = None  # what every reader outside training had before
+        plain = tiny_gpt.evaluate(model, evalset, cpu, None, 4)["loss"]
+        self.assertAlmostEqual(masked, last["val_loss"], places=6)
+        self.assertGreater(abs(plain - last["val_loss"]), 5e-5, "validation windows hold several documents")
+
     def test_bf16_weights_for_a_cuda_checkpoint_are_cast_on_the_cpu(self):
         """F372: --best-bf16 on CUDA makes the bfloat16 copy on the CPU (no second copy of the weights in GPU
         memory); on MPS the cast stays on the device. Stand-in tensors, since this machine's tests run on the CPU."""
