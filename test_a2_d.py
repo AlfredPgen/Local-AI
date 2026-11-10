@@ -371,6 +371,18 @@ class Audit2Benchmark(unittest.TestCase):
         self.assertEqual([list(pair) for pair in entry["dropped_examples"]],
                          [["bad", "answer not among the options"]])
 
+    def test_printed_lists(self):
+        """F002 (guard: passes before and after): _list reads numpy's printed form, a Python literal, and text
+        that is neither (quoted strings by the same pattern, else nothing)."""
+        b = self.b
+        self.assertEqual(b._list("['a' 'b']"), ["a", "b"])
+        self.assertEqual(b._list("['a', 'b']"), ["a", "b"])
+        self.assertEqual(b._list("[a b]"), [])
+        self.assertEqual(b._list("[a 'b', \"c\"]"), ["b", "c"])
+        self.assertEqual(b._list("['it\\'s' \"say \\\"x\\\"\"\n 'c']"), ["it\\'s", 'say \\"x\\"', "c"])
+        self.assertEqual(b._list("[1, 2]"), [1, 2])
+        self.assertEqual((b._list(None), b._list("plain"), b._list(("x", "y"))), ([], ["plain"], ["x", "y"]))
+
     def test_generated_code_gets_no_stdin(self):
         """F020: the jailed program reads /dev/null, not the rest of the wrapper script piped to `bash -s` (which
         holds the clean-up lines), and the unsafe local runner gives its child no stdin either."""

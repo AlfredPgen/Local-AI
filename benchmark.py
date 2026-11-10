@@ -83,6 +83,9 @@ def _flat(value):  # None -> "", but 0 stays "0" on purpose: an MCQ option can b
     return " ".join(str(value if value is not None else "").split())
 
 
+_QUOTED_RE = re.compile(r"'((?:[^'\\]|\\.)*)'|\"((?:[^\"\\]|\\.)*)\"")  # one quoted string, either kind of quote
+
+
 def _list(value):
     """A list from a parquet/numpy array, a list, or a printed list."""
     if value is None:
@@ -93,12 +96,12 @@ def _list(value):
         text = value.strip()
         if text.startswith("["):
             if re.search(r"""['"]\s+['"]""", text):  # numpy's printed form: literal_eval would join the strings
-                return [a or b for a, b in re.findall(r"'((?:[^'\\]|\\.)*)'|\"((?:[^\"\\]|\\.)*)\"", text)]
+                return [a or b for a, b in _QUOTED_RE.findall(text)]
             try:
                 import ast
                 return list(ast.literal_eval(text))
-            except (ValueError, SyntaxError):  # numpy's printed form: ['a' 'b'] without commas
-                return [a or b for a, b in re.findall(r"'((?:[^'\\]|\\.)*)'|\"((?:[^\"\\]|\\.)*)\"", text)]
+            except (ValueError, SyntaxError):  # other list text that is no Python literal: its quoted strings
+                return [a or b for a, b in _QUOTED_RE.findall(text)]
         return [value]
     return list(value)
 
