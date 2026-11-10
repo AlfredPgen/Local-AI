@@ -43,6 +43,7 @@ import random
 import sys
 import tempfile
 import time
+import zlib
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -177,7 +178,7 @@ def markdown_source(name, dirs, args, use_kw, rng):
         try:
             with (gzip.open if path.lower().endswith(".gz") else open)(path, "rb") as handle:
                 raw = handle.read()
-        except (OSError, EOFError):
+        except (OSError, EOFError, zlib.error):
             continue  # a damaged .gz file, which data_prep skips too
         text = dp.decode_bytes(raw, {"bom_removed": 0, "decode_errors_docs": 0, "decode_errors_chars": 0})
         t.sampled += 1

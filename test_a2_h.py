@@ -260,6 +260,27 @@ class Audit2PipelineTools(unittest.TestCase):
         self.assertEqual([d[0] for d in docs], ["keep.md"])
         self.assertEqual((tally.total, tally.sampled), (len(docs), len(docs)))
 
+    def test_estimate_skips_a_gz_file_with_damaged_deflate_data(self):
+        """F043: damaged deflate data raises zlib.error, which is no OSError; the estimate skips the file as it
+        skips a truncated one (and as data_prep does)."""
+        import gzip
+        import random
+        import types
+        import zlib
+        import estimate_dataset
+        folder = os.path.join(self.tmp, "f043")
+        os.makedirs(folder, exist_ok=True)
+        with open(os.path.join(folder, "plain.md"), "w", encoding="utf-8") as f:
+            f.write("# Plain\n\nGenetic drift.")
+        with gzip.open(os.path.join(folder, "damaged.md.gz"), "wt", encoding="utf-8") as f:
+            f.write("# Packed\n\nAllele frequencies.")
+        args = types.SimpleNamespace(md_glob=None, md_exclude=[], md_recursive=False, sample=1.0, est_seed=0)
+        error = zlib.error("Error -3 while decompressing data: invalid distance too far back")
+        with unittest.mock.patch.object(estimate_dataset, "examine") as examined, \
+                unittest.mock.patch.object(estimate_dataset.gzip, "open", side_effect=error):
+            tally = estimate_dataset.markdown_source("md", [folder], args, False, random.Random(0))
+        self.assertEqual((tally.total, tally.sampled, examined.call_count), (2, 1, 1))
+
     def test_estimate_stores_a_random_sample_of_texts_and_measures_on_held_out_ones(self):
         """F153: the texts kept for the tokenizer are a reservoir sample of all kept documents (they were the
         first 6M characters, the start of the first files), and characters per token of a tokenizer trained
