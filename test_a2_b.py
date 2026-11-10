@@ -1200,6 +1200,39 @@ class Audit2DataPrep(unittest.TestCase):
         self.assertNotIn("cross_source_cluster", forced["drop"])
         self.assertGreater(forced["group"].get("cross_source_cluster", 0), 0)
 
+    # ---------------- F084: keyword_hits.tsv has one order, whatever the hash seed of the process ----------------
+    def test_keyword_hits_order_does_not_depend_on_the_hash_seed(self):
+        """Eight terms with the same count: their order came from a set of strings, so it changed with the
+        hash seed of the process (and with the number of workers). Rows now go by count, then by term."""
+        import subprocess
+        folder = self.folder("f084_in")
+        terms = "alpha beta gamma delta epsilon zeta eta theta".split()
+        for i in range(6):
+            text = f"# Note {i}\n\n" + "\n\n".join(
+                f"The {t} value of the population is one of the things that the model has to learn in step {i}, "
+                "and the allele is the other one." for t in terms)
+            with open(os.path.join(folder, f"note_{i}.md"), "w", encoding="utf-8", newline="\n") as handle:
+                handle.write(text + "\n")
+        seen = []
+        for seed in ("1", "2", "3"):
+            out = os.path.join(self.tmp, "f084_" + seed)
+            env = dict(os.environ, PYTHONHASHSEED=seed, PYTHONDONTWRITEBYTECODE="1", PYTHONIOENCODING="utf-8")
+            done = subprocess.run(
+                [sys.executable, os.path.join(HERE, "data_prep.py"), "--out", out, "--md-dir", folder,
+                 "--include-keywords", ",".join(terms + ["allele"]), "--keyword-sources", "all", "--scan-only",
+                 "--threads", "1", "--workers", "1"],
+                env=env, capture_output=True, text=True, encoding="utf-8", errors="replace")
+            self.assertEqual(done.returncode, 0, done.stderr[-2000:])
+            top = [ln for ln in read_file(os.path.join(out, "report.md")).splitlines() if "top terms" in ln]
+            seen.append((read_file(os.path.join(out, "keyword_hits.tsv")), top))
+        self.assertEqual(seen[0], seen[1])
+        self.assertEqual(seen[0], seen[2])
+        rows = [ln.split("\t") for ln in seen[0][0].splitlines()[1:]]
+        self.assertEqual([r[1] for r in rows], ["allele"] + sorted(terms), "by count, then by term")
+        self.assertEqual({r[2] for r in rows[1:]}, {"6"})
+        self.assertEqual(len(seen[0][1]), 1)
+        self.assertLess(seen[0][1][0].index("alpha 6"), seen[0][1][0].index("beta 6"))
+
 
 if __name__ == "__main__":
     unittest.main()

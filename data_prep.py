@@ -3977,14 +3977,16 @@ def _write_report(out, args, sources, duplicates, removed_lines, line_examples, 
         L.append(f"Include terms {len(read_terms(args.include_keywords))}, exclude terms "
                  f"{len(read_terms(args.exclude_keywords))}; min weighted hits {args.keyword_min_hits}, min distinct "
                  f"{args.keyword_min_distinct}, title weight {args.title_weight}. Full counts in keyword_hits.tsv.\n")
-        for name, counter in keyword_totals.items():
-            if counter:
-                L.append(f"- {name} top terms (documents kept): " +
-                         ", ".join(f"{t} {c:,}" for t, c in counter.most_common(25)))
+        # by count, then by term: the order in which the terms were first counted differs from process to process
+        ranked = {name: sorted(counter.items(), key=lambda kv: (-kv[1], kv[0]))
+                  for name, counter in keyword_totals.items()}
+        for name, rows in ranked.items():
+            if rows:
+                L.append(f"- {name} top terms (documents kept): " + ", ".join(f"{t} {c:,}" for t, c in rows[:25]))
         with open(os.path.join(out, "keyword_hits.tsv"), "w", encoding="utf-8", newline="\n") as handle:
             handle.write("source\tterm\thits_in_kept_docs\n")
-            for name, counter in keyword_totals.items():
-                for term, count in counter.most_common():
+            for name, rows in ranked.items():
+                for term, count in rows:
                     handle.write(f"{name}\t{_tsv_cell(term)}\t{count}\n")
     L.append("\n## Duplicates\n")
     exact = [d for d in duplicates if d[0] == "exact"]
