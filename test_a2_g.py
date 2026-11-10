@@ -337,6 +337,48 @@ class Audit2FinetuneTools(unittest.TestCase):
         self.assertIn(os.path.join(empty, "eval_mcq.jsonl"), message)
         self.assertIn("posttrain.py data", message)
 
+    def posttrain_run(self, tag, extra, busy=lambda out_dir=None: False):
+        """posttrain.main(['run', ...]) with finetune.main and evaluate replaced by recorders and the busy check
+        by `busy`. Returns (calls, out_dir, exit message or None)."""
+        import finetune
+        import posttrain
+        data = self.posttrain_data(tag)
+        out_dir = os.path.join(data, "out")
+        os.makedirs(out_dir)
+        base = self.save_checkpoint(toy_model(6), tag + "_base.pt")
+        calls, message = [], None
+
+        def fake_main(argv):
+            calls.append(list(argv))
+            return os.path.join(out_dir, argv[argv.index("--name") + 1] + ".pt")
+        with unittest.mock.patch.object(finetune, "main", fake_main), \
+                unittest.mock.patch.object(finetune, "gpu_busy", busy), \
+                unittest.mock.patch.object(tiny_gpt, "gpu_busy", lambda *dirs: False), \
+                unittest.mock.patch.object(posttrain, "evaluate", lambda checkpoints, args: None), \
+                redirect_stdout(io.StringIO()):
+            try:
+                posttrain.main(["run", "--base", base, "--name", "R", "--out-dir", out_dir, "--data-dir", data,
+                                *extra])
+            except SystemExit as exc:
+                message = str(exc.code)
+        return calls, out_dir, message
+
+    def test_posttrain_run_checks_the_out_dir_for_another_job(self):
+        """F180: posttrain run asks finetune.gpu_busy(out_dir), so a training lock in --out-dir stops it before
+        SFT starts (its own wrapper looked only beside the script)."""
+        seen = []
+
+        def busy(out_dir=None):
+            seen.append(out_dir)
+            return out_dir is not None and os.path.basename(out_dir) == "out"
+        calls, out_dir, message = self.posttrain_run("busy_out_dir", ["--device", "cuda"], busy)
+        self.assertEqual(seen, [out_dir])
+        self.assertEqual(message, tiny_gpt.GPU_BUSY_MESSAGE)
+        self.assertEqual(calls, [], "stopped before SFT")
+        calls, _, message = self.posttrain_run("free_out_dir", ["--device", "cuda"])
+        self.assertIsNone(message)
+        self.assertEqual([c[0] for c in calls], ["sft", "dpo"])
+
     def test_posttrain_reuse_sft(self):
         """F163: posttrain run --reuse-sft skips SFT when <name>_sft.pt is an SFT made from this --base, and DPO
         starts from it; with another --base it exits; without the flag SFT runs as before."""
