@@ -391,6 +391,12 @@ class Audit2TinyGptA(unittest.TestCase):
                  for s in range(40)]
         self.assertTrue(set(picks) <= {(1, 0), (1, 2), (3, 0), (3, 2)}, "top-k 2 per row")
         self.assertGreater(len(set(picks)), 1)
+        # a temperature below 1e-6 counts as 1e-6 (the in-line code divided by it: nan probabilities at 1e-45)
+        for s in range(10):
+            floor = tiny_gpt.sample_next(rows, torch.Generator().manual_seed(s), 1e-6, 0, 1.0).tolist()
+            tiny = tiny_gpt.sample_next(rows, torch.Generator().manual_seed(s), 1e-45, 0, 1.0).tolist()
+            self.assertEqual((tiny, floor), ([1, 0], [1, 0]), "as good as greedy")
+        tiny_gpt.generate(model, tok, "Genetic", 7, cpu, temperature=1e-45, generator=torch.Generator().manual_seed(11))
 
     def test_schedule_line_without_warmup_or_decay(self):
         """F322: --warmup-steps 0 and --decay-frac 0 are described in words, not as the ranges 1-0 and 11-10."""

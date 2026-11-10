@@ -2400,7 +2400,8 @@ class IncrementalDecoder:
 def sample_next(logits_2d, generator, temperature, top_k, top_p):
     """One sampled token id per row of logits_2d (B, V): the logits divided by the temperature, cut to the
     top_k largest (0 = no cut) and then to the smallest set whose probability reaches top_p (nucleus sampling;
-    outside 0..1 = no cut), and one draw per row from `generator`."""
+    outside 0..1 = no cut), and one draw per row from `generator`. A temperature below 1e-6 counts as 1e-6
+    (as good as greedy), so the division cannot overflow; generate() decodes greedily at 0 and below."""
     logits = logits_2d.float() / max(temperature, 1e-6)
     if top_k and top_k < logits.size(-1):
         kth = torch.topk(logits, top_k, dim=-1).values[:, -1:]
