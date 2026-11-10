@@ -2235,25 +2235,24 @@ def score_probes(model, tok, probes, device, amp_dtype, batch_size=64, floor=Tru
         chunk = seqs[start:start + batch_size]
         width = max(len(s[3]) for s in chunk) - 1
         x = torch.zeros((len(chunk), width), dtype=torch.long)
-        rows, cols, targets, owner = [], [], [], []
+        rows, cols, targets = [], [], []
         for b, (_, _, _, ids, n_cont, _) in enumerate(chunk):
             x[b, :len(ids) - 1] = torch.tensor(ids[:-1])
             rows += [b] * n_cont
             cols += range(len(ids) - 1 - n_cont, len(ids) - 1)
             targets += ids[len(ids) - n_cont:]
-            owner += [b] * n_cont
+        rows_t = torch.tensor(rows, device=device)  # the batch row of each scored position
         with torch.autocast(device.type, dtype=amp_dtype or torch.float32, enabled=amp_dtype is not None):
             if isinstance(model, TinyGPT):  # the output layer only at the scored positions, not everywhere
                 hidden = model(x.to(device), return_hidden=True)
-                picked = model.lm_head(hidden[torch.tensor(rows, device=device), torch.tensor(cols, device=device)])
+                picked = model.lm_head(hidden[rows_t, torch.tensor(cols, device=device)])
             else:
                 logits = model(x.to(device))
-                picked = logits[torch.tensor(rows, device=device), torch.tensor(cols, device=device)]
+                picked = logits[rows_t, torch.tensor(cols, device=device)]
         picked = picked.float()
         target_logp = (picked.gather(-1, torch.tensor(targets, device=device)[:, None]).squeeze(-1)
                        - torch.logsumexp(picked, dim=-1))  # only the scored positions, not the whole vocabulary
-        sums = torch.zeros(len(chunk), device=device).index_add_(0, torch.tensor(owner, device=device),
-                                                                 target_logp).cpu()
+        sums = torch.zeros(len(chunk), device=device).index_add_(0, rows_t, target_logp).cpu()
         for b, (i, v, j, _, _, n_chars) in enumerate(chunk):
             scores[i][v][j] = float(sums[b]) / n_chars
     results = []
