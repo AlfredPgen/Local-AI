@@ -168,6 +168,27 @@ class Audit2DataPrep(unittest.TestCase):
         self.assertIn("already exists", str(stop.exception))
         self.assertNotIn("stopped after pass 2", str(stop.exception))
 
+    # ---------------- F081: --resume names the options it ignores ----------------
+    def test_resume_names_the_options_it_ignores(self):
+        out = os.path.join(self.tmp, "f081")
+        self.stop_after_pass2(["--out", out] + self.base_args())
+        with redirect_stdout(io.StringIO()) as buf:
+            args = data_prep.parse_args(["--out", out, "--resume", "--threads", "2", "--workers", "1", "--keep-work"])
+        self.assertNotIn("ignored", buf.getvalue(), "the machine settings are not ignored")
+        self.assertTrue(args.resume)
+        with redirect_stdout(io.StringIO()) as buf:
+            data_prep.prepare(["--out", out, "--resume", "--vocab-size", "900", "--md-exclude", "*.lt.md",
+                               "--threads", "2", "--workers", "1"])
+        note = [line for line in buf.getvalue().splitlines() if "ignored" in line]
+        self.assertEqual(len(note), 1, buf.getvalue())
+        self.assertIn("--vocab-size", note[0])
+        self.assertIn("--md-exclude", note[0])
+        for flag in ("--threads", "--workers", "--out", "--resume", "--val-fraction"):
+            self.assertNotIn(flag + ",", note[0].split("ignored")[0])
+        manifest = data_prep.read_manifest(out)
+        self.assertEqual(manifest["tokenizer"]["vocab_size"], 600, "the saved build's vocabulary, not 900")
+        self.assertEqual(manifest["fingerprint"], data_prep.read_manifest(self.plain())["fingerprint"])
+
     def test_an_error_in_the_leakage_audit_still_only_skips_it(self):
         out = os.path.join(self.tmp, "f057err")
         real = data_prep._audit_chunk

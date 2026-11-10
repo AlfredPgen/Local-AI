@@ -2010,9 +2010,16 @@ def _validate(args, parser):
             parser.error(f"--resume: no {state}; only a build that failed after pass 2 can be resumed")
         if args.overwrite:
             parser.error("--resume continues the build in --out; --overwrite would move it away")
-        if args.md_dir or args.wiki_dir or args.parquet or args.jsonl:
-            print("--resume: the sources and options of the saved build are used; those given here are ignored "
-                  "(except --threads, --workers and --keep-work).", flush=True)
+        applied = {"out", "resume", "overwrite", "threads", "workers", "keep_work", "worker_warmup"}
+        if args.text_root:
+            applied.add("md_recursive")  # set above by --text-root, not given
+        ignored = sorted(dest for dest, value in vars(args).items()
+                         if dest not in applied and value != parser.get_default(dest))
+        if ignored:
+            print("--resume: the sources and options of the saved build are used; "
+                  + ", ".join("--" + dest.replace("_", "-") for dest in ignored)
+                  + f" given here {'is' if len(ignored) == 1 else 'are'} ignored (only --threads, --workers and "
+                  "--keep-work apply).", flush=True)
         return
     if not (args.md_dir or args.wiki_dir or args.parquet or args.jsonl):
         parser.error("give at least one source: --md-dir, --wiki-dir, --parquet or --jsonl")
