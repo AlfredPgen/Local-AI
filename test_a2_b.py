@@ -1274,6 +1274,29 @@ class Audit2DataPrep(unittest.TestCase):
             data_prep.prepare(["--out", usual] + argv)
         self.assertNotIn("boilerplate counting pruned", read_file(os.path.join(usual, "report.md")))
 
+    # ---------------- F074: the report's characters per token come from the manifest, same line ----------------
+    def test_characters_per_token_line_is_the_one_counted_from_the_documents(self):
+        """Guard (it passes before and after): the line holds, for every split of every source, characters /
+        tokens of its documents rounded to 3 places, in the order in which the documents come in docs.tsv."""
+        out = self.plain()
+        chars, tokens = collections.Counter(), collections.Counter()
+        lines = read_file(os.path.join(out, "docs.tsv")).splitlines()
+        head = lines[0].split("\t")
+        for line in lines[1:]:
+            row = dict(zip(head, line.split("\t")))
+            if row["status"] in ("train", "val") and int(row["tokens"]) > 0:
+                key = f"{row['status']}/{row['source']}"
+                chars[key] += int(row["chars"])
+                tokens[key] += int(row["tokens"])
+        expected = "Characters per token: " + ", ".join(f"{k} {round(chars[k] / tokens[k], 3)}" for k in tokens)
+        self.assertGreaterEqual(len(tokens), 3)
+        self.assertIn(expected, read_file(os.path.join(out, "report.md")).splitlines())
+        manifest = data_prep.read_manifest(out)
+        tok = data_prep.Tokenizer.from_file(os.path.join(out, "tokenizer.model"))
+        kinds = collections.Counter(data_prep.token_category(tok, i) for i in range(tok.vocab_size))
+        self.assertEqual(manifest["tokenizer"]["composition"], dict(kinds))
+        self.assertEqual(list(manifest["tokenizer"]["composition"]), list(kinds), "and in the same order")
+
 
 if __name__ == "__main__":
     unittest.main()

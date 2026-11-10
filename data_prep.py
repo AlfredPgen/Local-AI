@@ -2916,7 +2916,8 @@ def _prepare(args, state=None):
     tok_meta = tok.meta()
     tok_meta["file"] = "tokenizer.model"
     tok_meta.update(tokenizer_info)
-    tok_meta["composition"] = dict(collections.Counter(token_category(tok, i) for i in range(tok.vocab_size)))
+    piece_types = [token_category(tok, i) for i in range(tok.vocab_size)]
+    tok_meta["composition"] = dict(collections.Counter(piece_types))
     fingerprint = hashlib.sha256()
     for name in sorted(manifest_sources):
         for split in ("train", "val"):
@@ -2954,7 +2955,7 @@ def _prepare(args, state=None):
     tok_dist = None
     try:  # informational: a failure must not cost the finished dataset
         t_dist = time.time()
-        tok_dist = _token_distribution(out, tok)
+        tok_dist = _token_distribution(out, tok, piece_types)
         png = plot_token_summary(tok_dist, os.path.join(out, "token_summary.png"))
         print(f"\nToken use: {_distribution_line(tok_dist)} ({time.time() - t_dist:,.0f} s)\n  chart: {png}",
               flush=True)
@@ -2963,7 +2964,7 @@ def _prepare(args, state=None):
     except BaseException as exc:  # noqa: BLE001 - Ctrl+C included: it only skips this summary
         print(f"Token distribution skipped ({type(exc).__name__}: {exc}).", flush=True)
 
-    tok_stats = _tokenizer_stats(tok, docs, split_of, doc_tokens)
+    tok_stats = _tokenizer_stats(tok, manifest, list(counts))
     tok_stats["distribution"] = tok_dist
     _write_report(out, args, sources, duplicates, removed_lines, line_examples, keyword_totals,
                   manifest, tok_stats, forced_train, leakage, tok, t_start, notes=notes,
@@ -3623,11 +3624,12 @@ def superbpe_extend(proto, corpus, extra, max_words=4, sample_tokens=20_000_000,
     return out, info
 
 
-def _token_distribution(out, tok, top=30):
+def _token_distribution(out, tok, cats, top=30):
     """How the vocabulary is used on the finished training token files: the most
     frequent pieces, how many pieces cover 50/90/99% of all tokens, unused
     pieces, token share by piece type and characters per token for each source.
-    Also writes token_counts.tsv (every piece with its count) for plots."""
+    Also writes token_counts.tsv (every piece with its count) for plots.
+    cats: token_category of every piece, by id."""
     manifest, arrays = open_token_files(out, verify=False)
     counts = np.zeros(tok.vocab_size, dtype=np.int64)
     for arr in arrays["train"].values():
@@ -3637,7 +3639,6 @@ def _token_distribution(out, tok, top=30):
     order = np.argsort(-counts, kind="stable")
     cum = np.cumsum(counts[order]) / max(total, 1)
     cover = {q: int(min(np.searchsorted(cum, q / 100) + 1, tok.vocab_size)) for q in (50, 90, 99)}
-    cats = [token_category(tok, i) for i in range(tok.vocab_size)]
     by_cat = collections.Counter()
     for i, c in enumerate(counts):
         by_cat[cats[i]] += int(c)
@@ -3743,13 +3744,15 @@ def plot_token_summary(d, path):
     return path
 
 
-def _tokenizer_stats(tok, docs, split_of, doc_tokens):
-    chars, tokens = collections.Counter(), collections.Counter()
-    for i in np.flatnonzero(doc_tokens > 0).tolist():
-        key = (SPLIT_NAMES[split_of[i]], docs[i][0])
-        chars[key] += docs[i][3]
-        tokens[key] += int(doc_tokens[i])
-    per = {f"{s}/{src}": round(chars[(s, src)] / max(tokens[(s, src)], 1), 3) for (s, src) in tokens}
+def _tokenizer_stats(tok, manifest, written):
+    """Characters per token of every token file, from the manifest's counts, and
+    how ten terms are cut into pieces. written: the (split, source) pairs in
+    the order pass 3 first wrote them, which is the order of the report line."""
+    per = {}
+    for split, src in written:
+        part = manifest["sources"][src].get(split)
+        if part:
+            per[f"{split}/{src}"] = round(part["chars"] / max(part["tokens"], 1), 3)
     examples = {}
     for term in ("genetic drift", "heritability", "Wright–Fisher", "GWAS summary statistics", "UK Biobank",
                  "pharmacokinetics", "eigenvalue", "haematoxylin and eosin", "Ne = 1000, p = 0.05",
