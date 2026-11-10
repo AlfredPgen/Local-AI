@@ -18,7 +18,8 @@ import time
 
 import requests
 
-from _kw import read_batch
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # _kw, also when this file is imported by path
+from _kw import read_batch  # noqa: E402
 
 API = "https://www.ebi.ac.uk/europepmc/webservices/rest/search"
 UA = "tinyGPT-keyword-check/1.0 (personal research)"

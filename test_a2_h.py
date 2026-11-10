@@ -576,6 +576,16 @@ class Audit2PipelineTools(unittest.TestCase):
                 ("of the", "new things")]
         self.assertEqual(term_evidence.read_batch(batch), rows)
         self.assertIs(kw_check.read_batch, term_evidence.read_batch)
+        # each finds the shared reader by itself: it imports by path, with tools/ not on sys.path (as it always did)
+        script = ("import importlib.util, os, sys\n"
+                  "for name in ('kw_check', 'term_evidence'):\n"
+                  "    spec = importlib.util.spec_from_file_location('by_path_' + name, os.path.join(sys.argv[1], "
+                  "name + '.py'))\n"
+                  "    module = importlib.util.module_from_spec(spec)\n"
+                  "    spec.loader.exec_module(module)\n"
+                  "    print(name, module.read_batch.__module__)\n")
+        code, out = T.run(["-c", script, os.path.join(HERE, "tools")], cwd=self.tmp)
+        self.assertEqual((code, out.split()), (0, ["kw_check", "_kw", "term_evidence", "_kw"]), out[-600:])
 
     def test_scripts_with_new_parsers_answer_help_and_do_no_work(self):
         """F146: guide/make_figures.py and four tools had no argument parser, so `--help` redrew the guide's

@@ -21,6 +21,7 @@ import sys
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, HERE)
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # _kw, also when this file is imported by path
 import data_prep as dp  # noqa: E402
 from _kw import read_batch  # noqa: E402
 
