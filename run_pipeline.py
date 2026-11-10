@@ -1,7 +1,8 @@
 r"""The tinyGPT pipeline in a few simple commands.
 
     python run_pipeline.py estimate            # optional: how big will the dataset be? (~7 min)
-    python run_pipeline.py build               # 1. build the dataset from ai_training_data (~2 hours)
+    python run_pipeline.py build               # 1. build the dataset from ai_training_data (several hours; the
+                                               # last build's time is in datasets\bio_all\report.md)
     python run_pipeline.py plan --hours 48     # 2. which model fits in 48 hours? (prints the plan, trains nothing)
     python run_pipeline.py train --hours 48    # 3. train it
     python run_pipeline.py resume              #    continue after Ctrl+C or a shutdown
@@ -154,7 +155,7 @@ def step_build():
               "top of run_pipeline.py. A rebuild trains a new tokenizer (its size follows the amount of text): existing "
               "models can only be continued with `continue`, not resumed.)")
         return 0
-    print(f"Building {DATASET} from {DATA}. This takes about 2 hours; the report is "
+    print(f"Building {DATASET} from {DATA}. This takes several hours; the report (with the time it took) is "
           f"{os.path.join(DATASET, 'report.md')}.")
     return run(build_command())
 
