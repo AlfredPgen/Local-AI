@@ -398,8 +398,8 @@ def main(argv=None):
     flops, source = (opts.tflops * 1e12, f"--tflops {opts.tflops:g}") if opts.tflops else measured_speed(HERE)
 
     def per_token(n, c):
-        # tiny_gpt's own rules: the context of default_ctx (1024 up to d 1024, 2048 up to d 2048, then 4096) and
-        # flops_per_token (6 per active parameter + 12 x layers x context x width)
+        # tiny_gpt's own rules: the context of default_ctx (256 up to d 192, 512 up to d 512, 1024 up to d 1024,
+        # 2048 up to d 2048, then 4096) and flops_per_token (6 per active parameter + 12 x layers x context x width)
         return tiny_gpt.flops_per_token(dataclasses.replace(c, ctx=tiny_gpt.default_ctx(c.d_model)))
 
     def chinchilla(n, d):
