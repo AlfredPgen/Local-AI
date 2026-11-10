@@ -1121,6 +1121,22 @@ class Audit2DataPrep(unittest.TestCase):
         self.assertEqual(tok.encode("\n\n"), [tok.newline_id, tok.newline_id])
         self.assertEqual(tok.decode(tok.encode("two lines\nof text")), "two lines\nof text")
 
+    # ---------------- F095: a long English text behind front matter in another language is kept ----------------
+    def test_english_body_behind_a_foreign_front_page_is_english(self):
+        french = "l'été dernier les élèves ont étudié la génétique à l'université près de la forêt. "
+        english = ("The frequency of an allele in a population changes from one generation to the next, and in a small "
+                   "population most of that change is due to chance. ")
+        front = french * (13_500 // len(french) + 1)
+        body = english * (10_000 // len(english) + 1)
+        self.assertFalse(data_prep.looks_english(front[:8_000]), "the front page alone is not English")
+        self.assertTrue(data_prep.looks_english(front + body), "the middle of the text is English prose")
+        self.assertFalse(data_prep.looks_english(french * (20_000 // len(french) + 1)), "French from start to end")
+        # the middle window gets neither the short-text rule nor the ASCII rule of the first window
+        self.assertFalse(data_prep.looks_english(front + "1 2 3 4 5 6 7 8 9 0 " * 1_000), "a middle without words")
+        self.assertFalse(data_prep.looks_english(front + "xq zv kj wp " * 1_500), "an ASCII middle without function words")
+        self.assertTrue(data_prep.looks_english(english * 100))
+        self.assertTrue(data_prep.looks_english("| a | b |\n|---|---|\n" * 1_000), "tables and code are kept as before")
+
 
 if __name__ == "__main__":
     unittest.main()

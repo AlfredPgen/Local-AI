@@ -442,8 +442,12 @@ _LETTER_WORDS_RE = re.compile(r"[^\W\d_]+")
 def looks_english(text):
     """Heuristic language check, calibrated on this corpus: English prose has
     30-40% function words; narrations in another language had 0% and ~7% non-ASCII
-    letters. Short texts, tables and code (ASCII) are always kept."""
-    body = text[:8_000]  # ~1,300 words decide the language as well as the whole text
+    letters. Short texts, tables and code (ASCII) are always kept. The first
+    8,000 characters (~1,300 words) decide; a text they would reject is kept
+    when 8,000 characters from its middle read as English prose (an English
+    thesis behind title pages in another language, a paper behind licence lines
+    and an author list)."""
+    body = text[:8_000]
     words = _LETTER_WORDS_RE.findall(body)
     if len(words) < 50:
         return True
@@ -452,7 +456,12 @@ def looks_english(text):
         return True
     letters = "".join(words)
     non_ascii = (len(letters) - len(letters.encode("ascii", "ignore"))) / max(len(letters), 1)
-    return non_ascii <= 0.005
+    if non_ascii <= 0.005:
+        return True
+    # the middle window must show the function words itself: neither the short-text nor the ASCII rule applies to it
+    middle = len(text) // 2
+    words = _LETTER_WORDS_RE.findall(text[middle:middle + 8_000])
+    return len(words) >= 50 and sum(w.lower() in _EN_FUNCTION_WORDS for w in words) / len(words) >= 0.10
 
 
 def normalised_hash(text):
