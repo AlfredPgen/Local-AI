@@ -1030,23 +1030,37 @@ def _gz_size(path, limit):
     return size
 
 
-def convert_table_or_text(path, args):
-    ext = inner_ext(path)
-    gz = path.lower().endswith(".gz")
-    if gz and ext in NOT_TEXT_GZ:
-        raise RuntimeError(f"not converted: a compressed {ext} file is data, not text")
+def _text_sample(path, args):
+    """What decides how a text file is converted, from its first 20 lines: (the lines,
+    the delimiter of the first one, its fields and their GWAS columns when it is a
+    header of summary statistics, otherwise None and None)."""
     with open_text(path) as handle:
         # at most 1 MB per line: a huge file without newlines is not read whole here (the size check refuses it)
         sample = [line for line in (handle.readline(1 << 20) for _ in range(20)) if line]
     first = sample[0] if sample else ""
     delim = sniff_delimiter(first)
-    if not args.no_gwas:
+    if not getattr(args, "no_gwas", False):
         header = next(csv.reader([first], delimiter=delim)) if delim else first.split()
         cols = gwas_columns(header)
         if cols and (delim or len(header) >= 3):
-            return convert_gwas(path, args, header, delim, cols), "gwas"
-    # commas in a .txt are nearly always prose; a .txt counts as a table only when consistently tab-separated
-    if ext in (".csv", ".tsv", ".tab") or (delim == "\t" and _looks_tabular(sample, "\t")):
+            return sample, delim, header, cols
+    return sample, delim, None, None
+
+
+def _tab_table(sample, delim):
+    """Commas in a .txt are nearly always prose; a .txt counts as a table only when consistently tab-separated."""
+    return delim == "\t" and _looks_tabular(sample, "\t")
+
+
+def convert_table_or_text(path, args):
+    ext = inner_ext(path)
+    gz = path.lower().endswith(".gz")
+    if gz and ext in NOT_TEXT_GZ:
+        raise RuntimeError(f"not converted: a compressed {ext} file is data, not text")
+    sample, delim, header, cols = _text_sample(path, args)
+    if cols:
+        return convert_gwas(path, args, header, delim, cols), "gwas"
+    if ext in (".csv", ".tsv", ".tab") or _tab_table(sample, delim):
         delim = delim or ("\t" if ext in (".tsv", ".tab") else ",")
         rows, total = [], 0
         with open_text(path) as handle:
@@ -1220,24 +1234,19 @@ def page_count(path):
 
 
 def _sniffed_type(path):
-    """True for the inputs whose --by-type folder depends on their first line: a
+    """True for the inputs whose --by-type folder depends on their first lines: a
     .txt, and a .gz of anything but .csv/.tsv/.tab."""
     return os.path.splitext(path)[1].lower() in (".txt", ".gz") and inner_ext(path) not in (".csv", ".tsv", ".tab")
 
 
-def _gwas_header(path, args):
-    """True if the first line of a text file is a header of GWAS summary statistics
-    (the test convert_table_or_text applies), read without converting the file."""
-    if getattr(args, "no_gwas", False):
-        return False
+def _table_text(path, args):
+    """True if convert_table_or_text makes a table of a .txt or .gz (summary statistics,
+    or consistently tab-separated lines): its own tests, on the first lines only."""
     try:
-        with open_text(path) as handle:
-            first = handle.readline(1 << 20)
-        delim = sniff_delimiter(first)
-        header = next(csv.reader([first], delimiter=delim)) if delim else first.split()
+        sample, delim, _, cols = _text_sample(path, args)
     except Exception:  # noqa: BLE001 - unreadable here: the conversion reports why
         return False
-    return bool(gwas_columns(header)) and bool(delim or len(header) >= 3)
+    return bool(cols) or _tab_table(sample, delim)
 
 
 def plan_target(path, args, n_files):
@@ -1258,8 +1267,8 @@ def plan_target(path, args, n_files):
             kind = "html"
         elif inner_ext(path) in (".csv", ".tsv", ".tab"):
             kind = "table"
-        elif _sniffed_type(path):  # summary statistics as .txt or .gz go with the tables, prose with the articles
-            kind = "table" if _gwas_header(path, args) else "text"
+        elif _sniffed_type(path):  # a .txt or .gz converted as a table goes with the tables, prose with the articles
+            kind = "table" if _table_text(path, args) else "text"
         else:
             kind = "text"
         folder = os.path.join(args.out, TYPE_FOLDER.get(kind, "articles"))

@@ -281,8 +281,9 @@ class Audit2DocsYoutubeConvert(unittest.TestCase):
             self.assertTrue(np.isnan(lam))
 
     def test_by_type_sorts_txt_and_gz_by_their_header(self):
-        """F039: with --by-type a GWAS .txt goes to tables and a prose .txt.gz to articles; an input an earlier
-        run recorded in the other folder stays there (it is not converted a second time)."""
+        """F039: with --by-type a .txt or .gz goes where its conversion belongs: summary statistics and
+        tab-separated tables to tables, prose to articles; an input an earlier run recorded in the other folder
+        stays there (it is not converted a second time)."""
         import gzip
         import json
         import subprocess
@@ -300,6 +301,11 @@ class Audit2DocsYoutubeConvert(unittest.TestCase):
             handle.write("\n".join(rows) + "\n")
         with open(os.path.join(src, "notes.txt"), "w", encoding="utf-8") as handle:
             handle.write(prose)
+        counts = ["gene\tsample1\tsample2\tsample3"] + [f"g{k}\t{k}\t{k + 1}\t{k + 2}" for k in range(40)]
+        with gzip.open(os.path.join(src, "counts.txt.gz"), "wt", encoding="utf-8", newline="\n") as handle:
+            handle.write("\n".join(counts) + "\n")  # a table that is not GWAS: converted as a table, filed as one
+        with open(os.path.join(src, "matrix.txt"), "w", encoding="utf-8", newline="\n") as handle:
+            handle.write("\n".join(counts) + "\n")
         os.makedirs(os.path.join(out, "articles"))  # old.txt was converted before, into articles
         with open(os.path.join(out, "articles", "old.md"), "w", encoding="utf-8") as handle:
             handle.write("# GWAS summary statistics: old\n")
@@ -312,18 +318,27 @@ class Audit2DocsYoutubeConvert(unittest.TestCase):
         found = sorted(os.path.relpath(os.path.join(folder, name), out).replace(os.sep, "/")
                        for folder, _, names in os.walk(out) for name in names if name.endswith(".md"))
         self.assertEqual(found, ["articles/notes.md", "articles/old.md", "articles/prose.md", "tables/a.md",
-                                 "tables/sumstats.md"], done.stdout + done.stderr)
+                                 "tables/counts.md", "tables/matrix.md", "tables/sumstats.md"],
+                         done.stdout + done.stderr)
         with open(os.path.join(out, "tables", "a.md"), encoding="utf-8") as handle:
             self.assertIn("30 genetic variants", handle.read())
-        # --no-gwas: the same .txt is a plain file again and goes with the articles
+        with open(os.path.join(out, "tables", "counts.md"), encoding="utf-8") as handle:
+            self.assertIn("| gene | sample1 |", handle.read())
+        # --no-gwas: summary statistics are a plain file again, a table when tab-separated and text otherwise
         import convert_to_markdown as conv
         import argparse
+        spaced = os.path.join(self.tmp, "f039", "spaced.txt")
+        with open(spaced, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write("\n".join(row.replace("\t", " ") for row in rows) + "\n")
         args = argparse.Namespace(out=out, by_type=True, name_prefix="", book_pages=150, no_gwas=True)
-        self.assertEqual(os.path.basename(os.path.dirname(conv.plan_target(os.path.join(src, "a.txt"), args, 5))),
-                         "articles")
+
+        def folder(path):
+            return os.path.basename(os.path.dirname(conv.plan_target(path, args, 5)))
+
+        self.assertEqual([folder(os.path.join(src, "a.txt")), folder(spaced)], ["tables", "articles"])
+        self.assertEqual(conv.convert_table_or_text(spaced, args)[1], "text")
         args.no_gwas = False
-        self.assertEqual(os.path.basename(os.path.dirname(conv.plan_target(os.path.join(src, "a.txt"), args, 5))),
-                         "tables")
+        self.assertEqual([folder(os.path.join(src, "a.txt")), folder(spaced)], ["tables", "tables"])
 
     def test_pdf_page_count_is_one_cached_function(self):
         """F038: one page counter (0 for a file that cannot be opened), each PDF opened once; --by-type sorts a
