@@ -431,9 +431,17 @@ class TestPipeline(unittest.TestCase):
             model.set_attention_impl("gqa_native")
             b = model(x)
             self.assertTrue(torch.allclose(a, b, atol=1e-5), "GQA implementations must agree")
-        w = model.blocks[0].attn.attention_weights(model.blocks[0].attn_norm(model.token_embedding(x)), model.rope)
+        import view_pt  # its attention entropy against a by-hand causal softmax(QK^T/sqrt(d)) of the first block
+        attn = model.blocks[0].attn
+        with torch.no_grad():
+            q, k, _ = attn._qkv(model.blocks[0].attn_norm(model.token_embedding(x[:1, :-1])), model.rope)
+            scores = (q @ k.repeat_interleave(attn.n_rep, dim=1).transpose(-1, -2)) / math.sqrt(attn.head_dim)
+            w = scores.masked_fill(torch.ones(15, 15, dtype=torch.bool).triu(1), float("-inf")).softmax(-1)
         self.assertTrue(torch.allclose(w.sum(-1), torch.ones_like(w.sum(-1)), atol=1e-5))
         self.assertEqual(float(w[0, 0, 0, 1:].sum()), 0.0, "attention must be causal")
+        by_hand = (-(w * w.clamp(min=1e-30).log2()).sum(-1)[0, :, 1:] / torch.arange(2, 16).log2()).mean(-1)
+        got = view_pt.attention_entropy(model, x[0], torch.device("cpu"))
+        self.assertLess(np.abs(got[0] - by_hand.numpy()).max(), 1e-5, "viewer entropy = by-hand softmax entropy")
         total = model.param_counts()[0]
         self.assertEqual(total, tiny_gpt.count_params(cfg)[0])
         self.assertEqual(model.param_counts(), tiny_gpt.count_params(cfg), "dense: active equals total")

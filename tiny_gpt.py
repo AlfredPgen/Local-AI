@@ -807,7 +807,7 @@ class GroupedQueryAttention(nn.Module):
 
     def _qkv(self, x, rope, pos=0):
         """Rotated queries and keys plus values, (B, heads, T, head_dim). The single path for training,
-        KV-cached decoding and attention_weights, so QK-norm reaches all three alike."""
+        KV-cached decoding and the viewer's attention entropy, so QK-norm reaches all three alike."""
         b, t, _ = x.shape
         q = self.q_proj(x).view(b, t, self.n_heads, self.head_dim).transpose(1, 2)
         k = self.k_proj(x).view(b, t, self.n_kv_heads, self.head_dim).transpose(1, 2)
@@ -884,17 +884,6 @@ class GroupedQueryAttention(nn.Module):
             allowed = torch.ones(t, past + t, dtype=torch.bool, device=x.device).tril(past)
             y = F.scaled_dot_product_attention(q, k, v, attn_mask=allowed)
         return self.o_proj(y.transpose(1, 2).contiguous().view(b, t, -1))
-
-    @torch.no_grad()
-    def attention_weights(self, x, rope):
-        """Explicit causal softmax(QK^T/sqrt(d)) per head, shape (B, H, T, T) (for the
-        viewer; plain causal, without the optional document mask)."""
-        q, k, _ = self._qkv(x, rope)
-        k = k.repeat_interleave(self.n_rep, dim=1)
-        t = q.size(-2)
-        scores = (q.float() @ k.float().transpose(-1, -2)) / math.sqrt(self.head_dim)
-        mask = torch.ones(t, t, dtype=torch.bool, device=x.device).triu(1)
-        return scores.masked_fill(mask, float("-inf")).softmax(-1)
 
 
 class TransformerBlock(nn.Module):
