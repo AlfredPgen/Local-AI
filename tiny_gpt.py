@@ -2876,7 +2876,7 @@ def plan_run(args, manifest, device, amp_dtype, token_cap=None, fixed_cfg=None, 
     max_epochs = args.max_epochs
     # the document mask stays opt-in at every context: at ctx 512 it changed bits per byte by -0.0016 (noise) for
     # ~8 % more forward+backward time (2026-11-05 A/B); ctx >= 2048 is unmeasured, so no planner default yet
-    doc_mask = getattr(args, "doc_mask", None) == "on"
+    doc_mask = args.doc_mask == "on"
 
     # --- training-token budget D ---
     # D is fixed by the data (or by an explicit token count). --steps alone decides
@@ -2903,7 +2903,7 @@ def plan_run(args, manifest, device, amp_dtype, token_cap=None, fixed_cfg=None, 
     fitting = [c for c in ladder if count_params(c)[2] * r <= planned]
     target = planned / r
     explicit_shape = any(v is not None for v in (args.d_model, args.layers, args.heads, args.kv_heads))
-    n_experts = int(getattr(args, "experts", 0) or 0)
+    n_experts = int(args.experts)
 
     def shaped(base):
         if fixed_cfg is not None:
@@ -2923,19 +2923,19 @@ def plan_run(args, manifest, device, amp_dtype, token_cap=None, fixed_cfg=None, 
         cfg.ffn_hidden = args.ffn_hidden or swiglu_hidden(cfg.d_model)
         # the RoPE base follows the context unless given (10,000 up to ctx 2048, then ctx^2)
         cfg.rope_base = args.rope_base if args.rope_base else default_rope_base(cfg.ctx)
-        cfg.tie_embeddings = getattr(args, "tie_embeddings", "on") != "off"
+        cfg.tie_embeddings = args.tie_embeddings != "off"
         # new runs get QK-norm unless told otherwise: -0.106 bits per byte against the same run without it at the
         # same rate (d 384, 500 steps, 2026-11-05 A/B), at no step time that the clock noise could resolve
-        cfg.qk_norm = getattr(args, "qk_norm", None) != "off"
+        cfg.qk_norm = args.qk_norm != "off"
         # mixture of experts only when asked (--experts N); dense stays the default
         cfg.n_experts = n_experts
-        cfg.experts_per_token = int(getattr(args, "experts_per_token", 2) or 2)
-        cfg.expert_hidden = (int(getattr(args, "expert_hidden", 0) or 0)
+        cfg.experts_per_token = int(args.experts_per_token)
+        cfg.expert_hidden = (int(args.expert_hidden)
                              or expert_hidden_for(cfg.ffn_hidden, cfg.experts_per_token)) if n_experts else 0
-        cfg.shared_hidden = int(getattr(args, "shared_hidden", 0) or 0) if n_experts else 0
-        cfg.moe_every = int(getattr(args, "moe_every", 1) or 1)
-        cfg.router = getattr(args, "router", None) or "softmax"
-        cfg.balance = getattr(args, "balance", None) or "bias"
+        cfg.shared_hidden = int(args.shared_hidden) if n_experts else 0
+        cfg.moe_every = int(args.moe_every)
+        cfg.router = args.router or "softmax"
+        cfg.balance = args.balance or "bias"
         cfg.validate()
         return cfg
 
@@ -3002,16 +3002,15 @@ def plan_run(args, manifest, device, amp_dtype, token_cap=None, fixed_cfg=None, 
     # lr_batch_factor on the batch the run will use (micro x accumulation x ctx): about x1.4 / x0.7 for double / half
     lr_factor = 1.0 if args.lr else lr_batch_factor(n_active, tokens_per_step)
     # --lr-scale: the sweep knob on the heuristic rate
-    lr_scale = float(getattr(args, "lr_scale", 1.0) or 1.0)
+    lr_scale = float(args.lr_scale)
     if args.lr and lr_scale != 1.0:  # recorded as the factor the run's rate actually carries
         lines.append(f"--lr-scale {lr_scale:g} has no effect: --lr sets the peak learning rate (recorded as 1)")
         lr_scale = 1.0
     lr = args.lr or heuristic_lr(n_active) * lr_factor * lr_scale
     min_lr_ratio = resolve_min_lr_ratio(args.min_lr_ratio, args.schedule)
     warmup = args.warmup_steps if args.warmup_steps is not None else int(min(max(round(0.02 * steps), 50), 2000, max(1, steps // 10)))
-    mix_alpha = getattr(args, "mix_alpha", None)
-    mix_alpha = 1.0 if mix_alpha is None else float(mix_alpha)
-    weights = mix_weights(getattr(args, "mix", None), train_by_source, train_by_source, mix_alpha)
+    mix_alpha = 1.0 if args.mix_alpha is None else float(args.mix_alpha)
+    weights = mix_weights(args.mix, train_by_source, train_by_source, mix_alpha)
     raw_share = {s: weights[s] * n for s, n in train_by_source.items()}
     share = {s: v / max(sum(raw_share.values()), 1e-12) for s, v in raw_share.items()}
     source_epochs = {s: train_tokens * share[s] / max(n, 1) for s, n in train_by_source.items()}
@@ -3024,10 +3023,10 @@ def plan_run(args, manifest, device, amp_dtype, token_cap=None, fixed_cfg=None, 
         "lr_scale": lr_scale, "doc_mask": doc_mask,
     }
     if cfg.n_experts:  # the mixture-of-experts training terms (see the training loop)
-        settings["lb_loss"] = float(getattr(args, "lb_loss", LB_LOSS_DEFAULT))
-        settings["router_z_loss"] = float(getattr(args, "router_z_loss", ROUTER_Z_LOSS_DEFAULT))
-        settings["bias_rate"] = float(getattr(args, "bias_rate", BIAS_RATE_DEFAULT))
-    resolve_ema(settings, getattr(args, "ema", None), resumed=False)
+        settings["lb_loss"] = float(args.lb_loss)
+        settings["router_z_loss"] = float(args.router_z_loss)
+        settings["bias_rate"] = float(args.bias_rate)
+    resolve_ema(settings, args.ema, resumed=False)
     moe_text = ""
     if cfg.n_experts:
         moe_text = (f", MoE: {cfg.n_experts} experts of hidden {cfg.expert_hidden}, {cfg.experts_per_token} per "
@@ -3080,7 +3079,7 @@ def plan_run(args, manifest, device, amp_dtype, token_cap=None, fixed_cfg=None, 
         f"of {budget_text})",
         "weights: " + (f"EMA with decay {settings['ema']:g} per step (updated every {EMA_EVERY} steps), scored beside "
                        "the raw weights at each evaluation; the better of the two is saved as the best model"
-                       if settings["ema"] else "no EMA (--ema off)" if getattr(args, "ema", None) is not None
+                       if settings["ema"] else "no EMA (--ema off)" if args.ema is not None
                        else "no EMA (opt-in: --ema 0.999)")
         + ("; document mask on: attention stays within each document of a window (B x T x T bytes of mask)"
            if doc_mask else ""),
@@ -3095,7 +3094,7 @@ def plan_run(args, manifest, device, amp_dtype, token_cap=None, fixed_cfg=None, 
     lines += block
     if args.steps and train_tokens > max_epochs * unique:
         lines.append(f"note: --steps {args.steps:,} trains {epochs:.2f} epochs, more than --max-epochs {max_epochs:g}.")
-    floor = float(getattr(args, "tokens_per_total_param", 0) or 0)
+    floor = float(args.tokens_per_total_param)
     if cfg.n_experts and floor > 0 and train_tokens / n_total < floor:
         lines.append(f"WARNING: {train_tokens / n_total:,.1f} training tokens per TOTAL parameter is below the "
                      f"--tokens-per-total-param floor {floor:g}: every published mixture-of-experts gain was "
@@ -3271,7 +3270,7 @@ def plan_with_time_budget(args, manifest, device, amp_dtype, fixed_cfg=None, ver
     capped by the budget (N is its active parameter count). verbose: as in
     plan_run, for the lines that are returned."""
     cfg, settings, lines = plan_run(args, manifest, device, amp_dtype, fixed_cfg=fixed_cfg, verbose=verbose)
-    hours = getattr(args, "time_budget_hours", None)
+    hours = args.time_budget_hours
     if not hours:
         return cfg, settings, lines
     budget_s = hours * 3600 * 0.92
@@ -4225,7 +4224,7 @@ def _train(args):
                                                         "epochs", "train_tokens", "time_budget_hours",
                                                         "tokens_per_step")
                    if getattr(args, k) is not None]
-        if getattr(args, "tie_embeddings", "on") == "off" and cfg.tie_embeddings:
+        if args.tie_embeddings == "off" and cfg.tie_embeddings:
             ignored.append("--tie-embeddings off")
         if args.qk_norm is not None and (args.qk_norm == "on") != cfg.qk_norm:
             ignored.append(f"--qk-norm {args.qk_norm}")
