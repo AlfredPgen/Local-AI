@@ -920,14 +920,31 @@ def score_mcq(model, tok, items, device, amp_dtype, floor=True, batch_size=32):
     return rows
 
 
+DECODE_WINDOW = 16  # prompt tokens decoded together with the completion at every step (not the whole prompt)
+
+
+def _prompt_tail(tok, ids, start):
+    """(a, head) for a prompt `ids` whose text starts at `start` (after the begin token): the index of its last
+    DECODE_WINDOW tokens and their text. The text a tokenizer gives a token depends on its neighbours (a space
+    before a word, bytes of one character), so the completion is decoded together with this tail."""
+    a = max(start, len(ids) - DECODE_WINDOW)
+    return a, tok.decode(ids[a:])
+
+
+def _completion_text(tok, ids, n_prompt, a, head):
+    """The text of ids[n_prompt:] as it reads after the prompt; (a, head) from _prompt_tail."""
+    full = tok.decode(ids[a:])
+    return full[len(head):] if full.startswith(head) else tok.decode(ids[n_prompt:])
+
+
 def greedy_generate(model, tok, prompt, max_new_tokens, device, amp_dtype=None, stops=()):
     """Greedy continuation of `prompt`, stopped at the first stop string."""
     import torch
     import tiny_gpt
     prefix = [tok.bos_id] if tok.bos_id >= 0 else []
     ids = prefix + tok.encode(prompt)
-    start, n_prompt = len(prefix), len(ids)
-    head = tok.decode(ids[start:])
+    n_prompt = len(ids)
+    tail = _prompt_tail(tok, ids, len(prefix))
     text = ""
     decoder = tiny_gpt.IncrementalDecoder(model, device, amp_dtype)  # KV cache: one token of work per step
     with torch.no_grad():
@@ -936,8 +953,7 @@ def greedy_generate(model, tok, prompt, max_new_tokens, device, amp_dtype=None, 
             if nxt == tok.eos_id:
                 break
             ids.append(nxt)
-            full = tok.decode(ids[start:])
-            text = full[len(head):] if full.startswith(head) else tok.decode(ids[n_prompt:])
+            text = _completion_text(tok, ids, n_prompt, *tail)
             if stops and any(s in text for s in stops):
                 return cut_at_stops(text, stops)
     return cut_at_stops(text, stops) if stops else text
@@ -981,7 +997,7 @@ def batched_greedy(model, tok, prompts, max_new_tokens, device, amp_dtype=None, 
         group = order[g:g + max(1, int(batch))]
         ids = [list(encoded[i]) for i in group]
         n_prompt = [len(r) for r in ids]
-        heads = [tok.decode(r[start:]) for r in ids]
+        tails = [_prompt_tail(tok, r, start) for r in ids]
         texts = [""] * len(group)
         width = max(n_prompt)
         x = torch.zeros((len(group), width), dtype=torch.long)
@@ -1007,8 +1023,7 @@ def batched_greedy(model, tok, prompts, max_new_tokens, device, amp_dtype=None, 
                     if token == tok.eos_id:
                         continue
                     ids[r].append(token)
-                    full = tok.decode(ids[r][start:])
-                    texts[r] = full[len(heads[r]):] if full.startswith(heads[r]) else tok.decode(ids[r][n_prompt[r]:])
+                    texts[r] = _completion_text(tok, ids[r], n_prompt[r], *tails[r])
                     row_stops = per_stops[group[r]]
                     if row_stops and any(s in texts[r] for s in row_stops):
                         continue

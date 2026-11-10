@@ -186,6 +186,70 @@ class Audit2Benchmark(unittest.TestCase):
         self.assertEqual(ax.lines[0].get_color(), ax.lines[1].get_color())
         self.assertGreater(ax.get_legend().get_bbox_to_anchor().x0, ax.bbox.x1)
 
+    def test_completion_text_from_a_short_decode_window(self):
+        """F013: the completion text of a decode step comes from the last 16 prompt tokens plus the new tokens,
+        not from the whole prompt again, and equals the text the whole-prompt decode gave: with a SentencePiece
+        tokenizer (byte fallback, lines and plain mode) on prompts that are empty, short, non-ASCII or end in
+        white space, for every step of 40 random tokens."""
+        import random
+        import sentencepiece as spm
+        import data_prep
+        from test_tiny_gpt import paragraphs
+        b = self.b
+        writer = io.BytesIO()
+        spm.SentencePieceTrainer.train(
+            sentence_iterator=iter(paragraphs(3, 200).split("\n")), model_writer=writer, model_type="bpe",
+            vocab_size=400, character_coverage=0.9995, byte_fallback=True, split_digits=True, unk_id=0, bos_id=1,
+            eos_id=2, pad_id=-1, user_defined_symbols=["\n", "\t"], remove_extra_whitespaces=False,
+            allow_whitespace_only_pieces=True, normalization_rule_name="identity", hard_vocab_limit=False,
+            minloglevel=2)
+        long_text = paragraphs(5, 3)
+        prompts = ["", "a", "Gene", "Question: which gene?\nAnswer:", "ends in a space ", "ends in a newline\n",
+                   "two newlines\n\n", "  leading spaces", "naïve café: β-globin α1 → 5′ end", "日本語 \U0001f9ec emoji",
+                   long_text, long_text + " ", long_text + "\nAnswer:", long_text[:300] + " µ"]
+        rng, steps = random.Random(0), 0
+        for mode in ("lines", "plain"):
+            tok = data_prep.Tokenizer(writer.getvalue(), mode)
+            prefix = [tok.bos_id]
+            for prompt in prompts:
+                for _ in range(3):
+                    ids = prefix + tok.encode(prompt)
+                    start, n_prompt = len(prefix), len(ids)
+                    old_head = tok.decode(ids[start:])
+                    tail = b._prompt_tail(tok, ids, start)
+                    self.assertEqual(tail[0], max(start, n_prompt - b.DECODE_WINDOW))
+                    for _ in range(40):
+                        ids.append(rng.randrange(3, tok.vocab_size))
+                        full = tok.decode(ids[start:])
+                        old = full[len(old_head):] if full.startswith(old_head) else tok.decode(ids[n_prompt:])
+                        self.assertEqual(b._completion_text(tok, ids, n_prompt, *tail), old, (mode, prompt, ids))
+                        steps += 1
+        self.assertEqual(steps, 2 * len(prompts) * 3 * 40)
+
+    def test_decode_steps_do_not_decode_the_whole_prompt(self):
+        """F013: with a 300-token prompt no decode call of batched_greedy or greedy_generate gets more than the
+        16-token window plus the new tokens (it was the whole prompt, at every step of every row)."""
+        import torch
+        from test_tiny_gpt import CharTok, TestOtherScripts
+        b = self.b
+
+        class Counting(CharTok):
+            longest = 0
+
+            def decode(self, ids):
+                Counting.longest = max(Counting.longest, len(ids))
+                return super().decode(ids)
+
+        model, tok, cpu = TestOtherScripts.model(seed=1, ctx=400), Counting(), torch.device("cpu")
+        prompts = ["".join("abcdefghij klmnop"[(i * k) % 17] for i in range(300)) for k in (3, 5)]
+        self.assertEqual(len(tok.encode(prompts[0])), 300)
+        texts = b.batched_greedy(model, tok, prompts, 8, cpu, batch=2)
+        self.assertEqual([len(t) for t in texts], [8, 8])
+        self.assertLessEqual(Counting.longest, b.DECODE_WINDOW + 8)
+        Counting.longest = 0
+        self.assertEqual([b.greedy_generate(model, tok, p, 8, cpu) for p in prompts], texts)
+        self.assertLessEqual(Counting.longest, b.DECODE_WINDOW + 8)
+
     def test_medcalc_rows_name_the_integer_rule(self):
         """F016: MedCalc rows scored with the official integer rule say so in their notes (earlier rows of
         results/benchmarks.csv used rounding for the 34 'integer' items whose answer is not a whole number)."""
