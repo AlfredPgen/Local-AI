@@ -89,7 +89,6 @@ MAX_API = 20 << 20  # one metadata page
 MAX_XML = 50 << 20  # one JATS file
 MAX_PDF = ax.MAX_DOWNLOAD
 MAX_BLOCKED_IN_A_ROW = 5
-FINAL = ax.FINAL  # ok, too_short, no_text: not retried on a rerun
 REPORT_COLUMNS = ["id", "status", "chars", "method", "category", "year", "licence", "file"]
 LIST_COLUMNS = ["id", "version", "score", "year", "category", "licence", "jatsxml", "title", "abstract"]
 _flat = ax._flat
