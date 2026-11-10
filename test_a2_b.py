@@ -676,6 +676,138 @@ class Audit2DataPrep(unittest.TestCase):
         ahead.close()
         self.assertEqual(threading.active_count(), before)
 
+    # ---------------- F091: text files are opened ahead, in threads; the documents are the same ----------------
+    @staticmethod
+    def serial_markdown(dirs, patterns, excludes, recursive, stats, ledger, source="md"):
+        """The reader as it was before the read-ahead, one file at a time: the reference of the test below."""
+        import zlib
+        seen = set()
+        bases = [os.path.basename(os.path.normpath(d)) or f"folder{k + 1}" for k, d in enumerate(dirs)]
+        if len({b.lower() for b in bases}) < len(bases):
+            bases = [f"{k + 1}-{b}" for k, b in enumerate(bases)]
+        excludes = [ex.lower().replace("\\", "/") for ex in excludes]
+        for k, directory in enumerate(dirs):
+            if not os.path.isdir(directory):
+                raise SystemExit(f"--md-dir is not a folder: {directory}")
+            for path in data_prep.list_text_files(directory, patterns, recursive):
+                real = os.path.realpath(path)
+                if real in seen or not os.path.isfile(real):
+                    continue
+                seen.add(real)
+                rel = os.path.relpath(path, directory).replace(os.sep, "/")
+                packed = rel.lower().endswith(".gz")
+                if packed:
+                    rel = rel[:-3]
+                doc_id = f"{bases[k]}/{rel}" if len(dirs) > 1 else rel
+                stats["scanned"] += 1
+                if data_prep._excluded(path, rel, excludes):
+                    stats["skipped"]["excluded_by_glob"] += 1
+                    ledger.append(data_prep._ledger_row(source, doc_id, rel, "skipped", "excluded_by_glob",
+                                                        os.path.getsize(path)))
+                    continue
+                size = os.path.getsize(path)
+                if size > 512 * 1024 * 1024:
+                    stats["skipped"]["file_too_large"] += 1
+                    ledger.append(data_prep._ledger_row(source, doc_id, rel, "skipped", "file_too_large", size))
+                    continue
+                with open(path, "rb") as handle:
+                    raw = handle.read()
+                if packed:
+                    try:
+                        with gzip.GzipFile(fileobj=io.BytesIO(raw)) as unpacked:
+                            raw = unpacked.read(512 * 1024 * 1024 + 1)
+                    except (OSError, EOFError, zlib.error) as exc:
+                        stats["skipped"]["bad_gzip"] += 1
+                        ledger.append(data_prep._ledger_row(source, doc_id, rel, "skipped", f"bad_gzip: {exc}"[:80],
+                                                            size))
+                        continue
+                    if len(raw) > 512 * 1024 * 1024:
+                        stats["skipped"]["file_too_large"] += 1
+                        ledger.append(data_prep._ledger_row(source, doc_id, rel, "skipped", "file_too_large",
+                                                            len(raw)))
+                        continue
+                yield (doc_id, os.path.splitext(os.path.basename(rel))[0],
+                       data_prep.decode_bytes(raw, stats["cleaning"]), {"path": path})
+
+    def read_all(self, reader, dirs, recursive, **more):
+        """(documents, stats, ledger, the SystemExit text if the reader stopped with one)."""
+        stats, ledger, docs, stopped = data_prep._new_stats(), [], [], None
+        try:
+            for doc in reader(dirs, data_prep.MD_PATTERNS_DEFAULT, ["skip_*", "drafts/*"], recursive, stats, ledger,
+                              "texts", **more):
+                docs.append(doc)
+        except SystemExit as exc:
+            stopped = str(exc)
+        return docs, stats, ledger, stopped
+
+    def markdown_folder(self, name):
+        root = self.folder(name)
+        for sub in ("sub/deep", "drafts"):
+            os.makedirs(os.path.join(root, sub))
+        files = {"b.txt": "Plain text about alleles.\n", "empty.md": "", "skip_me.md": "excluded by its name",
+                 "sub/c.md": "# C\n\nNested once.\n", "sub/deep/d.md": "# D\n\nNested twice.\n",
+                 "drafts/e.md": "excluded by its path", "Upper.MD": "An upper-case ending.\n",
+                 "big.md": "A long text. " * 500, "latin.md": b"caf\xe9 in Latin-1\n"}
+        for rel, text in files.items():
+            with open(os.path.join(root, rel), "wb") as f:
+                f.write(text if isinstance(text, bytes) else text.encode("utf-8"))
+        with gzip.open(os.path.join(root, "packed.md.gz"), "wb") as f:
+            f.write(b"# Packed\n\nA compressed document.\n")
+        with open(os.path.join(root, "bad.md.gz"), "wb") as f:
+            f.write(b"this is not a gzip file")
+        with open(os.path.join(root, "packed.md.gz"), "rb") as f:
+            whole = f.read()
+        with open(os.path.join(root, "cut.md.gz"), "wb") as f:
+            f.write(whole[:len(whole) // 2])
+        try:
+            os.link(os.path.join(root, "b.txt"), os.path.join(root, "hard_link.txt"))
+        except OSError:
+            pass
+        return root
+
+    def test_markdown_read_ahead_gives_the_documents_of_the_serial_reader(self):
+        root = self.markdown_folder("f091")
+        sub, missing = os.path.join(root, "sub"), os.path.join(root, "no_such_folder")
+        cases = [([root], True), ([root], False), ([root, root], True), ([root, sub], True), ([sub, root], True),
+                 ([sub, missing, root], True)]
+        for dirs, recursive in cases:
+            expected = self.read_all(self.serial_markdown, dirs, recursive)
+            self.assertEqual(expected[3] is not None, missing in dirs)
+            for more in ({}, {"read_threads": 4, "read_window": 3, "read_ahead_bytes": 1000},
+                         {"read_threads": 1, "read_window": 0, "read_ahead_bytes": 0}):
+                with self.subTest(dirs=[os.path.relpath(d, root) for d in dirs], recursive=recursive, more=more):
+                    found = self.read_all(data_prep.iter_markdown, dirs, recursive, **more)
+                    self.assertEqual(found[0], expected[0])
+                    self.assertEqual(found[1], expected[1])
+                    self.assertEqual(found[2], expected[2])
+                    self.assertEqual(found[3], expected[3])
+        docs, stats, ledger, _ = self.read_all(data_prep.iter_markdown, [root], True)
+        self.assertGreaterEqual(len(docs), 7)
+        self.assertEqual(stats["skipped"]["excluded_by_glob"], 2)
+        self.assertEqual(stats["skipped"]["bad_gzip"], 2)
+        # the files are opened by the reader threads, never an excluded one, and only up to read_ahead_bytes
+        real_open, opened = open, []
+
+        def recorded(path, *a, **k):
+            opened.append((os.path.basename(str(path)), threading.current_thread() is threading.main_thread()))
+            return real_open(path, *a, **k)
+
+        with unittest.mock.patch("builtins.open", recorded):
+            self.read_all(data_prep.iter_markdown, [root], True, read_ahead_bytes=1000)
+        by_name = dict(opened)
+        self.assertEqual(len(opened), len(by_name), "every file is opened once")
+        self.assertNotIn("skip_me.md", by_name)
+        self.assertNotIn("e.md", by_name)
+        self.assertTrue(by_name.pop("big.md"), "above read_ahead_bytes: read in turn by the main thread")
+        self.assertFalse(any(by_name.values()), by_name)
+        # a caller that stops reading early leaves no thread behind
+        before = threading.active_count()
+        reader = data_prep.iter_markdown([root], data_prep.MD_PATTERNS_DEFAULT, [], True, data_prep._new_stats(), [])
+        next(reader)
+        self.assertGreater(threading.active_count(), before)
+        reader.close()
+        self.assertEqual(threading.active_count(), before)
+
 
 if __name__ == "__main__":
     unittest.main()

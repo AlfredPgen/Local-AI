@@ -952,42 +952,72 @@ def _excluded(path, rel, excludes):
     return any(fnmatch.fnmatchcase(name, ex) or fnmatch.fnmatchcase(rel, ex) for ex in excludes)
 
 
-def iter_markdown(dirs, patterns, excludes, recursive, stats, ledger, source="md"):
+def iter_markdown(dirs, patterns, excludes, recursive, stats, ledger, source="md", read_threads=16, read_window=64,
+                  read_ahead_bytes=8 * 1024 * 1024):
     """Documents of one text source. With several folders, ids start with the
-    folder name so equal file names in different folders stay distinct."""
+    folder name so equal file names in different folders stay distinct.
+
+    The first open of a file is the slow part (the virus scanner looks at it),
+    so `read_threads` background threads open and read the files, at most
+    `read_window` files ahead of the one being used and only files of up to
+    `read_ahead_bytes` (the window then holds at most 64 x 8 MB); an excluded
+    file is not read at all. Everything else, unpacking a .gz included, happens
+    here, one file at a time in path order."""
     seen = set()
     bases = [os.path.basename(os.path.normpath(d)) or f"folder{k + 1}" for k, d in enumerate(dirs)]
     if len({b.lower() for b in bases}) < len(bases):
         bases = [f"{k + 1}-{b}" for k, b in enumerate(bases)]
     excludes = [ex.lower().replace("\\", "/") for ex in excludes]
-    for k, directory in enumerate(dirs):
-        if not os.path.isdir(directory):
-            raise SystemExit(f"--md-dir is not a folder: {directory}")
-        for path in list_text_files(directory, patterns, recursive):
-            real = os.path.realpath(path)
-            if real in seen or not os.path.isfile(real):
+
+    def listed():  # runs in this thread, up to read_window files ahead
+        for k, directory in enumerate(dirs):
+            if not os.path.isdir(directory):
+                yield k, directory, None, None, None, None  # reported at its turn, after the files before it
+                return
+            for path in list_text_files(directory, patterns, recursive):
+                # ids use "/" on every system: the split hashes the id, so a Mac build of the same folder gives
+                # the same split and fingerprint as a Windows build (the 2026-10 datasets hold "\\" in nested ids;
+                # --keep-split-from matches them separator-blind, a fresh rebuild re-splits those documents)
+                rel = os.path.relpath(path, directory).replace(os.sep, "/")
+                packed = rel.lower().endswith(".gz")
+                if packed:
+                    rel = rel[:-3]  # a.md.gz has the id of a.md, so compressing a folder keeps every split decision
+                yield k, directory, path, rel, packed, _excluded(path, rel, excludes)
+
+    def opened(item):  # runs in a reader thread
+        path, excluded = item[2], item[5]
+        if path is None:
+            return item + (None, False, 0, None)
+        real = os.path.realpath(path)
+        is_file = os.path.isfile(real)
+        size = os.path.getsize(path) if is_file else 0
+        raw = None
+        if is_file and not excluded and size <= read_ahead_bytes:
+            with open(path, "rb") as handle:
+                raw = handle.read()
+        return item + (real, is_file, size, raw)
+
+    ahead = _read_ahead(listed(), opened, read_threads, read_window)
+    try:
+        for k, directory, path, rel, packed, excluded, real, is_file, size, raw in ahead:
+            if path is None:
+                raise SystemExit(f"--md-dir is not a folder: {directory}")
+            if real in seen or not is_file:
                 continue
             seen.add(real)
-            # ids use "/" on every system: the split hashes the id, so a Mac build of the same folder gives
-            # the same split and fingerprint as a Windows build (the 2026-10 datasets hold "\\" in nested ids;
-            # --keep-split-from matches them separator-blind, a fresh rebuild re-splits those documents)
-            rel = os.path.relpath(path, directory).replace(os.sep, "/")
-            packed = rel.lower().endswith(".gz")
-            if packed:
-                rel = rel[:-3]  # a.md.gz has the id of a.md, so compressing a folder keeps every split decision
             doc_id = f"{bases[k]}/{rel}" if len(dirs) > 1 else rel
             stats["scanned"] += 1
-            if _excluded(path, rel, excludes):
+            if excluded:
                 stats["skipped"]["excluded_by_glob"] += 1
-                ledger.append(_ledger_row(source, doc_id, rel, "skipped", "excluded_by_glob", os.path.getsize(path)))
+                ledger.append(_ledger_row(source, doc_id, rel, "skipped", "excluded_by_glob", size))
                 continue
-            size = os.path.getsize(path)
             if size > 512 * 1024 * 1024:
                 stats["skipped"]["file_too_large"] += 1
                 ledger.append(_ledger_row(source, doc_id, rel, "skipped", "file_too_large", size))
                 continue
-            with open(path, "rb") as handle:
-                raw = handle.read()
+            if raw is None:  # larger than read_ahead_bytes: read here, at its turn
+                with open(path, "rb") as handle:
+                    raw = handle.read()
             if packed:
                 try:
                     with gzip.GzipFile(fileobj=io.BytesIO(raw)) as unpacked:
@@ -1001,6 +1031,8 @@ def iter_markdown(dirs, patterns, excludes, recursive, stats, ledger, source="md
                     ledger.append(_ledger_row(source, doc_id, rel, "skipped", "file_too_large", len(raw)))
                     continue
             yield doc_id, os.path.splitext(os.path.basename(rel))[0], decode_bytes(raw, stats["cleaning"]), {"path": path}
+    finally:
+        ahead.close()  # a caller that stops early: the reader threads end now, files not yet started are not read
 
 
 class ArrowTableSource:
@@ -1135,18 +1167,22 @@ def _read_ahead(items, fn, threads, window=None):
     """fn(item) for every item, in the order of the items. fn runs in `threads`
     background threads, on at most `window` items ahead of the one being used
     (default: 2 per thread), so memory stays bounded; an error of fn comes out
-    at its own item. What the user needs of the item itself, fn returns."""
+    at its own item. What the user needs of the item itself, fn returns. When
+    the user stops early, work that was queued and not started is dropped."""
     from concurrent.futures import ThreadPoolExecutor
     threads = max(1, threads)
     window = 2 * threads if window is None else window
     pending = collections.deque()
-    with ThreadPoolExecutor(max_workers=threads) as pool:
+    pool = ThreadPoolExecutor(max_workers=threads)
+    try:
         for item in items:
             pending.append(pool.submit(fn, item))
             if len(pending) > window:
                 yield pending.popleft().result()
         while pending:
             yield pending.popleft().result()
+    finally:
+        pool.shutdown(wait=True, cancel_futures=True)
 
 
 def _prescored(source, kw, min_score, threads):
