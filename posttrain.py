@@ -144,9 +144,12 @@ def medmcqa(cap_sft, cap_dpo, rng):
         if len(sft) < cap_sft and len(exp) >= 40:
             sft.append({"prompt": prompt, "response": f"{LETTERS[k]}. {opts[k]}. {exp[:1500]}", "source": "medmcqa"})
         elif len(dpo) < cap_dpo:
-            wrong = rng.choice([i for i in range(4) if i != k])
-            dpo.append({"prompt": prompt, "chosen": f"{LETTERS[k]}. {opts[k]}",
-                        "rejected": f"{LETTERS[wrong]}. {opts[wrong]}", "source": "medmcqa"})
+            # an option with the same text as the right one is no worse answer
+            others = [i for i in range(4) if i != k and opts[i].strip().lower() != opts[k].strip().lower()]
+            if others:
+                wrong = rng.choice(others)
+                dpo.append({"prompt": prompt, "chosen": f"{LETTERS[k]}. {opts[k]}",
+                            "rejected": f"{LETTERS[wrong]}. {opts[wrong]}", "source": "medmcqa"})
         if len(sft) >= cap_sft and len(dpo) >= cap_dpo:
             break
     return sft, dpo, {"cop_base": base, "cop_check": score}
@@ -156,7 +159,7 @@ def sciq(cap_dpo, rng):
     sft, dpo = [], []
     for r in _stream("allenai/sciq"):
         q, a = _flat(r["question"]), _flat(r["correct_answer"])
-        wrong = [_flat(r[f"distractor{i}"]) for i in (1, 2, 3) if _flat(r[f"distractor{i}"])]
+        wrong = [d for d in (_flat(r[f"distractor{i}"]) for i in (1, 2, 3)) if d and d.lower() != a.lower()]
         if not q or not a:
             continue
         support = _text(r.get("support"))

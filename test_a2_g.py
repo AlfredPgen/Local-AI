@@ -294,6 +294,37 @@ class Audit2FinetuneTools(unittest.TestCase):
                 handle.write("{}\n")
         return folder
 
+    def test_dpo_pairs_never_reject_the_chosen_answer(self):
+        """F181: a SciQ distractor or a MedMCQA option with the same text as the right answer is never the
+        rejected answer of a preference pair; a question with no other option gives no pair."""
+        import random
+        import posttrain
+        sciq_rows = [{"question": f"Which molecule stores genes, case {i}?", "correct_answer": "DNA",
+                      "distractor1": "dna", "distractor2": " DNA ", "distractor3": "Dna", "support": ""}
+                     for i in range(3)]
+        sciq_rows += [{"question": f"Which organelle makes ATP, case {i}?", "correct_answer": "mitochondria",
+                       "distractor1": "Mitochondria", "distractor2": "nucleus", "distractor3": "ribosome",
+                       "support": "Mitochondria make ATP."} for i in range(20)]
+        med = {"choice_type": "single", "subject_name": "Anatomy", "cop": 0, "exp": ""}
+        med_rows = [dict(med, question="Which bone is the thigh bone?", opa="Femur", opb="Femur", opc="Femur",
+                         opd="Femur")]
+        med_rows += [dict(med, question=f"Which bone is the thigh bone, case {i}?", opa="Femur", opb="femur ",
+                          opc="Tibia", opd="Ulna") for i in range(20)]
+        streams = {"allenai/sciq": sciq_rows, "openlifescienceai/medmcqa": med_rows}
+        with unittest.mock.patch.object(posttrain, "_stream", lambda name, config=None, split="train": streams[name]):
+            s_sft, s_dpo = posttrain.sciq(100, random.Random(0))
+            m_sft, m_dpo, _ = posttrain.medmcqa(0, 100, random.Random(0))
+        self.assertEqual(len(s_sft), 23, "the question-answer pairs are not touched")
+        self.assertEqual(len(s_dpo), 20, "no pair from a question whose distractors all equal the answer")
+        for pair in s_dpo:
+            self.assertNotEqual(pair["chosen"].lower(), pair["rejected"].lower(), pair)
+        self.assertEqual({p["rejected"] for p in s_dpo}, {"Nucleus.", "Ribosome."})
+        self.assertEqual(len(m_dpo), 20, "no pair from a question whose options are all the same")
+        for pair in m_dpo:
+            self.assertEqual(pair["chosen"], "A. Femur")
+            self.assertNotEqual(pair["chosen"][3:].lower(), pair["rejected"][3:].lower(), pair)
+        self.assertEqual({p["rejected"] for p in m_dpo}, {"C. Tibia", "D. Ulna"})
+
     def test_posttrain_reuse_sft(self):
         """F163: posttrain run --reuse-sft skips SFT when <name>_sft.pt is an SFT made from this --base, and DPO
         starts from it; with another --base it exits; without the flag SFT runs as before."""
