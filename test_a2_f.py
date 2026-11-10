@@ -73,6 +73,7 @@ class Audit2DocsYoutubeConvert(unittest.TestCase):
         """F445: a video, playlist or /streams URL is listed as itself on the next run too; only a plain channel
         (@handle, name, id, channel URL) is listed through its remembered channel address."""
         import json
+        import data_prep
         import youtube_transcripts as yt
         channel_id = "UC" + "x" * 22
         asked = []
@@ -96,7 +97,9 @@ class Audit2DocsYoutubeConvert(unittest.TestCase):
         specs = ("https://www.youtube.com/watch?v=abcdefghijk", "https://www.youtube.com/playlist?list=PL123",
                  "https://www.youtube.com/@somechannel/streams", "@somechannel",
                  "https://www.youtube.com/@somechannel/videos")
+        # main runs in the test process here: its priority call is replaced, the test run keeps its own priority
         with unittest.mock.patch.object(yt, "ydl", lambda *a, **k: FakeYdl()), \
+                unittest.mock.patch.object(data_prep, "_lower_priority") as lowered, \
                 unittest.mock.patch("sys.stdout", new_callable=__import__("io").StringIO):
             for spec in specs:
                 del asked[:]
@@ -111,12 +114,14 @@ class Audit2DocsYoutubeConvert(unittest.TestCase):
             memory = json.load(handle)
         for spec in specs:
             self.assertEqual(memory[spec]["name"], "Some Channel", spec)  # the name is kept for every kind
+        self.assertEqual(lowered.call_count, 2 * len(specs))
         self.assertNotIn("url", memory[specs[0]])
         self.assertNotIn("url", memory[specs[1]])
         self.assertNotIn("url", memory[specs[2]])
         self.assertEqual(memory["@somechannel"]["url"], f"https://www.youtube.com/channel/{channel_id}")
         # an entry an earlier version wrote for a video URL (its whole channel) is harmless now
         with unittest.mock.patch.object(yt, "ydl", lambda *a, **k: FakeYdl()), \
+                unittest.mock.patch.object(data_prep, "_lower_priority"), \
                 unittest.mock.patch("sys.stdout", new_callable=__import__("io").StringIO):
             memory[specs[0]]["url"] = f"https://www.youtube.com/channel/{channel_id}"
             with open(meta, "w", encoding="utf-8") as handle:
