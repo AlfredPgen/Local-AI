@@ -3187,9 +3187,14 @@ def _train_tokenizer(spool2, docs, split_of, sources, vocab, args, work):
         for i, line in enumerate(src):
             if split_of[i] != SPLIT_TRAIN:
                 continue
-            rec = json.loads(line)
-            if keep_prob[rec["s"]] <= 0:
+            # a document none of whose windows is kept is not parsed (most of them, at a small probability):
+            # docs[i] is line i of the spool, and a text of n characters has at most n // window + 1 windows
+            s, doc_id, chars = docs[i][0], docs[i][1], docs[i][3]
+            p = keep_prob[s]
+            if p <= 0 or (p < 1 and not any(stable_unit(args.seed, "tok", s, doc_id, w) < p
+                                            for w in range(chars // TOKENIZER_WINDOW + 1))):
                 continue
+            rec = json.loads(line)
             for piece in tokenizer_sample_lines(rec["x"], rec["s"], rec["id"], args.seed, keep_prob[rec["s"]]):
                 dst.write(piece + "\n")
                 written[rec["s"]] += len(piece)

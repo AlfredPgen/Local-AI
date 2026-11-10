@@ -904,6 +904,46 @@ class Audit2DataPrep(unittest.TestCase):
             self.assertEqual(out, "\n".join(kept) if kept else text)
             self.assertIsNone(sig)
 
+    # ---------------- F078: the tokenizer sample does not parse documents none of whose windows is kept ----------------
+    def test_tokenizer_sample_skips_documents_without_a_kept_window(self):
+        out = os.path.join(self.tmp, "f078")
+        real_lines, real_shares = data_prep.tokenizer_sample_lines, data_prep.tokenizer_shares
+        called, seen = [], {}
+
+        def lines(text, source, doc_id, seed, prob, *a, **k):
+            called.append((source, doc_id))
+            return real_lines(text, source, doc_id, seed, prob, *a, **k)
+
+        def shares(train_chars, weights):
+            seen.update(chars=dict(train_chars), share=real_shares(train_chars, weights))
+            return seen["share"]
+
+        sample = 6000
+        with unittest.mock.patch.object(data_prep, "tokenizer_sample_lines", lines), \
+                unittest.mock.patch.object(data_prep, "tokenizer_shares", shares), redirect_stdout(io.StringIO()):
+            data_prep.prepare(["--out", out, "--keep-work", "--tokenizer-sample-chars", str(sample),
+                               "--tokenizer-weights", "md=3"] + self.base_args())
+        st = data_prep._load_state(os.path.join(out, "_work", data_prep.STATE_NAME))
+        prob = {n: min(1.0, sample * seen["share"][n] / max(seen["chars"][n], 1)) for n in seen["chars"]}
+        self.assertTrue(all(0 < p < 0.5 for p in prob.values()), prob)
+        expected, train = [], 0
+        with data_prep._open_spool(st["spool2"], "r") as src:
+            for i, line in enumerate(src):
+                rec, doc = json.loads(line), st["docs"][i]
+                self.assertEqual((doc[0], doc[1], doc[3]), (rec["s"], rec["id"], len(rec["x"])),
+                                 "what the shortcut reads from the document table is what the spool holds")
+                if st["split_of"][i] != data_prep.SPLIT_TRAIN:
+                    continue
+                train += 1
+                expected.extend(real_lines(rec["x"], rec["s"], rec["id"], st["args"]["seed"], prob[rec["s"]]))
+        with open(os.path.join(out, "_work", "tokenizer_corpus.txt"), "rb") as f:
+            corpus = f.read().decode("utf-8")
+        self.assertTrue(expected)
+        self.assertEqual(corpus, "".join(piece + "\n" for piece in expected), "the text every document would give")
+        self.assertGreater(len(called), 0)
+        self.assertLess(len(called), train, "documents without a kept window are not parsed")
+        self.assertEqual(len(called), len(set(called)))
+
 
 if __name__ == "__main__":
     unittest.main()
