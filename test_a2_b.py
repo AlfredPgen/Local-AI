@@ -1233,6 +1233,47 @@ class Audit2DataPrep(unittest.TestCase):
         self.assertEqual(len(seen[0][1]), 1)
         self.assertLess(seen[0][1][0].index("alpha 6"), seen[0][1][0].index("beta 6"))
 
+    # ---------------- F049: the report says when the line counts of a source were pruned ----------------
+    def test_pruned_line_counts_lose_a_thinly_spread_line(self):
+        """What the pruning does (unchanged): with at most 60 different lines in the count, a line that comes
+        back after every 70 new lines is dropped before its second copy arrives, 20 times over; one that
+        comes back after every 40 is counted in full."""
+        seen = {}
+        for gap in (70, 40):
+            counts = collections.Counter()
+            for repeat in range(20):
+                counts["the repeated line"] += 1
+                for i in range(gap):
+                    counts[f"line {repeat}.{i}"] += 1
+                    if len(counts) > 60:
+                        counts = data_prep._prune_line_counts(counts, 30)
+            seen[gap] = counts["the repeated line"]
+        self.assertEqual(seen, {70: 0, 40: 20})
+        frequent = collections.Counter({"often": 5, "twice": 2, "a": 1, "b": 1, "c": 1})
+        self.assertEqual(data_prep._prune_line_counts(frequent, 2), {"often": 5, "twice": 2})
+        self.assertEqual(data_prep._prune_line_counts(frequent, 1), {"often": 5})
+        self.assertIs(data_prep._prune_line_counts(frequent, 5), frequent)
+
+    def test_report_names_a_source_whose_line_counts_were_pruned(self):
+        c = self.corpus()
+        argv = ["--md-dir", c.md, "--md-dir", f"notes={c.notes}", "--scan-only", "--threads", "2", "--workers", "1"]
+        out, usual = os.path.join(self.tmp, "f049"), os.path.join(self.tmp, "f049_usual")
+        with unittest.mock.patch.object(data_prep, "LINE_COUNT_MAX_KEYS", 60), redirect_stdout(io.StringIO()):
+            with unittest.mock.patch.object(data_prep, "LINE_COUNT_KEEP_KEYS", 30):
+                data_prep.prepare(["--out", out] + argv)
+        notes = [ln for ln in read_file(os.path.join(out, "report.md")).splitlines()
+                 if "boilerplate counting pruned" in ln and "`md`" in ln]
+        self.assertEqual(len(notes), 1, notes)
+        found = re.fullmatch(r"- \*\*Note:\*\* boilerplate counting pruned (\d+) times in `md` \(more than 60 "
+                             r"different lines\); lines spread thinner than about 1 per (\d+) documents may be "
+                             r"missed\.", notes[0])
+        self.assertTrue(found, notes[0])
+        self.assertGreaterEqual(int(found.group(1)), 1)
+        self.assertGreaterEqual(int(found.group(2)), 1)
+        with redirect_stdout(io.StringIO()):
+            data_prep.prepare(["--out", usual] + argv)
+        self.assertNotIn("boilerplate counting pruned", read_file(os.path.join(usual, "report.md")))
+
 
 if __name__ == "__main__":
     unittest.main()

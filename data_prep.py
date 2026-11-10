@@ -2229,6 +2229,20 @@ def _validate(args, parser):
 
 
 PASS3_BATCH_CHARS = 8_000_000  # pass 3 encodes about this many characters in one SentencePiece call
+LINE_COUNT_MAX_KEYS = 6_000_000  # different candidate lines counted per source before the rarest are dropped ...
+LINE_COUNT_KEEP_KEYS = 3_000_000  # ... until at most this many are left
+
+
+def _prune_line_counts(counts, keep):
+    """The line counts without the rarest lines (count 1, then 2, ...), so that
+    at most `keep` are left. A dropped line starts again at 0 when it comes
+    back: a line that comes back less often than about once between two prunings
+    never reaches --boilerplate-min-docs, however many documents hold it."""
+    floor = 1
+    while len(counts) > keep:
+        counts = collections.Counter({k: c for k, c in counts.items() if c > floor})
+        floor += 1
+    return counts
 
 
 class _Unresumable(SystemExit):
@@ -2458,6 +2472,7 @@ def _prepare(args, state=None):
 
             sources[name]["max_docs"] = max_docs
             kept = 0
+            pruned_at, prune_gaps = 0, []  # kept documents between two prunings of the line counts
             ranked = sources[name].get("select") == "top"
             # A document limit in stream order: the worker processes read ahead of the checked documents, by an
             # amount that depends on --workers. Documents after the one that reached the limit are not counted,
@@ -2507,12 +2522,10 @@ def _prepare(args, state=None):
                             if lines is None:
                                 lines = text.split("\n")
                             line_examples[k] = lines[idx].strip()[:200]
-                    if len(counts) > 6_000_000:  # prune to half, so this does not run again for every document
-                        floor = 1
-                        while len(counts) > 3_000_000:
-                            counts = collections.Counter({k: c for k, c in counts.items() if c > floor})
-                            floor += 1
-                        line_counts[name] = counts
+                    if len(counts) > LINE_COUNT_MAX_KEYS:  # down to half, so it does not run for every document
+                        line_counts[name] = _prune_line_counts(counts, LINE_COUNT_KEEP_KEYS)
+                        prune_gaps.append(kept - pruned_at)
+                        pruned_at = kept
                     json.dump({"s": name, "id": doc_id, "t": title, "x": text, "h": hits,
                                "d": len(terms), "r": meta.get("rank"), "k": key}, spool, ensure_ascii=False)
                     spool.write("\n")
@@ -2522,6 +2535,10 @@ def _prepare(args, state=None):
                     stats["stopped_early"] = True
                 stats["skipped"].update(checked)
             notes.extend(f"`{name}`: {w}" for w in stats.get("warnings", ()))  # a damaged shard: into report.md
+            if prune_gaps:
+                notes.append(f"boilerplate counting pruned {len(prune_gaps):,} times in `{name}` (more than "
+                             f"{LINE_COUNT_MAX_KEYS:,} different lines); lines spread thinner than about 1 per "
+                             f"{min(prune_gaps):,} documents may be missed.")
             print(f"[{name}] scanned {stats['scanned']:,} | kept {stats['accepted']:,} | skipped "
                   f"{sum(stats['skipped'].values()):,} {dict(stats['skipped'].most_common())} "
                   f"({time.time() - t0:,.0f} s)", flush=True)
