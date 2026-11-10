@@ -119,7 +119,19 @@ def train_command(hours, name, plan=False):
 
 def run(cmd):
     print("\n> " + " ".join(f'"{c}"' if " " in c else c for c in cmd) + "\n", flush=True)
-    return subprocess.call(cmd, cwd=HERE)
+    # not subprocess.call: on macOS and Linux it kills the child 0.25 s after Ctrl+C, in the middle of tiny_gpt's
+    # pause save or data_prep's clean-up. The child gets the same Ctrl+C and stops by itself; an interrupted step
+    # that still exits 0 counts as stopped (130), so no later step starts
+    p = subprocess.Popen(cmd, cwd=HERE)
+    interrupted = False
+    while True:
+        try:
+            code = p.wait()
+            return code or (130 if interrupted else 0)
+        except KeyboardInterrupt:
+            interrupted = True
+            if p.poll() is None:
+                print("Ctrl+C: waiting for the step to save and stop (pressing it again does not stop it sooner).")
 
 
 def dataset_ready():
