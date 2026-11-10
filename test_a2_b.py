@@ -1100,6 +1100,27 @@ class Audit2DataPrep(unittest.TestCase):
             with open(os.path.join(out, f"{split}.{source}.bin"), "rb") as handle:
                 self.assertEqual(handle.read(), b"".join(chunks), f"{split}.{source}.bin")
 
+    # ---------------- F107: Tokenizer.encode without the list call; same ids as encode_batch ----------------
+    def test_encode_gives_the_ids_of_encode_batch_in_both_modes(self):
+        """Guard (it passes before and after): encode(t) == encode_batch([t])[0] for ordinary and edge texts,
+        in lines mode and in plain mode, and lines-mode text still survives the round trip."""
+        path = os.path.join(self.plain(), "tokenizer.model")
+        texts = ["", " ", "   \t  ", "\n", "\n\n\n", " \n ", "one line", "two lines\nof text",
+                 "\nstarts and ends with a line break\n", "a blank line\n\nin the middle", "Windows\r\nline\r\nends\r\n",
+                 "  indented\n\tcode  with   spaces  ", "The allele frequency changes by genetic drift.",
+                 "naïve café α-helix 中文 \U0001f9ec", "x" * 5_000, "tab\tseparated\tcells\n" * 40]
+        for mode in ("lines", "plain"):
+            tok = data_prep.Tokenizer.from_file(path, mode)
+            for text in texts:
+                ids = tok.encode(text)
+                self.assertEqual(ids, tok.encode_batch([text])[0], (mode, text[:40]))
+                self.assertIs(type(ids), list, (mode, text[:40]))
+                self.assertTrue(all(type(i) is int for i in ids), (mode, text[:40]))
+        tok = data_prep.Tokenizer.from_file(path, "lines")
+        self.assertEqual(tok.encode("a\nb").count(tok.newline_id), 1)
+        self.assertEqual(tok.encode("\n\n"), [tok.newline_id, tok.newline_id])
+        self.assertEqual(tok.decode(tok.encode("two lines\nof text")), "two lines\nof text")
+
 
 if __name__ == "__main__":
     unittest.main()

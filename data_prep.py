@@ -138,7 +138,15 @@ class Tokenizer:
         }
 
     def encode(self, text):
-        return self.encode_batch([text])[0]
+        """The ids encode_batch([text])[0] gives, without SentencePiece's list call."""
+        if self.encode_mode == "plain":
+            return list(self.sp.encode(text, out_type=int))
+        ids, nl = [], self.newline_id
+        for j, part in enumerate(text.split("\n")):
+            if j:
+                ids.append(nl)
+            ids.extend(self.sp.encode(part, out_type=int))
+        return ids
 
     def encode_batch(self, texts, threads=1):
         if self.encode_mode == "plain":
