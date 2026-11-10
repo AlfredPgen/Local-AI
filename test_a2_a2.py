@@ -449,3 +449,12 @@ class Audit2TinyGptB(unittest.TestCase):
         _, st_ok, _ = self._plan(["--warmup-steps", str(st["steps"] - 1)], manifest)
         self.assertEqual((st_ok["warmup_steps"], st_ok["steps"]), (st["steps"] - 1, st["steps"]))
         self.assertLess(st["warmup_steps"], st["steps"], "the default warm-up is never the whole run")
+
+    def test_stop_after_steps_must_be_positive(self):
+        """F370 (guard: passes before and after): --stop-after-steps is checked with the other counts that must
+        be positive, with the same message."""
+        for value in ("0", "-2"):
+            self.assertIn("--stop-after-steps must be positive", self._refused(["--stop-after-steps", value]))
+        args = tiny_gpt.parse_args(["--name", "x", "--out-dir", self.tmp, "--stop-after-steps", "3"])
+        self.assertEqual(args.stop_after_steps, 3)
+        self.assertIsNone(tiny_gpt.parse_args(["--name", "x", "--out-dir", self.tmp]).stop_after_steps)

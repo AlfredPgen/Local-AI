@@ -3702,7 +3702,7 @@ def validate_args(args, parser):
         parser.error("--name may contain letters, digits, '.', '_' and '-' only (no folders)")
     positive = ["steps", "d_model", "layers", "heads", "kv_heads", "ctx", "ffn_hidden", "batch_size", "grad_accum",
                 "tokens_per_step", "threads", "eval_every", "eval_tokens", "save_every", "sample_tokens", "length",
-                "experts_per_token", "moe_every"]
+                "experts_per_token", "moe_every", "stop_after_steps"]
     for name in positive:
         value = getattr(args, name)
         if value is not None and value <= 0:
@@ -3761,8 +3761,6 @@ def validate_args(args, parser):
     args.out_dir = os.path.abspath(args.out_dir)
     if args.loss_chunk_tokens is not None and not (args.loss_chunk_tokens == 0 or 64 <= args.loss_chunk_tokens):
         parser.error("--loss-chunk-tokens must be 0 (off) or at least 64")
-    if args.stop_after_steps is not None and args.stop_after_steps <= 0:
-        parser.error("--stop-after-steps must be positive")
     if not os.path.isdir(args.out_dir):
         parser.error(f"--out-dir does not exist: {args.out_dir}")
     if args.dataset and not os.path.isdir(args.dataset):
