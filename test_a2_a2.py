@@ -3,13 +3,10 @@ commands, signals). Target class in test_tiny_gpt.py: TestFixes.
 
     python -m unittest test_a2_a2
 """
-import argparse
 import contextlib
 import csv
-import dataclasses
 import io
 import json
-import math
 import os
 import shutil
 import sys
@@ -22,7 +19,6 @@ import torch
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import tiny_gpt  # noqa: E402
-import test_tiny_gpt as base  # noqa: E402 - as a module: a TestCase class imported by name would run twice
 
 CPU = torch.device("cpu")
 GIB = 2 ** 30
