@@ -350,6 +350,33 @@ class Audit2PipelineTools(unittest.TestCase):
         self.assertEqual((seen.get("seed"), seen["extra"], seen["max_words"]), (7, 60, 4))
         self.assertGreater(tok.vocab_size, 100)
 
+    # ---------------- gpu_check ----------------
+    def gpu_check_load(self, used, util):
+        """(stdout, load_test mock) of `gpu_check.py --load 5` on a machine whose nvidia-smi reports `used` MiB
+        and `util` % (both the script's own snapshot and tiny_gpt.gpu_busy's query)."""
+        import types
+        import gpu_check
+        import tiny_gpt
+        snapshot = dict.fromkeys(gpu_check.QUERY, "0")
+        snapshot.update({"pstate": "P8", "utilization.gpu": str(util), "memory.used": str(used)})
+        smi = types.SimpleNamespace(stdout=f"{used}, {util}\n", returncode=0)
+        with unittest.mock.patch.object(gpu_check, "nvidia_smi", return_value=snapshot), \
+                unittest.mock.patch.object(gpu_check, "windows_power", return_value={}), \
+                unittest.mock.patch.object(gpu_check, "load_test") as load, \
+                unittest.mock.patch.object(tiny_gpt.subprocess, "run", return_value=smi), \
+                unittest.mock.patch.object(sys, "argv", ["gpu_check.py", "--load", "5"]), \
+                redirect_stdout(io.StringIO()) as out:
+            gpu_check.main()
+        return out.getvalue(), load
+
+    def test_gpu_check_uses_the_shared_busy_rule(self):
+        """F166 (guard: passes before and after): gpu_check's busy test is tiny_gpt.gpu_busy's rule; 3000 MiB
+        in use at 10 % or 25 % utilization at 100 MiB refuse the load test, an idle GPU runs it."""
+        import tiny_gpt
+        for used, util, busy in ((3000, 10, True), (100, 25, True), (400, 3, False)):
+            out, load = self.gpu_check_load(used, util)
+            self.assertEqual((tiny_gpt.GPU_BUSY_MESSAGE in out, load.called), (busy, not busy), (used, util))
+
 
 if __name__ == "__main__":
     unittest.main()
