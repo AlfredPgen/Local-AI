@@ -2393,6 +2393,23 @@ class IncrementalDecoder:
             return model.lm_head(h[:, -1])[0].float().cpu()
 
 
+def sample_next(logits_2d, generator, temperature, top_k, top_p):
+    """One sampled token id per row of logits_2d (B, V): the logits divided by the temperature, cut to the
+    top_k largest (0 = no cut) and then to the smallest set whose probability reaches top_p (nucleus sampling;
+    outside 0..1 = no cut), and one draw per row from `generator`."""
+    logits = logits_2d.float() / max(temperature, 1e-6)
+    if top_k and top_k < logits.size(-1):
+        kth = torch.topk(logits, top_k, dim=-1).values[:, -1:]
+        logits = logits.masked_fill(logits < kth, float("-inf"))
+    probs = logits.softmax(-1)
+    if 0 < top_p < 1:
+        sp, order = probs.sort(dim=-1, descending=True)
+        sp = sp.masked_fill(sp.cumsum(-1) - sp > top_p, 0)
+        probs = torch.zeros_like(probs).scatter(-1, order, sp)
+        probs = probs / probs.sum(-1, keepdim=True)
+    return torch.multinomial(probs, 1, generator=generator).squeeze(-1)
+
+
 @torch.no_grad()
 def generate(model, tok, prompt, max_new_tokens, device, amp_dtype=None, temperature=0.8, top_k=50,
              top_p=0.95, generator=None, watermark=None):
@@ -2414,18 +2431,7 @@ def generate(model, tok, prompt, max_new_tokens, device, amp_dtype=None, tempera
         if temperature <= 0:
             nxt = int(logits.argmax())
         else:
-            logits = logits / temperature
-            if top_k and top_k < logits.numel():
-                kth = torch.topk(logits, top_k).values[-1]
-                logits[logits < kth] = float("-inf")
-            probs = logits.softmax(-1)
-            if 0 < top_p < 1:
-                sorted_p, order = probs.sort(descending=True)
-                drop = sorted_p.cumsum(0) - sorted_p > top_p
-                sorted_p[drop] = 0
-                probs = torch.zeros_like(probs).scatter(0, order, sorted_p)
-                probs /= probs.sum()
-            nxt = int(torch.multinomial(probs, 1, generator=generator))
+            nxt = int(sample_next(logits[None], generator, temperature, top_k, top_p)[0])
         if nxt == tok.eos_id:
             break
         ids.append(nxt)

@@ -302,6 +302,54 @@ class Audit2TinyGptA(unittest.TestCase):
             tiny_gpt.watermark_green("k", prev, 50, _cache=small)
         self.assertEqual(len(small), 300)
 
+    def test_generate_samples_through_sample_next(self):
+        """F311: generate() draws through tiny_gpt.sample_next, the one copy of the temperature / top-k / top-p
+        rule; at a fixed seed the text is what the in-line one-row sampling it replaces gave."""
+        model, tok, cpu = base.TestOtherScripts.model(seed=5), base.CharTok(), torch.device("cpu")  # ctx 48
+
+        def previous(temperature, top_k, top_p, generator, watermark=None):
+            ids = [tok.bos_id] + tok.encode("Genetic")
+            decoder = tiny_gpt.IncrementalDecoder(model, cpu)
+            for _ in range(60):  # past the context: the cache restarts on the way
+                logits = decoder.next_logits(ids)
+                if watermark:
+                    key, gamma, delta = watermark
+                    logits = logits + delta * tiny_gpt.watermark_green(key, ids[-1], logits.numel(), gamma).float()
+                logits = logits / temperature
+                if top_k and top_k < logits.numel():
+                    kth = torch.topk(logits, top_k).values[-1]
+                    logits[logits < kth] = float("-inf")
+                probs = logits.softmax(-1)
+                if 0 < top_p < 1:
+                    sorted_p, order = probs.sort(descending=True)
+                    drop = sorted_p.cumsum(0) - sorted_p > top_p
+                    sorted_p[drop] = 0
+                    probs = torch.zeros_like(probs).scatter(0, order, sorted_p)
+                    probs /= probs.sum()
+                ids.append(int(torch.multinomial(probs, 1, generator=generator)))
+            return tok.decode(ids[1:])
+
+        texts = set()
+        for temperature, top_k, top_p, mark in ((0.8, 50, 0.95, None), (0.8, 10, 0.95, None), (1.3, 10, 0.5, None),
+                                                (0.7, 0, 1.0, None), (1.0, 5, 0.0, None),
+                                                (0.8, 20, 0.9, ("k", 0.25, 4.0))):
+            want = previous(temperature, top_k, top_p, torch.Generator().manual_seed(11), mark)
+            got = tiny_gpt.generate(model, tok, "Genetic", 60, cpu, temperature=temperature, top_k=top_k,
+                                    top_p=top_p, generator=torch.Generator().manual_seed(11), watermark=mark)
+            self.assertEqual(got, want, (temperature, top_k, top_p, mark))
+            texts.add(got)
+        self.assertGreater(len(texts), 3, "the settings give different texts, so the comparison is not empty")
+        with unittest.mock.patch.object(tiny_gpt, "sample_next", wraps=tiny_gpt.sample_next) as sample:
+            tiny_gpt.generate(model, tok, "Genetic", 7, cpu, generator=torch.Generator().manual_seed(11))
+            self.assertEqual(sample.call_count, 7)
+            tiny_gpt.generate(model, tok, "Genetic", 7, cpu, temperature=0)
+            self.assertEqual(sample.call_count, 7, "greedy decoding does not sample")
+        rows = torch.tensor([[0.0, 5.0, 1.0, 4.9], [9.0, 0.0, 8.9, 1.0]])
+        picks = [tuple(tiny_gpt.sample_next(rows, torch.Generator().manual_seed(s), 1.0, 2, 0.99).tolist())
+                 for s in range(40)]
+        self.assertTrue(set(picks) <= {(1, 0), (1, 2), (3, 0), (3, 2)}, "top-k 2 per row")
+        self.assertGreater(len(set(picks)), 1)
+
 
 if __name__ == "__main__":
     unittest.main()
