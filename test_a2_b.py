@@ -5,6 +5,7 @@ has landed; until then:
     python -m unittest -v test_a2_b
 """
 
+import collections
 import gzip
 import hashlib
 import io
@@ -14,9 +15,12 @@ import re
 import shutil
 import sys
 import tempfile
+import time
 import unittest
 import unittest.mock
 from contextlib import redirect_stderr, redirect_stdout
+
+import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -329,6 +333,33 @@ class Audit2DataPrep(unittest.TestCase):
             docs = list(data_prep._jsonl_python(path, "text", "title", "id", 0, stats, None, 5000, 0, lambda: None))
             self.assertEqual([d[0] for d in docs], ["r0", "r1", "r2"], path)
             self.assertEqual(sum(stats["skipped"].values()), 0)
+
+    # ---------------- F092: Ctrl+C during 'top' scoring does not wait for every file ----------------
+    def test_ctrl_c_during_top_scoring_drops_the_files_not_started(self):
+        started = []
+
+        def slow_score(source, file_index, kw, min_score):
+            started.append(file_index)
+            time.sleep(0.5)
+            empty = np.zeros(0)
+            return collections.Counter({"scanned": 1}), (empty, empty, empty, empty)
+
+        class StopAtSecondFile(io.StringIO):
+            def write(self, text):
+                if "scored file 2/12" in text:
+                    raise KeyboardInterrupt
+                return super().write(text)
+
+        source = unittest.mock.Mock(paths=list(range(12)))
+        t0 = time.time()
+        with unittest.mock.patch.object(data_prep, "_score_file", slow_score):
+            with redirect_stdout(StopAtSecondFile()), self.assertRaises(KeyboardInterrupt):
+                list(data_prep.iter_table_source("wiki", source, None, 5, "top", None, 1.0, 0,
+                                                 data_prep._new_stats(), threads=2))
+            waited = time.time() - t0
+            time.sleep(1.5)  # time enough for three more rounds, had the queued files not been cancelled
+        self.assertLessEqual(len(started), 4, "2 scored + at most 2 running; the other 8 were never started")
+        self.assertLess(waited, 2.0, "12 files at 0.5 s on 2 threads take 3 s when all are waited for")
 
     def test_an_error_in_the_leakage_audit_still_only_skips_it(self):
         out = os.path.join(self.tmp, "f057err")

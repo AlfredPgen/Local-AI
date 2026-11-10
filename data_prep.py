@@ -1133,7 +1133,8 @@ def iter_table_source(name, source, kw, max_docs, select, min_score, sample_frac
         from concurrent.futures import ThreadPoolExecutor
         cap = int(max_docs * 1.5) + 100 if max_docs else None
         cands, held, total = [], 0, 0  # only the best `cap` are kept, so memory follows max_docs, not the corpus
-        with ThreadPoolExecutor(max_workers=max(1, threads)) as pool:
+        pool = ThreadPoolExecutor(max_workers=max(1, threads))
+        try:
             futures = [pool.submit(_score_file, source, f, kw, min_score) for f in range(len(source.paths))]
             for done, future in enumerate(futures, 1):
                 counts, found = future.result()
@@ -1150,6 +1151,10 @@ def iter_table_source(name, source, kw, max_docs, select, min_score, sample_frac
                     held = len(cands[0][0])
                 print(f"  [{name}] scored file {done}/{len(futures)}: {stats['scanned']:,} records, "
                       f"{total:,} candidates ({time.time() - t0:,.0f} s)", flush=True)
+        except BaseException:  # Ctrl+C or an error: the files not yet started are dropped, not scored first
+            pool.shutdown(wait=False, cancel_futures=True)
+            raise
+        pool.shutdown()
         best = _best_candidates(cands, cap) if cands else (np.zeros(0),) * 4
         del cands
         limit = len(best[0])
