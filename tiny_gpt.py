@@ -2854,11 +2854,6 @@ def split_batch(target, largest, smallest=1):
     return best
 
 
-def choose_micro_batch(cfg, tokens_per_step, budget_bytes, amp):
-    micro, accum, _, _ = choose_memory_plan(cfg, tokens_per_step, budget_bytes, amp)
-    return micro, accum
-
-
 def plan_run(args, manifest, device, amp_dtype, token_cap=None, fixed_cfg=None):
     """Fill every unset hyper-parameter from the dataset and device.
 
@@ -3407,8 +3402,10 @@ def plan_with_time_budget(args, manifest, device, amp_dtype, fixed_cfg=None):
     return cfg, settings, lines + notes
 
 
-def plan_table(vocab, device, amp_dtype, r, max_epochs):
-    """What the planner would choose for other corpus sizes (same vocabulary)."""
+def plan_table(vocab, device, amp_dtype, r, max_epochs, optimizer="adamw"):
+    """What the planner would choose for other corpus sizes (same vocabulary): the
+    batch is the memory plan of `optimizer` on `device` (choose_memory_plan), the
+    learning rate follows the batch that plan reaches."""
     rows = []
     budget, _ = device_memory_budget(device)
     for unique in (5e6, 2e7, 1e8, 3e8, 1e9, 1e10):
@@ -3420,12 +3417,14 @@ def plan_table(vocab, device, amp_dtype, r, max_epochs):
         cfg.rope_base = default_rope_base(cfg.ctx)
         n = count_params(cfg)[0]
         tps = tokens_per_step_for(n, planned)
+        reached = tps  # the target when nothing fits
         try:
-            micro, accum = choose_micro_batch(cfg, tps, budget, amp_dtype is not None)
+            micro, accum, _, _ = choose_memory_plan(cfg, tps, budget, amp_dtype is not None, optimizer, device=device)
             fits = f"{micro}x{accum}"
+            reached = micro * accum * cfg.ctx
         except SystemExit:
             fits = "does not fit"
-        rows.append((unique, planned, cfg, n, tps, fits, heuristic_lr(n) * lr_batch_factor(n, tps)))
+        rows.append((unique, planned, cfg, n, tps, fits, heuristic_lr(n) * lr_batch_factor(n, reached)))
     return rows
 
 
@@ -5396,7 +5395,8 @@ def cmd_plan(args):
     print(f"  {'unique tokens':>14} {'train tokens':>14} {'d':>5} {'L':>3} {'H/KV':>6} {'ctx':>5} {'params':>11} "
           f"{'tok/param':>9} {'tok/step':>9} {'batch':>12} {'lr':>8}")
     for unique, planned, c, n, tps, fits, lr in plan_table(int(manifest["tokenizer"]["vocab_size"]), device,
-                                                           amp_dtype, args.tokens_per_param, args.max_epochs):
+                                                           amp_dtype, args.tokens_per_param, args.max_epochs,
+                                                           args.optimizer or "adamw"):
         print(f"  {unique:>14,.0f} {planned:>14,.0f} {c.d_model:>5} {c.n_layers:>3} {c.n_heads:>3}/{c.n_kv_heads:<2} "
               f"{c.ctx:>5} {n:>11,} {planned / n:>9.1f} {tps:>9,} {fits:>12} {lr:>8.1e}")
 
