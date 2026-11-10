@@ -43,9 +43,10 @@ OPTIMIZER = "muon"        # "muon": Muon for the block matrices, AdamW for the r
 # Once DATASET is built, its manifest's data settings win over the ones above for estimate and continue, so both
 # describe the dataset that exists rather than constants that may have been edited since.
 
-# data_prep's former --near-dup-max-docs default: manifests written before it became 0 (no limit) record it although
-# nobody chose it, and repeating it would stop a larger rebuild after pass 1
-_OLD_NEAR_DUP_DEFAULT = 3_000_000
+# former --near-dup-max-docs values nobody chose: 2,000,000 was data_prep's default before it became 0 (no limit) and
+# 3,000,000 was what run_pipeline passed. Manifests of that time record them, and repeating one would stop a larger
+# rebuild after pass 1
+_OLD_NEAR_DUP_DEFAULTS = (2_000_000, 3_000_000)
 
 
 def manifest_prep_args(dataset=None):
@@ -69,7 +70,7 @@ def build_command():
     superbpe = bool(prep.get("superbpe", SUPERBPE))
     wiki_max = int(prep.get("wiki_max_docs", WIKI_MAX_DOCS) or 0)
     near_dup_max = int(prep.get("near_dup_max_docs", 0) or 0)
-    if near_dup_max == _OLD_NEAR_DUP_DEFAULT:
+    if near_dup_max in _OLD_NEAR_DUP_DEFAULTS:
         near_dup_max = 0
     cmd = [sys.executable, "data_prep.py", "--out", DATASET, "--text-root", DATA]
     wiki = os.path.join(DATA, "wikipedia")
