@@ -1178,7 +1178,6 @@ def parse_args():
                         f"--workers > 1); a PDF gets at least {PDF_SECONDS_PER_PAGE} s per page "
                         f"({OCR_SECONDS_PER_PAGE} s with --ocr)")
     p.add_argument("--target", help=argparse.SUPPRESS)
-    p.add_argument("--image-dir", help=argparse.SUPPRESS)
     p.add_argument("--overwrite", action="store_true", help="replace existing .md outputs")
     p.add_argument("--max-rows", type=int, default=200, help="table rows kept per table/sheet")
     p.add_argument("--max-cols", type=int, default=30,
