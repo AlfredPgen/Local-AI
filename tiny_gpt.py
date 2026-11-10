@@ -55,6 +55,7 @@ import os
 import platform
 import random
 import re
+import shutil
 import signal
 import subprocess
 import sys
@@ -1637,9 +1638,11 @@ def launch_dashboard(path, args, state):
                 state["proc"] = subprocess.Popen(cmd, cwd=HERE, stdout=log, stderr=subprocess.STDOUT,
                                                  env={**os.environ, "CUDA_VISIBLE_DEVICES": "-1"}, creationflags=flags)
             else:
-                state["proc"] = subprocess.Popen(cmd, cwd=HERE, stdout=log, stderr=subprocess.STDOUT,
-                                                 env={**os.environ, "CUDA_VISIBLE_DEVICES": "-1"},
-                                                 preexec_fn=lambda: os.nice(19))
+                # through the nice command, not preexec_fn: code run between fork and exec can deadlock the
+                # child of a process that has threads (the energy meter, torch)
+                niced = (["nice", "-n", "19"] + cmd) if shutil.which("nice") else cmd
+                state["proc"] = subprocess.Popen(niced, cwd=HERE, stdout=log, stderr=subprocess.STDOUT,
+                                                 env={**os.environ, "CUDA_VISIBLE_DEVICES": "-1"})
         if push:
             state["pushed"] = now
     except OSError as exc:

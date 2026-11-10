@@ -228,6 +228,21 @@ class Audit2TinyGptA(unittest.TestCase):
         source = inspect.getsource(tiny_gpt._train)  # the session's state is seeded, and only with the dashboard on
         self.assertRegex(source, r'"pushed": last_dashboard_push\(.*\) if dashboard_on else 0\.0')
 
+    def test_dashboard_child_on_posix_is_started_through_nice(self):
+        """F317: no preexec_fn (unsafe in a process with threads: the child can deadlock); the idle priority
+        comes from the nice command when there is one."""
+        with unittest.mock.patch.object(sys, "platform", "darwin"):
+            with unittest.mock.patch.object(tiny_gpt.shutil, "which", return_value="/usr/bin/nice"):
+                call = self._launch({"proc": None, "pushed": 0.0})
+            self.assertEqual(call[0][0][:3], ["nice", "-n", "19"])
+            self.assertEqual(call[0][0][3], sys.executable)
+            self.assertNotIn("preexec_fn", call[1])
+            self.assertEqual(call[1]["env"]["CUDA_VISIBLE_DEVICES"], "-1")
+            with unittest.mock.patch.object(tiny_gpt.shutil, "which", return_value=None):
+                call = self._launch({"proc": None, "pushed": 0.0})
+            self.assertEqual(call[0][0][0], sys.executable, "without nice: normal priority")
+            self.assertNotIn("preexec_fn", call[1])
+
 
 if __name__ == "__main__":
     unittest.main()
