@@ -139,6 +139,53 @@ class Audit2TinyGptA(unittest.TestCase):
         tiny_gpt.apply_doc_mask(model, {"train_config": {"doc_mask": True}}, tok)
         self.assertEqual(model.doc_sep_id, 0)
 
+    def test_bf16_weights_for_a_cuda_checkpoint_are_cast_on_the_cpu(self):
+        """F372: --best-bf16 on CUDA makes the bfloat16 copy on the CPU (no second copy of the weights in GPU
+        memory); on MPS the cast stays on the device. Stand-in tensors, since this machine's tests run on the CPU."""
+        class FakeTensor:
+            shape = (2, 3)
+
+            def __init__(self, ptr, device, dtype=torch.float32):
+                self.ptr, self.device, self.dtype = ptr, torch.device(device), dtype
+
+            def data_ptr(self):
+                return self.ptr
+
+            def detach(self):
+                return self
+
+            def is_floating_point(self):
+                return self.dtype.is_floating_point
+
+            def to(self, *args):
+                device, dtype = self.device, self.dtype
+                for arg in args:
+                    if isinstance(arg, torch.dtype):
+                        dtype = arg
+                    else:
+                        device = torch.device(arg)
+                return FakeTensor(self.ptr, device, dtype)
+
+        class FakeModel:
+            def __init__(self, device):
+                tied = FakeTensor(1, device)
+                self.state = {"token_embedding.weight": tied, "blocks.0.attn.q_proj.weight": FakeTensor(2, device),
+                              "lm_head.weight": tied}
+
+            def state_dict(self):
+                return self.state
+
+        for name, want in (("cuda:0", "cpu"), ("mps", "mps")):
+            out = tiny_gpt.weights_for_checkpoint(FakeModel(name), torch.device(name), bf16=True)
+            self.assertEqual({v.device.type for v in out.values()}, {want}, name)
+            self.assertEqual({v.dtype for v in out.values()}, {torch.bfloat16}, name)
+            self.assertIs(out["lm_head.weight"], out["token_embedding.weight"], "tied weights stay one tensor")
+        model = small_model()  # real tensors on the CPU: the cast stays where the weights are
+        half = tiny_gpt.weights_for_checkpoint(model, torch.device("cpu"), bf16=True)
+        self.assertTrue(all(v.device.type == "cpu" and v.dtype == torch.bfloat16 for v in half.values()))
+        self.assertTrue(torch.equal(half["token_embedding.weight"],
+                                    model.token_embedding.weight.detach().to(torch.bfloat16)))
+
 
 if __name__ == "__main__":
     unittest.main()

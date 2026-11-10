@@ -1541,7 +1541,7 @@ def weights_for_checkpoint(model, device, bf16=False):
     torch.save moves one storage at a time to the CPU and writes shared storage once,
     so unified memory never holds a second full copy of the state (26-39 GB at 3B).
     bf16=True (--best-bf16, inference-only copies): half-size bfloat16 weights, cast
-    on the device, tied weights still one tensor."""
+    on the CPU for a CUDA model and on the device otherwise, tied weights still one tensor."""
     if not bf16 and device.type != "mps":
         return cpu_state_dict(model)
     out, seen = {}, {}
@@ -1550,7 +1550,8 @@ def weights_for_checkpoint(model, device, bf16=False):
         if ident not in seen:
             v = value.detach()
             if bf16 and v.is_floating_point():
-                v = v.to(torch.bfloat16)
+                # on CUDA straight to a CPU copy: a bf16 copy on the GPU would need memory the run may not have
+                v = v.to("cpu" if device.type == "cuda" else v.device, torch.bfloat16)
             seen[ident] = v
         out[key] = seen[ident]
     return out
