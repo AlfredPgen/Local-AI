@@ -126,7 +126,9 @@ def markdown_source(name, dirs, args, use_kw, rng):
             raise SystemExit(f"--md-dir is not a folder: {directory}")
         for path in dp.list_text_files(directory, patterns, args.md_recursive):
             real = os.path.realpath(path)
-            rel = os.path.relpath(path, directory)
+            rel = os.path.relpath(path, directory).replace(os.sep, "/")
+            if rel.lower().endswith(".gz"):
+                rel = rel[:-3]  # as data_prep: a.md.gz is excluded by the patterns that exclude a.md
             if real in seen or not os.path.isfile(real):
                 continue
             seen.add(real)

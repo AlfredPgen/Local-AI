@@ -235,6 +235,30 @@ class Audit2PipelineTools(unittest.TestCase):
         self.assertEqual(kept(self.run_estimate(argv + ["--sample-fraction", "0.5"])),
                          {"web": (20, 10), "papers": (12, 6)})
 
+    def test_estimate_excludes_gz_files_like_data_prep(self):
+        """F150: an --md-exclude pattern is matched against a .gz file's name without '.gz', as data_prep does."""
+        import collections
+        import gzip
+        import random
+        import types
+        import data_prep as dp
+        import estimate_dataset
+        folder = os.path.join(self.tmp, "f150")
+        os.makedirs(os.path.join(folder, "sub"), exist_ok=True)
+        with open(os.path.join(folder, "keep.md"), "w", encoding="utf-8") as f:
+            f.write("# Keep\n\nGenetic drift.")
+        with gzip.open(os.path.join(folder, "narration.lt.md.gz"), "wt", encoding="utf-8") as f:
+            f.write("Lietuviškas tekstas.")
+        with open(os.path.join(folder, "sub", "other.LT.md"), "w", encoding="utf-8") as f:
+            f.write("Lietuviškas tekstas.")
+        args = types.SimpleNamespace(md_glob=None, md_exclude=["*.lt.md"], md_recursive=True, sample=1.0)
+        with unittest.mock.patch.object(estimate_dataset, "examine"):
+            tally = estimate_dataset.markdown_source("md", [folder], args, False, random.Random(0))
+        stats = {"scanned": 0, "skipped": collections.Counter(), "cleaning": collections.Counter()}
+        docs = list(dp.iter_markdown([folder], list(dp.MD_PATTERNS_DEFAULT), args.md_exclude, True, stats, []))
+        self.assertEqual([d[0] for d in docs], ["keep.md"])
+        self.assertEqual((tally.total, tally.sampled), (len(docs), len(docs)))
+
 
 if __name__ == "__main__":
     unittest.main()
