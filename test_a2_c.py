@@ -605,6 +605,37 @@ class Audit2Viewer(unittest.TestCase):
                                 __import__("matplotlib").colormaps["Blues"], "")
         self.assertIn("residual stream RMS", said(ax))
 
+    # ---------------- F404 ----------------
+    def test_history_from_log_starts_again_at_a_fresh_run_of_the_same_name(self):
+        import view_pt
+        bar = "=" * 100
+
+        def session(run_id, note, *evals):
+            return (f"\n{bar}\nRUN {run_id} started 2026-01-01T00:00:00+00:00 | {note}\n"
+                    "checkpoints: C:\\x\\A.pt (best C:\\x\\A_best.pt)\n"
+                    + "".join(f"step {s:5d}/400 | train {v:.4f} | val {v:.4f} @{s} | lr 1.0e-03\n" for s, v in evals))
+
+        log = os.path.join(self.tmp, "overwritten_log.txt")
+        with open(log, "w", encoding="utf-8") as f:
+            f.write(session("a", "fresh run", (100, 9.1), (200, 8.1), (300, 7.1))
+                    + session("b", "fresh run", (200, 5.1), (400, 4.1)))
+        hist, label = view_pt.history_from_log(log, "A_best.pt", 400, "tinygpt")
+        self.assertEqual([(h["step"], h["val_loss"]) for h in hist], [(200, 5.1), (400, 4.1)],
+                         "the run that --overwrite replaced is not part of this curve")
+        self.assertIn("1 session(s) of A", label)
+        # a resumed session still continues the curve; a run begun with --init-from is a new one
+        with open(log, "a", encoding="utf-8") as f:
+            f.write(session("c", "RESUMED C:\\x\\A.pt at step 400", (600, 3.1)))
+        hist, label = view_pt.history_from_log(log, "A.pt", None, "tinygpt")
+        self.assertEqual([(h["step"], h["val_loss"]) for h in hist], [(200, 5.1), (400, 4.1), (600, 3.1)])
+        self.assertIn("2 session(s) of A", label)
+        with open(log, "a", encoding="utf-8") as f:
+            f.write(session("d", "initialised from B.pt (tinygpt training, step 9); best/last validation reset "
+                                 "because the validation set is new", (100, 2.1)))
+        hist, label = view_pt.history_from_log(log, "A.pt", None, "tinygpt")
+        self.assertEqual([(h["step"], h["val_loss"]) for h in hist], [(100, 2.1)])
+        self.assertIn("1 session(s) of A", label)
+
 
 if __name__ == "__main__":
     unittest.main()

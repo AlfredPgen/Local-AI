@@ -590,7 +590,8 @@ def history_from_log(path, ck_path=None, max_step=None, family=None):
     """History of the viewed checkpoint's run from log.txt. tinyGPT sessions are
     matched by the checkpoint path in their header ("checkpoints: ...<name>.pt"),
     and all sessions of that run (resumes included) are merged, the latest value
-    per step winning, up to the checkpoint's step. A tinyGPT checkpoint that no
+    per step winning, up to the checkpoint's step; sessions before the last fresh
+    start under that name are another run and are left out. A tinyGPT checkpoint that no
     session names gets no curve (never another run's); a legacy (original script)
     checkpoint is read from the last v3 run only; a file of unknown family falls
     back to the last run, and the source label says so. v3 lines repeat a stale
@@ -607,14 +608,20 @@ def history_from_log(path, ck_path=None, max_step=None, family=None):
     if family == "tinygpt" and not mine:
         return [], f"no tinyGPT session in {os.path.basename(path)} names {stem}.pt"
     if mine or tiny:
-        merged = {}
+        merged, sessions = {}, 0
         for block in (mine or tiny[-1:]):
+            # a fresh start under the same name (--overwrite, --init-from) begins a new curve; a block without
+            # such a RUN line (older logs) is merged as before
+            run_line = re.search(r"^RUN .*$", block, re.MULTILINE)
+            if run_line and re.search(r"\| (fresh run|initialised from )", run_line.group(0)):
+                merged, sessions = {}, 0
+            sessions += 1
             for s, _, tr, va, vs, lr in NEW_LINE.findall(block):
                 if int(vs) == int(s) and (max_step is None or int(s) <= int(max_step)):
                     merged[int(s)] = {"step": int(s), "train_loss": float(tr), "val_loss": float(va), "lr": float(lr),
                                       "ppl": math.exp(min(float(va), 50))}
         if merged:
-            label = (f"log ({len(mine)} session(s) of {stem})" if mine
+            label = (f"log ({sessions} session(s) of {stem})" if mine
                      else "log (last tinyGPT run; no session names this checkpoint)")
             return [merged[s] for s in sorted(merged)], label
     for block in reversed(blocks):
