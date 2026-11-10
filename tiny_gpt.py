@@ -3213,7 +3213,11 @@ def sustained_speed(out_dir, device):
     of at least 12 minutes on this kind of device (experiments.csv), or (None,
     reason). A short benchmark on a cool laptop GPU runs at boost clocks; over
     hours the power and heat limits slow it down (about 1.6x on this RTX 3070), so a
-    real run is the better guide. Rows from before the device column are CUDA."""
+    real run is the better guide. Rows from before the device column are CUDA.
+    The rows of a resumed run are cumulative: when an earlier row of the same
+    run exists (same name, device and shape) the speed is that of the last
+    session alone, the difference between the two rows, if it lasted 12 minutes
+    or more."""
     import csv
     try:
         path = experiments_path(out_dir)
@@ -3224,7 +3228,8 @@ def sustained_speed(out_dir, device):
                     and (r.get("device") or "cuda").startswith(device.type)]
     except OSError:
         return None, "no experiments.csv"
-    for r in reversed(rows):
+    for i in range(len(rows) - 1, -1, -1):
+        r = rows[i]
         try:
             moe = parse_moe_label(r.get("moe"))  # "8x2/1" from the moe column; blank or absent = dense
             cfg = ModelConfig(vocab_size=int(r["vocab"]), ctx=int(r["ctx"]), d_model=int(r["d_model"]),
@@ -3236,10 +3241,21 @@ def sustained_speed(out_dir, device):
         if hours >= 0.2 and tokens > 0:
             # the run's own FLOP count: a checkpointed run did more work per token than its tokens/s suggest
             recompute = (r.get("activation_checkpointing") or "off") == "on"
+            session = ""
+            same_run = ("name", "device", "params", "d_model", "layers", "ctx", "vocab")
+            earlier = next((p for p in reversed(rows[:i]) if all(p.get(k) == r.get(k) for k in same_run)), None)
+            if earlier is not None:
+                try:
+                    more_tokens = tokens - float(earlier["tokens_seen"])
+                    more_hours = hours - float(earlier["train_hours"])
+                except (KeyError, TypeError, ValueError):
+                    more_tokens = more_hours = 0.0
+                if more_tokens > 0 and more_hours >= 0.2:
+                    tokens, hours, session = more_tokens, more_hours, ", last session"
             speed = tokens / (hours * 3600) * flops_per_token(cfg, recompute)
             return speed, (f"{speed / 1e12:.1f} TFLOP/s sustained by run '{r.get('name')}' of {r.get('time', '')[:10]} "
                            f"({int(r['params']) / 1e6:.1f}M parameters, {tokens / hours / 3600:,.0f} tokens/s"
-                           f"{', activation checkpointing' if recompute else ''})")
+                           f"{', activation checkpointing' if recompute else ''}{session})")
     return None, f"no training run of 12 minutes or more on a {device.type} device yet"
 
 

@@ -340,3 +340,59 @@ class Audit2TinyGptB(unittest.TestCase):
                 unittest.mock.patch.object(tiny_gpt, "sustained_speed", return_value=(None, "no table")):
             tiny_gpt.plan_with_time_budget(args, one, CPU, None)
         self.assertIn("does not fit in memory even at batch 1", str(refused.exception))
+
+    def test_sustained_speed_is_the_last_session_of_a_resumed_run(self):
+        """F361: the rows of a resumed run are cumulative, so the planner's speed is the difference to the previous
+        row of the same run (the last session), not the whole-run average; a different run under the same name or
+        a session too short to measure falls back to the whole run."""
+        shape = {"event": "training run", "vocab": "16384", "ctx": "1024", "d_model": "1024", "layers": "18",
+                 "heads": "16", "kv_heads": "4", "params": "216180000", "device": "cuda",
+                 "activation_checkpointing": "off"}
+        cfg = tiny_gpt.ModelConfig(vocab_size=16384, ctx=1024, d_model=1024, n_layers=18, n_heads=16, n_kv_heads=4)
+        flops = tiny_gpt.flops_per_token(cfg)
+
+        def speed_of(name, rows):
+            out = os.path.join(self.tmp, name)
+            os.makedirs(os.path.join(out, "results"))
+            with open(os.path.join(out, "results", "experiments.csv"), "w", encoding="utf-8-sig", newline="") as handle:
+                writer = csv.DictWriter(handle, fieldnames=sorted({k for r in rows for k in r}))
+                writer.writeheader()
+                writer.writerows(rows)
+            return tiny_gpt.sustained_speed(out, torch.device("cuda"))
+
+        def row(name, day, tokens, hours, **more):
+            return {**shape, "name": name, "time": f"2026-11-{day:02d}T00:00:00", "tokens_seen": str(tokens),
+                    "train_hours": str(hours), **more}
+
+        # 100 h at 6,000 tokens/s, then two sessions of 4 h at 8,000 and 2 h at 9,000 tokens/s
+        t1 = 100 * 3600 * 6000
+        t2 = t1 + 4 * 3600 * 8000
+        t3 = t2 + 2 * 3600 * 9000
+        speed, note = speed_of("sessions", [row("run", 1, t1, 100), row("other", 2, 5_000_000, 1),
+                                            row("run", 3, t2, 104), row("run", 4, t3, 106)])
+        self.assertAlmostEqual(speed, 9000 * flops, delta=flops)
+        self.assertIn("last session", note)
+        self.assertIn("9,000 tokens/s", note)
+        self.assertIn("run 'run' of 2026-11-04", note)
+        # the activation-checkpointing flag of the row itself still sets the FLOP count
+        speed_ck, note_ck = speed_of("sessions_ck", [row("run", 1, t1, 100),
+                                                     row("run", 3, t2, 104, activation_checkpointing="on")])
+        self.assertAlmostEqual(speed_ck, 8000 * tiny_gpt.flops_per_token(cfg, True), delta=flops)
+        self.assertIn("activation checkpointing, last session", note_ck)
+        # one row: the whole run, described as before
+        speed_one, note_one = speed_of("one_row", [row("run", 1, t1, 100)])
+        self.assertAlmostEqual(speed_one, 6000 * flops, delta=flops)
+        self.assertNotIn("last session", note_one)
+        # the same name with another shape is another run: the whole-run figure of the last row
+        speed_shape, note_shape = speed_of("other_shape", [row("run", 1, t1, 100, d_model="768"),
+                                                           row("run", 3, t2, 104)])
+        self.assertAlmostEqual(speed_shape, t2 / (104 * 3600) * flops, delta=flops)
+        self.assertNotIn("last session", note_shape)
+        # a session under 12 minutes, and a run started again under its name (fewer tokens than the row before)
+        speed_short, note_short = speed_of("short_session", [row("run", 1, t1, 100),
+                                                             row("run", 3, t1 + 3_000_000, 100.1)])
+        self.assertAlmostEqual(speed_short, (t1 + 3_000_000) / (100.1 * 3600) * flops, delta=flops)
+        self.assertNotIn("last session", note_short)
+        speed_new, note_new = speed_of("started_again", [row("run", 1, t1, 100), row("run", 3, 7_200_000, 1)])
+        self.assertAlmostEqual(speed_new, 2000 * flops, delta=flops)
+        self.assertNotIn("last session", note_new)
