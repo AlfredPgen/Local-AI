@@ -688,6 +688,38 @@ class Audit2Viewer(unittest.TestCase):
                       ("--plot-tokens", "--out", os.path.join(self.tmp, "x.html"))):
             self.assertEqual(viewer_args(path, *flags).out, flags[-1])
 
+    # ---------------- F439 ----------------
+    def test_push_finds_the_repository_through_a_linked_folder(self):
+        import subprocess
+        import view_pt
+        root = os.path.realpath(os.path.join(self.tmp, "repo_real"))
+        link = os.path.join(os.path.dirname(root), "repo_link")
+        os.makedirs(os.path.join(root, "runs"))
+        try:
+            os.symlink(root, link, target_is_directory=True)
+        except (OSError, NotImplementedError):  # Windows without the symlink privilege: a junction needs none
+            try:
+                import _winapi
+                _winapi.CreateJunction(root, link)
+            except (ImportError, AttributeError, OSError) as exc:
+                self.skipTest(f"cannot link a folder here: {exc}")
+        png = os.path.join(link, "runs", "A_best_dashboard.png")
+        ck = types_ns(path=os.path.join(link, "runs", "A_best.pt"), obj={"step": 8})
+        top = subprocess.CompletedProcess([], 0, stdout=root + "\n", stderr="")  # git names the real folder
+
+        def pushed(ck_):
+            with unittest.mock.patch.object(view_pt, "_git", return_value=top), redirect_stdout(io.StringIO()), \
+                    unittest.mock.patch.object(tiny_gpt, "publish_to_github", return_value="pushed") as publish:
+                view_pt.push_dashboard(png, ck_)
+            return publish
+
+        publish = pushed(ck)
+        publish.assert_called_once()
+        self.assertEqual(publish.call_args.args[0], "dashboards/A_best_dashboard.png")
+        self.assertIn("A_best.pt at step 8", publish.call_args.args[1])
+        # a checkpoint outside the repository is still left alone
+        pushed(types_ns(path=os.path.join(self.tmp, "A_best.pt"), obj={"step": 8})).assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

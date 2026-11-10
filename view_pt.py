@@ -2224,8 +2224,9 @@ def push_dashboard(png, ck):
         top = _git("rev-parse", "--show-toplevel")
         if top.returncode != 0:
             return
-        root = os.path.normcase(os.path.abspath(top.stdout.strip()))
-        ck_dir = os.path.normcase(os.path.dirname(os.path.abspath(ck.path)))
+        # realpath on both sides: git names the real folder, the checkpoint may be reached through a link to it
+        root = os.path.normcase(os.path.realpath(top.stdout.strip()))
+        ck_dir = os.path.normcase(os.path.dirname(os.path.realpath(ck.path)))
         if os.path.commonpath([root, ck_dir]) != root:
             return
         rel = "dashboards/" + os.path.basename(png)
