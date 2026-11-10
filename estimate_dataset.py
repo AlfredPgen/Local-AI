@@ -411,7 +411,7 @@ def main(argv=None):
             how = f"tokenizer {tok_path}"
             if tok.vocab_size != vocab and not args.tokenizer_from:
                 rebuild = (f"a rebuild from scratch would train a {vocab:,}-piece tokenizer"
-                           + (" (about 10 % fewer tokens)" if vocab > tok.vocab_size else "")
+                           + (" (fewer tokens)" if vocab > tok.vocab_size else "")
                            + ": python estimate_dataset.py for that")
             vocab = tok.vocab_size  # the model sizes below are for the tokenizer that was measured
         else:

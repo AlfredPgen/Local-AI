@@ -178,7 +178,8 @@ class Audit2PipelineTools(unittest.TestCase):
         with unittest.mock.patch.object(tiny_gpt, "shape_ladder", wraps=tiny_gpt.shape_ladder) as ladder:
             out = self.run_estimate(["--tokenizer", model] + argv)
         ladder.assert_called_once_with(size)
-        self.assertIn("a rebuild from scratch would train a 4,096-piece tokenizer", out)
+        self.assertIn("a rebuild from scratch would train a 4,096-piece tokenizer (fewer tokens): python", out)
+        self.assertNotIn("10 %", out, "a figure that holds for one pair of vocabulary sizes only")
         self.assertNotIn("training a", out)
         # a dataset folder whose manifest names no readable tokenizer: not an exit, a trained tokenizer
         broken = os.path.join(self.tmp, "f191_broken")
