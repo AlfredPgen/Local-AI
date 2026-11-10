@@ -301,24 +301,17 @@ def evaluate(checkpoints, args):
     amp_dtype, amp_name, _ = tiny_gpt.choose_precision(device, "auto", training=False)  # scoring only
     with open(path, encoding="utf-8") as handle:
         evals = [json.loads(line) for line in handle]
-    mcq = [{"category": r["category"].split(":")[0], "difficulty": "unrated",
-            "prompt": finetune.TEMPLATE.format(prompt=r["prompt"]), "answer": r["answer"],
-            "distractors": r["distractors"]} for r in evals]
-    # The floor shuffles the question's words only, then puts them back in the template: shuffling the whole
-    # prompt would scatter '### Question:' / '### Answer:' too, an unfamiliar context for the fine-tuned models.
-    # The same word orders as the fact benchmark's floor (shuffled_prompt of the question).
-    floor_sets = [[dict(p, prompt=finetune.TEMPLATE.format(prompt=tiny_gpt.shuffled_prompt(r["prompt"], v)))
-                   for p, r in zip(mcq, evals)] for v in range(1, tiny_gpt.FLOOR_SHUFFLES + 1)]
+    mcq = [{"category": r["category"].split(":")[0], "difficulty": "unrated", "prompt": r["prompt"],
+            "answer": r["answer"], "distractors": r["distractors"]} for r in evals]
     facts = tiny_gpt.read_probes(args.probes) if os.path.isfile(args.probes) else []
     rows, answers = [], {}
     for path in checkpoints:
         t0 = time.time()
         model, tok, cfg, _ = tiny_gpt.load_for_inference(path, device, args.trust_checkpoint)
         model.eval()
-        acc, results = tiny_gpt.score_probes(model, tok, mcq, device, amp_dtype, floor=False)
-        shuffled = [tiny_gpt.score_probes(model, tok, fs, device, amp_dtype, floor=False)[1] for fs in floor_sets]
-        for k, row in enumerate(results):
-            row["floor_correct"] = sum(s[k]["correct"] for s in shuffled) / len(shuffled)
+        # the floor shuffles the question's words only: the template wraps each question after the shuffling
+        acc, results = tiny_gpt.score_probes(model, tok, mcq, device, amp_dtype, floor=True,
+                                             template=finetune.TEMPLATE)
         floor = tiny_gpt.probe_floor(results)
         by_cat = {k: v["accuracy"] for k, v in tiny_gpt.probe_summary(results).items()}
         fact_acc = fact_floor = None
