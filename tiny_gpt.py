@@ -3521,7 +3521,7 @@ def parse_args(argv=None):
                         "a forward+backward probe passes at model build, else the loop)")
     g.add_argument("--tokens-per-total-param", type=float, default=0.0,
                    help="warn when an MoE run plans fewer training tokens per TOTAL parameter than this "
-                        "(0 = off; the value is to be set from the MoE-versus-dense A/B)")
+                        "(0 = off)")
     g = p.add_argument_group("budget")
     g.add_argument("--steps", type=int, help="optimizer steps (on --resume: new total)")
     g.add_argument("--train-tokens", type=float, help="training tokens instead of --steps")
