@@ -2595,11 +2595,11 @@ def resume_min_lr(settings, step, ratio):
     schedule = LRSchedule(settings["schedule"], settings["steps"], settings["lr"], settings["min_lr"],
                           settings["warmup_steps"], settings["decay_frac"], settings["decay_shape"])
     new_min = float(settings["lr"]) * float(ratio)
+    if new_min == float(settings["min_lr"]):
+        return False, f"Note: --min-lr-ratio {ratio:g}: this run's min_lr is already {new_min:.2e}."
     if schedule.phase(int(step)) == "decay":
         return False, (f"Note: --min-lr-ratio {ratio:g} ignored (already in the decay phase); the schedule keeps "
                        f"min_lr {settings['min_lr']:.2e}.")
-    if new_min == float(settings["min_lr"]):
-        return False, f"Note: --min-lr-ratio {ratio:g}: this run's min_lr is already {new_min:.2e}."
     settings["min_lr"] = new_min
     return True, (f"Note: --min-lr-ratio {ratio:g}: min_lr {new_min:.2e} from the decay phase on; nothing changes "
                   "before it.")

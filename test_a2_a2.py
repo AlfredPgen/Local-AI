@@ -396,3 +396,22 @@ class Audit2TinyGptB(unittest.TestCase):
         speed_new, note_new = speed_of("started_again", [row("run", 1, t1, 100), row("run", 3, 7_200_000, 1)])
         self.assertAlmostEqual(speed_new, 2000 * flops, delta=flops)
         self.assertNotIn("last session", note_new)
+
+    def test_resume_min_lr_ratio_that_already_holds_is_not_called_ignored(self):
+        """F358: --min-lr-ratio on --resume that asks for the min_lr the run already has says so in every phase;
+        'ignored' is only for a real change inside the decay."""
+        settings = {"schedule": "wsd", "steps": 100, "lr": 1e-3, "min_lr": 0.0, "warmup_steps": 10,
+                    "decay_frac": 0.2, "decay_shape": "1-sqrt"}
+        for step in (5, 50, 90, 100):
+            applied, note = tiny_gpt.resume_min_lr(dict(settings), step, 0.0)
+            self.assertFalse(applied)
+            self.assertIn("is already 0.00e+00", note, step)
+            self.assertNotIn("ignored", note, step)
+        changed = dict(settings)
+        applied, note = tiny_gpt.resume_min_lr(changed, 90, 0.5)
+        self.assertFalse(applied)
+        self.assertIn("ignored (already in the decay phase)", note)
+        self.assertEqual(changed["min_lr"], 0.0)
+        applied, note = tiny_gpt.resume_min_lr(changed, 50, 0.5)
+        self.assertTrue(applied)
+        self.assertEqual(changed["min_lr"], 5e-4)
