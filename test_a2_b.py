@@ -14,7 +14,7 @@ import shutil
 import sys
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -153,6 +153,20 @@ class Audit2DataPrep(unittest.TestCase):
         self.assertEqual(data_prep.read_manifest(out)["fingerprint"],
                          data_prep.read_manifest(self.plain())["fingerprint"])
         self.assertFalse(os.path.exists(old))
+
+    # ---------------- F080: a finished --keep-work dataset is finished ----------------
+    def test_finished_keep_work_dataset_is_not_a_stopped_build(self):
+        out = os.path.join(self.tmp, "f080")
+        with redirect_stdout(io.StringIO()):
+            data_prep.prepare(["--out", out, "--keep-work"] + self.base_args())
+        self.assertTrue(os.path.isfile(os.path.join(out, "_work", data_prep.STATE_NAME)))
+        with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()) as err, self.assertRaises(SystemExit):
+            data_prep.prepare(["--out", out, "--resume"])
+        self.assertIn("finished dataset (manifest.json", err.getvalue())
+        with redirect_stdout(io.StringIO()), self.assertRaises(SystemExit) as stop:
+            data_prep.prepare(["--out", out, "--keep-work"] + self.base_args())
+        self.assertIn("already exists", str(stop.exception))
+        self.assertNotIn("stopped after pass 2", str(stop.exception))
 
     def test_an_error_in_the_leakage_audit_still_only_skips_it(self):
         out = os.path.join(self.tmp, "f057err")

@@ -2004,6 +2004,8 @@ def _validate(args, parser):
         args.md_recursive = True
     if args.resume:
         state = os.path.join(os.path.abspath(args.out), "_work", STATE_NAME)
+        if os.path.isfile(os.path.join(os.path.abspath(args.out), "manifest.json")):  # e.g. built with --keep-work
+            parser.error(f"--resume: {args.out} is a finished dataset (manifest.json present); nothing to continue")
         if not os.path.isfile(state):
             parser.error(f"--resume: no {state}; only a build that failed after pass 2 can be resumed")
         if args.overwrite:
@@ -2157,7 +2159,9 @@ def _prepare(args, state=None):
             print(f"Removing an incomplete earlier build in {out} (no manifest.json; only data_prep outputs).")
             shutil.rmtree(out)
         if os.path.exists(out) and os.listdir(out):
-            if os.path.isfile(state_path) and not args.overwrite:
+            # a finished dataset built with --keep-work also holds a state.pkl: its manifest says it is finished
+            if (os.path.isfile(state_path) and not os.path.isfile(os.path.join(out, "manifest.json"))
+                    and not args.overwrite):
                 raise SystemExit(f"{out} holds a build that stopped after pass 2. Continue it with "
                                  f"--out {args.out} --resume, or pass --overwrite to start again "
                                  "(the folder is renamed, not deleted).")
