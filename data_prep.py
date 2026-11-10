@@ -1131,24 +1131,35 @@ def _best_candidates(cands, limit):
     return neg[order], files[order], batches[order], rows[order]
 
 
+def _read_ahead(items, fn, threads, window=None):
+    """fn(item) for every item, in the order of the items. fn runs in `threads`
+    background threads, on at most `window` items ahead of the one being used
+    (default: 2 per thread), so memory stays bounded; an error of fn comes out
+    at its own item. What the user needs of the item itself, fn returns."""
+    from concurrent.futures import ThreadPoolExecutor
+    threads = max(1, threads)
+    window = 2 * threads if window is None else window
+    pending = collections.deque()
+    with ThreadPoolExecutor(max_workers=threads) as pool:
+        for item in items:
+            pending.append(pool.submit(fn, item))
+            if len(pending) > window:
+                yield pending.popleft().result()
+        while pending:
+            yield pending.popleft().result()
+
+
 def _prescored(source, kw, min_score, threads):
     """Record batches with their vectorised keyword scores, in order. Scoring is
     C++ (pyarrow releases the GIL), so the next batches are scored in background
     threads while the current one is being used. The keyword hits are all 0
     when the prefilter is not used (_use_prefilter)."""
-    from concurrent.futures import ThreadPoolExecutor
-    pending = collections.deque()
-    with ThreadPoolExecutor(max_workers=max(1, threads)) as pool:
-        for file_index, batch_index, arrays in source.batches():
-            pending.append((file_index, batch_index, arrays,
-                            pool.submit(_vector_scores, arrays, kw if _use_prefilter(kw) else None, source.text_col,
-                                        source.title_col, source.score_col, min_score)))
-            if len(pending) > 2 * max(1, threads):
-                f, b, a, future = pending.popleft()
-                yield f, b, a, future.result()
-        while pending:
-            f, b, a, future = pending.popleft()
-            yield f, b, a, future.result()
+    use = kw if _use_prefilter(kw) else None
+
+    def scored(batch):
+        return batch + (_vector_scores(batch[2], use, source.text_col, source.title_col, source.score_col, min_score),)
+
+    yield from _read_ahead(source.batches(), scored, threads)
 
 
 def iter_table_source(name, source, kw, max_docs, select, min_score, sample_fraction, seed, stats,
@@ -1306,15 +1317,10 @@ def _iter_jsonl_all(paths, text_key, title_key, id_key, max_docs, stats, kw, bat
 def _jsonl_arrow_blocks(path, text_key, title_key, id_key, kw, threads=1, block_bytes=16 << 20):
     """(records in block, skip counts, [(doc_id, title, text, meta)]) per Arrow block, in order.
     The keyword prefilter of several blocks runs in parallel threads (C++, no GIL)."""
-    from concurrent.futures import ThreadPoolExecutor
-    pending = collections.deque()
-    with ThreadPoolExecutor(max_workers=max(1, threads)) as pool:
-        for block, row0 in _jsonl_arrow_raw(path, text_key, title_key, id_key, block_bytes):
-            pending.append(pool.submit(_jsonl_arrow_block, block, row0, path, text_key, title_key, id_key, kw))
-            if len(pending) > 2 * max(1, threads):
-                yield pending.popleft().result()
-        while pending:
-            yield pending.popleft().result()
+    def checked(raw):
+        return _jsonl_arrow_block(raw[0], raw[1], path, text_key, title_key, id_key, kw)
+
+    yield from _read_ahead(_jsonl_arrow_raw(path, text_key, title_key, id_key, block_bytes), checked, threads)
 
 
 def _jsonl_arrow_raw(path, text_key, title_key, id_key, block_bytes):

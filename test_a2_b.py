@@ -636,6 +636,46 @@ class Audit2DataPrep(unittest.TestCase):
         terms = kw.evaluate("", "Genomes, genes and ions: rituximab in the lab. Genomics again.")[3]
         self.assertEqual(dict(terms), {"genom*": 2, "gen*": 3, "*mab": 1, "*ab": 2, "io*": 1})
 
+    # ---------------- F064: one bounded, ordered read-ahead for the table and the JSONL reader ----------------
+    def test_read_ahead_keeps_the_order_and_the_bound(self):
+        import random
+        rng = random.Random(64)
+        delays = [rng.random() * 0.02 for _ in range(40)]
+        taken = []
+
+        def source(n=40):
+            for i in range(n):
+                taken.append(i)
+                yield i
+
+        def work(i):
+            time.sleep(delays[i])
+            if i == 33:
+                raise ValueError("item 33")
+            return i, i * i
+
+        for threads, window, bound in ((3, None, 6), (2, 5, 5), (0, None, 2)):
+            del taken[:]
+            got = []
+            for result in data_prep._read_ahead(source(30), work, threads, window):
+                got.append(result)
+                self.assertLessEqual(len(taken) - len(got), bound, "items taken from the source but not yet used")
+            self.assertEqual(got, [(i, i * i) for i in range(30)])
+        # an error comes out at its own item, after everything before it
+        del taken[:]
+        got = []
+        with self.assertRaises(ValueError):
+            for result in data_prep._read_ahead(source(), work, 3):
+                got.append(result)
+        self.assertEqual(got, [(i, i * i) for i in range(33)])
+        # a reader that stops early leaves no thread behind
+        before = threading.active_count()
+        ahead = data_prep._read_ahead(source(), work, 3)
+        self.assertEqual([next(ahead), next(ahead)], [(0, 0), (1, 1)])
+        self.assertGreater(threading.active_count(), before)
+        ahead.close()
+        self.assertEqual(threading.active_count(), before)
+
 
 if __name__ == "__main__":
     unittest.main()
