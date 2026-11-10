@@ -46,6 +46,7 @@ that process costs about 1.6 s per PDF (loading pymupdf4llm), about 1.2 hours ov
 import argparse
 import bisect
 import csv
+import functools
 import gzip
 import html.parser
 import io
@@ -1201,7 +1202,10 @@ def parse_args():
     return args
 
 
-def pdf_pages(path):
+@functools.lru_cache(maxsize=None)
+def page_count(path):
+    """Pages of a PDF, 0 if it cannot be opened. Remembered: a PDF is opened once
+    for its --by-type folder, its candidate names and its time limit."""
     try:
         import pymupdf
         with pymupdf.open(path) as document:
@@ -1240,7 +1244,7 @@ def plan_target(path, args, n_files):
     if args.by_type and args.out:
         ext = os.path.splitext(path)[1].lower()
         if ext == ".pdf":
-            kind = "book" if pdf_pages(path) >= args.book_pages else "article"
+            kind = "book" if page_count(path) >= args.book_pages else "article"
         elif ext in CODE_EXT or ext == ".ipynb":
             kind = "code"
         elif ext in (".docx", ".pptx", ".xlsx"):
@@ -1395,15 +1399,6 @@ def _lower_priority():
             proc.nice(10)
     except Exception:  # noqa: BLE001
         pass
-
-
-def _pdf_page_count(path):
-    try:
-        import pymupdf
-        with pymupdf.open(path) as doc:
-            return max(doc.page_count, 1)
-    except Exception:  # noqa: BLE001
-        return 1
 
 
 def find_tessdata():
@@ -1652,8 +1647,8 @@ def main():
             cmd.append("--extract-images")
         timeout = args.timeout
         if path.lower().endswith(".pdf"):  # a long book needs longer (OCR takes seconds per page)
-            timeout = max(timeout, _pdf_page_count(path) * (OCR_SECONDS_PER_PAGE if getattr(args, "ocr", False)
-                                                             else PDF_SECONDS_PER_PAGE))
+            timeout = max(timeout, max(page_count(path), 1) * (OCR_SECONDS_PER_PAGE if getattr(args, "ocr", False)
+                                                               else PDF_SECONDS_PER_PAGE))
         code, stdout, stderr = _run_child(cmd, timeout)
         if code is None:
             return path, "skipped", f"timed out after {timeout} s (raise --timeout to allow longer)"

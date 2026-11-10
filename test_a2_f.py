@@ -326,6 +326,41 @@ class Audit2DocsYoutubeConvert(unittest.TestCase):
         self.assertEqual(os.path.basename(os.path.dirname(conv.plan_target(os.path.join(src, "a.txt"), args, 5))),
                          "tables")
 
+    def test_pdf_page_count_is_one_cached_function(self):
+        """F038: one page counter (0 for a file that cannot be opened), each PDF opened once; --by-type sorts a
+        PDF as before."""
+        import argparse
+        import pymupdf
+        import convert_to_markdown as conv
+        folder = os.path.join(self.tmp, "f038")
+        os.makedirs(folder)
+        two, broken = os.path.join(folder, "two.pdf"), os.path.join(folder, "broken.pdf")
+        pdf = pymupdf.open()
+        for k in range(2):
+            pdf.new_page().insert_text((72, 72), f"Page {k + 1} about heritability.")
+        pdf.save(two)
+        pdf.close()
+        with open(broken, "wb") as handle:
+            handle.write(b"%PDF-1.7 not a pdf at all")
+        self.assertFalse(hasattr(conv, "pdf_pages") or hasattr(conv, "_pdf_page_count"))
+        real_open, opened = pymupdf.open, []
+
+        def counting_open(*a, **k):
+            opened.append(a[0] if a else None)
+            return real_open(*a, **k)
+
+        with unittest.mock.patch.object(pymupdf, "open", counting_open):
+            self.assertEqual([conv.page_count(two) for _ in range(3)], [2, 2, 2])
+            self.assertEqual([conv.page_count(broken) for _ in range(3)], [0, 0, 0])
+            self.assertEqual(max(conv.page_count(broken), 1), 1)  # the time limit counts at least one page
+            args = argparse.Namespace(out=os.path.join(folder, "out"), by_type=True, name_prefix="", book_pages=2,
+                                      no_gwas=False, output_name=None)
+            kinds = [os.path.basename(os.path.dirname(conv.plan_target(p, args, 2))) for p in (two, broken)]
+            args.book_pages = 3
+            kinds.append(os.path.basename(os.path.dirname(conv.plan_target(two, args, 2))))
+        self.assertEqual(kinds, ["books", "articles", "articles"])
+        self.assertEqual(opened, [two, broken])  # once each, whatever asked
+
 
 if __name__ == "__main__":
     unittest.main()
