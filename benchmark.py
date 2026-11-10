@@ -1136,9 +1136,12 @@ def cmd_run(args):
     if code_names:
         sandbox = select_sandbox(args.sandbox, args.unsafe_local_execution, args.wsl_distro, args.docker_image)
         if sandbox is None:
-            print(f"REFUSING to run generated code for {', '.join(code_names)}: no sandbox (start Docker Desktop, "
-                  "or install bubblewrap in a WSL distribution with python3). Generated code is never run on the "
-                  "Windows host; --unsafe-local-execution runs it in a plain subprocess if you accept the risk.")
+            host = "the Windows host" if sys.platform == "win32" else "this machine"
+            hint = ("start Docker Desktop, or install bubblewrap in a WSL distribution with python3"
+                    if sys.platform == "win32" else "start Docker")
+            print(f"REFUSING to run generated code for {', '.join(code_names)}: no sandbox ({hint}). Generated code "
+                  f"is never run on {host}; --unsafe-local-execution runs it in a plain subprocess if you accept "
+                  "the risk.")
             names = [n for n in names if n not in code_names]
         else:
             print(f"Sandbox for generated code: {sandbox.describe()}")

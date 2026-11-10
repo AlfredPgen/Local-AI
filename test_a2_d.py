@@ -83,6 +83,12 @@ class Audit2Benchmark(unittest.TestCase):
                  "upper": answer, "calculator": "c"} for i, (answer, kind) in enumerate((("4", "integer"),
                                                                                         ("2.5", "decimal")))]
 
+    @staticmethod
+    def humaneval_item(**extra):
+        return {"id": "h0", "question": "def f():\n", "options": None, "answer": "    return 1\n",
+                "category": "python", "kind": "code", "style": "humaneval", "test": "def check(c): pass",
+                "entry_point": "f", **extra}
+
     def test_medcalc_rows_name_the_integer_rule(self):
         """F016: MedCalc rows scored with the official integer rule say so in their notes (earlier rows of
         results/benchmarks.csv used rounding for the 34 'integer' items whose answer is not a whole number)."""
@@ -140,9 +146,7 @@ class Audit2Benchmark(unittest.TestCase):
         """F010: `sandbox-setup` fills the folder that only the bubblewrap jail mounts, so the line about skipped
         items points there for bubblewrap alone; Docker and the unshare fallback get the step that helps them."""
         b = self.b
-        items = [{"id": "h0", "question": "def f():\n", "options": None, "answer": "    return 1\n",
-                  "category": "python", "kind": "code", "style": "humaneval", "test": "def check(c): pass",
-                  "entry_point": "f", "requires": ["numpy"]}]
+        items = [self.humaneval_item(requires=["numpy"])]
         lacks = b.SandboxResult(True, "passed", 'MODS={"numpy": false}')
         boom = unittest.mock.Mock(side_effect=AssertionError("nothing may be executed"))
         old = "see `python benchmark.py sandbox-setup`"
@@ -160,6 +164,36 @@ class Audit2Benchmark(unittest.TestCase):
             self.assertEqual((code, rows), (0, []))
         boom.assert_not_called()
         self.assertIn("or unshare (weaker: no PID namespace)", " ".join(b.__doc__.split()))
+
+    def test_refusal_names_this_machine(self):
+        """F006: without a sandbox the refusal names Docker Desktop, WSL and the Windows host on Windows only; on
+        a Mac or Linux it says 'start Docker' and 'this machine'. It starts with REFUSING everywhere."""
+        import json
+        b = self.b
+        bench = os.path.join(self.tmp, "f006")
+        os.makedirs(os.path.join(bench, "humaneval"))
+        b.write_items(os.path.join(bench, "humaneval", "items.jsonl"), [self.humaneval_item()])
+        with open(os.path.join(bench, "manifest.json"), "w", encoding="utf-8") as handle:
+            json.dump({"benchmarks": {"humaneval": {"items": 1}}}, handle)
+        args = b.parse_args(["run", "--checkpoint", "none.pt", "--benchmarks", "humaneval", "--device", "cpu"])
+        said = {}
+        for platform in ("win32", "darwin", "linux"):
+            out = io.StringIO()
+            with unittest.mock.patch.object(b, "BENCH_DIR", bench), \
+                    unittest.mock.patch.object(b, "MANIFEST", os.path.join(bench, "manifest.json")), \
+                    unittest.mock.patch.object(b, "select_sandbox", return_value=None), \
+                    unittest.mock.patch.object(sys, "platform", platform), \
+                    redirect_stdout(out):
+                self.assertEqual(b.cmd_run(args), 1)
+            said[platform] = out.getvalue()
+            self.assertTrue(said[platform].startswith("REFUSING to run generated code for humaneval: no sandbox ("))
+            self.assertIn("--unsafe-local-execution runs it in a plain subprocess", said[platform])
+        self.assertIn("(start Docker Desktop, or install bubblewrap in a WSL distribution with python3). Generated "
+                      "code is never run on the Windows host;", said["win32"])
+        for platform in ("darwin", "linux"):
+            self.assertNotIn("WSL", said[platform])
+            self.assertNotIn("Windows", said[platform])
+            self.assertIn("(start Docker). Generated code is never run on this machine;", said[platform])
 
     def test_generated_code_gets_no_stdin(self):
         """F020: the jailed program reads /dev/null, not the rest of the wrapper script piped to `bash -s` (which
