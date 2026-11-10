@@ -2219,6 +2219,10 @@ def _prepare(args, state=None):
     # Each dataset has its own sub-folder of --work-dir (name + a hash of the --out path), so builds that share
     # the folder never overwrite or delete each other's spools; a resumed build uses the folder its state names
     st = _load_state(state_path) if resumed else None
+    # a resumed build records the command and the time of the whole build, not those of the resume session
+    # (a state saved before these keys existed gives the resume command and this session's time)
+    command = (st.get("command", " ".join(sys.argv)) + " (resumed)") if resumed else " ".join(sys.argv)
+    earlier = float(st.get("seconds", 0.0)) if resumed else 0.0
     if resumed:
         spool_dir = os.path.dirname(st["spool2"])
     elif args.work_dir:
@@ -2513,7 +2517,8 @@ def _prepare(args, state=None):
               "duplicates": duplicates, "notes": notes, "removed_lines": removed_lines,
               "line_examples": line_examples, "keyword_totals": keyword_totals, "clusters": clusters,
               "cross_source": cross_source, "forced_train": forced_train, "leakage": leakage,
-              "settled_val": settled_val, "kept_split": kept_split}
+              "settled_val": settled_val, "kept_split": kept_split,
+              "command": command, "seconds": time.time() - t_start}
         if not args.scan_only:
             _save_state(state_path, st)  # from here on a failure keeps the work files for --resume
 
@@ -2610,7 +2615,8 @@ def _prepare(args, state=None):
         if args.scan_only or nothing_kept:
             _write_ledger(out, ledger, docs, split_of, roots, dropped, None)
             _write_report(out, args, sources, duplicates, removed_lines, line_examples, keyword_totals,
-                          None, {}, forced_train, [], None, t_start, scan_only=args.scan_only, notes=notes)
+                          None, {}, forced_train, [], None, t_start, scan_only=args.scan_only, notes=notes,
+                          command=command, earlier=earlier)
             _cleanup(work, spool_dir, args.keep_work)
             if nothing_kept and not args.scan_only:
                 raise SystemExit(f"No document passed the filters; see {os.path.join(out, 'report.md')} and docs.tsv. "
@@ -2638,7 +2644,7 @@ def _prepare(args, state=None):
                 print(f"Leakage audit {what}: {exc}; the build goes on without it (leaking validation documents "
                       "were not moved to training).", flush=True)
                 notes.append(f"The leakage audit {what} and was skipped.")
-        st["stage"] = "split"
+        st["stage"], st["seconds"] = "split", earlier + time.time() - t_start
         _save_state(state_path, st)
 
     # ------------------------------------------------------------------
@@ -2665,6 +2671,7 @@ def _prepare(args, state=None):
         with open(tok_path, "wb") as handle:
             handle.write(tok.proto)
         st["stage"], st["tokenizer_info"], st["tokenizer_encode_mode"] = "tokenizer", tokenizer_info, tok.encode_mode
+        st["seconds"] = earlier + time.time() - t_start
         _save_state(state_path, st)
     dtype = np.uint16 if tok.vocab_size <= 65536 else np.uint32
 
@@ -2799,7 +2806,7 @@ def _prepare(args, state=None):
         "near_duplicate_clusters": len(clusters),
         "fingerprint": fingerprint.hexdigest(),
         "prep_args": {k: v for k, v in vars(args).items()},
-        "command": " ".join(sys.argv) + (" (resumed)" if resumed else ""),
+        "command": command,
     }
     # docs.tsv first, then manifest.json, each written whole and renamed into place: a dataset with a manifest is
     # complete (never deleted as an interrupted build) and its docs.tsv is never cut short (--keep-split-from)
@@ -2827,7 +2834,8 @@ def _prepare(args, state=None):
     tok_stats = _tokenizer_stats(tok, docs, split_of, doc_tokens)
     tok_stats["distribution"] = tok_dist
     _write_report(out, args, sources, duplicates, removed_lines, line_examples, keyword_totals,
-                  manifest, tok_stats, forced_train, leakage, tok, t_start, notes=notes)
+                  manifest, tok_stats, forced_train, leakage, tok, t_start, notes=notes,
+                  command=command, earlier=earlier)
     _cleanup(work, spool_dir, args.keep_work)
     t = manifest["totals"]
     print(f"\nDataset ready: {out}\n  train {t['train_tokens']:,} tokens in {t['train_docs']:,} docs | "
@@ -3708,11 +3716,16 @@ def _write_ledger(out, ledger, docs, split_of, roots, dropped, doc_tokens):
 
 
 def _write_report(out, args, sources, duplicates, removed_lines, line_examples, keyword_totals,
-                  manifest, tok_stats, forced_train, leakage, tok, t_start, scan_only=False, notes=()):
+                  manifest, tok_stats, forced_train, leakage, tok, t_start, scan_only=False, notes=(),
+                  command=None, earlier=0.0):
+    """report.md and the audit tables. `command` is the build's command line (a
+    resumed build passes the original one) and `earlier` the seconds a stopped
+    build had already taken before this session."""
     L = []
     L.append(f"# Dataset report: {os.path.basename(out)}\n")
     L.append(f"Created {datetime.datetime.now().astimezone().isoformat(timespec='seconds')} in "
-             f"{time.time() - t_start:,.0f} s. Command: `{' '.join(sys.argv)}`\n")
+             f"{earlier + time.time() - t_start:,.0f} s. "
+             f"Command: `{' '.join(sys.argv) if command is None else command}`\n")
     if scan_only:
         L.append("**Scan-only run:** filtering, cleaning and deduplication were measured; nothing was tokenized.\n")
     L.append("## Sources\n")

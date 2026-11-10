@@ -10,6 +10,7 @@ import hashlib
 import io
 import json
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -274,6 +275,40 @@ class Audit2DataPrep(unittest.TestCase):
             self.assertIn("removed the work spool", buf.getvalue())
             if extra:
                 self.assertEqual(os.listdir(extra[1]), [], "the spool sub-folder of --work-dir is gone too")
+
+    # ---------------- F061: a resumed build keeps the command and the time of the build ----------------
+    def test_resumed_build_records_the_original_command_and_the_whole_time(self):
+        out = os.path.join(self.tmp, "f061")
+        first = ["data_prep.py", "--out", "f061", "--md-dir", "texts", "--vocab-size", "600"]
+        with unittest.mock.patch.object(sys, "argv", first):
+            self.stop_after_pass2(["--out", out] + self.base_args())
+        state_path = os.path.join(out, "_work", data_prep.STATE_NAME)
+        st = data_prep._load_state(state_path)
+        self.assertEqual(st["command"], " ".join(first))
+        self.assertGreater(st["seconds"], 0)
+        st["seconds"] = 5000.0  # as if reading had taken 83 minutes
+        data_prep._save_state(state_path, st)
+        with unittest.mock.patch.object(sys, "argv", ["data_prep.py", "--out", "f061", "--resume"]):
+            with redirect_stdout(io.StringIO()):
+                data_prep.prepare(["--out", out, "--resume", "--threads", "2", "--workers", "1"])
+        manifest = data_prep.read_manifest(out)
+        self.assertEqual(manifest["command"], " ".join(first) + " (resumed)")
+        self.assertEqual(manifest["fingerprint"], data_prep.read_manifest(self.plain())["fingerprint"])
+        report = read_file(os.path.join(out, "report.md"))
+        self.assertIn("Command: `" + " ".join(first) + " (resumed)`", report)
+        seconds = int(re.search(r" in ([\d,]+) s\. Command", report).group(1).replace(",", ""))
+        self.assertTrue(5000 <= seconds < 5600, seconds)
+        # a state saved before these keys existed: the resume command and this session's time, as before
+        out = os.path.join(self.tmp, "f061_old")
+        self.stop_after_pass2(["--out", out] + self.base_args())
+        state_path = os.path.join(out, "_work", data_prep.STATE_NAME)
+        st = data_prep._load_state(state_path)
+        del st["command"], st["seconds"]
+        data_prep._save_state(state_path, st)
+        with unittest.mock.patch.object(sys, "argv", ["data_prep.py", "--out", "f061_old", "--resume"]):
+            with redirect_stdout(io.StringIO()):
+                data_prep.prepare(["--out", out, "--resume", "--threads", "2", "--workers", "1"])
+        self.assertEqual(data_prep.read_manifest(out)["command"], "data_prep.py --out f061_old --resume (resumed)")
 
     def test_an_error_in_the_leakage_audit_still_only_skips_it(self):
         out = os.path.join(self.tmp, "f057err")
