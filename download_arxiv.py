@@ -567,6 +567,18 @@ def _include_keys(name, target):
                         os.path.normpath(cand).replace("\\", "/"))]
 
 
+def _included(files, name, target):
+    """The archive file an \\input{target} in file `name` means (never `name`
+    itself), or None. A name that matches exactly is preferred; otherwise one
+    that differs only in case is taken (SEC1.TEX for \\input{SEC1})."""
+    keys = _include_keys(name, target)
+    for key in keys:
+        if key in files and key != name:
+            return key
+    lower = {k.lower(): k for k in files if k != name}
+    return next((lower[key.lower()] for key in keys if key.lower() in lower), None)
+
+
 def main_tex(files):
     """The main file: a .tex file with \\begin{document} outside comments that
     is not a part of another one (a subfiles section, a standalone figure, a
@@ -587,6 +599,7 @@ def main_tex(files):
             target = (inc.group(1) or inc.group(2) or "").strip()
             if target:
                 parts.update(k for k in _include_keys(n, target) if k != n)
+                parts.add(_included(files, n, target))  # a part named in another case (None matches no file)
     cands = [n for n in cands if n not in parts] or cands
     return max(cands, key=lambda n: (bool(_CLASS_RE.search(texts[n])), len(flatten(files, n)), n))
 
@@ -600,10 +613,8 @@ def flatten(files, name, depth=0):
         target = (m.group(1) or m.group(2) or "").strip()
         if depth >= 10 or not target:
             return ""
-        for key in _include_keys(name, target):
-            if key in files and key != name:
-                return "\n" + flatten(files, key, depth + 1) + "\n"
-        return ""
+        key = _included(files, name, target)
+        return "" if key is None else "\n" + flatten(files, key, depth + 1) + "\n"
 
     return _INPUT_RE.sub(include, text)
 

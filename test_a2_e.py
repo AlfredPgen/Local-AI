@@ -73,6 +73,25 @@ class Audit2Downloaders(unittest.TestCase):
         self.assertEqual(ax.main_tex({"MAIN.TEX": r"\documentclass{article}\begin{document}x\end{document}"}),
                          "MAIN.TEX")
 
+    def test_f126_files_included_by_an_upper_case_main_file_are_found(self):
+        """F126: an upper-case main file usually comes with upper-case parts (SEC1.TEX for \\input{SEC1}).
+        They are filled in; a part whose name matches exactly is preferred to one that differs in case."""
+        files = {"MAIN.TEX": "\\documentclass{article}\\begin{document}Intro.\\input{SEC1}\\include{SUB/SEC2}"
+                             "\\input{missing}\\end{document}",
+                 "SEC1.TEX": "Methods text.", "SUB/SEC2.TEX": "Results text.\\input{SEC3}", "SUB/SEC3.TEX": "Deep."}
+        self.assertEqual(ax.main_tex(files), "MAIN.TEX")
+        flat = ax.flatten(files, "MAIN.TEX")
+        for part in ("Intro.", "Methods text.", "Results text.", "Deep."):
+            self.assertIn(part, flat)
+        both = {"main.tex": "\\begin{document}\\input{sec}\\end{document}", "SEC.TEX": "UPPER", "sec.tex": "lower"}
+        self.assertIn("lower", ax.flatten(both, "main.tex"))
+        self.assertNotIn("UPPER", ax.flatten(both, "main.tex"))
+        self.assertEqual(ax.flatten({"A.TEX": "x\\input{a}y"}, "A.TEX"), "xy")  # a file never includes itself
+        # a part that could be a main file by itself is still a part when its name differs in case
+        parts = {"MAIN.TEX": "\\begin{document}\\input{PART}\\end{document}",
+                 "PART.TEX": "\\documentclass{article}\\begin{document}part\\end{document}"}
+        self.assertEqual(ax.main_tex(parts), "MAIN.TEX")
+
     def test_f120_failed_source_download_is_recorded_in_the_method(self):
         """F120: a paper converted from its PDF because the e-print download failed says so; a paper
         without source (404) is a plain 'pdf' as before."""
