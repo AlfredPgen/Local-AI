@@ -681,7 +681,7 @@ class Audit2DataPrep(unittest.TestCase):
     def serial_markdown(dirs, patterns, excludes, recursive, stats, ledger, source="md"):
         """The reader as it was before the read-ahead, one file at a time: the reference of the test below."""
         import zlib
-        seen = set()
+        seen, produced = set(), set()
         bases = [os.path.basename(os.path.normpath(d)) or f"folder{k + 1}" for k, d in enumerate(dirs)]
         if len({b.lower() for b in bases}) < len(bases):
             bases = [f"{k + 1}-{b}" for k, b in enumerate(bases)]
@@ -706,6 +706,12 @@ class Audit2DataPrep(unittest.TestCase):
                                                         os.path.getsize(path)))
                     continue
                 size = os.path.getsize(path)
+                if doc_id in produced:  # the rule of F089, added to this reference with it
+                    name = os.path.basename(rel)
+                    stats["skipped"]["duplicate_id"] += 1
+                    ledger.append(data_prep._ledger_row(source, doc_id, rel, "skipped", f"duplicate_id: {name} and "
+                                                        f"{name}.gz both present; first in sort order kept", size))
+                    continue
                 if size > 512 * 1024 * 1024:
                     stats["skipped"]["file_too_large"] += 1
                     ledger.append(data_prep._ledger_row(source, doc_id, rel, "skipped", "file_too_large", size))
@@ -726,6 +732,7 @@ class Audit2DataPrep(unittest.TestCase):
                         ledger.append(data_prep._ledger_row(source, doc_id, rel, "skipped", "file_too_large",
                                                             len(raw)))
                         continue
+                produced.add(doc_id)
                 yield (doc_id, os.path.splitext(os.path.basename(rel))[0],
                        data_prep.decode_bytes(raw, stats["cleaning"]), {"path": path})
 
@@ -753,6 +760,8 @@ class Audit2DataPrep(unittest.TestCase):
                 f.write(text if isinstance(text, bytes) else text.encode("utf-8"))
         with gzip.open(os.path.join(root, "packed.md.gz"), "wb") as f:
             f.write(b"# Packed\n\nA compressed document.\n")
+        with gzip.open(os.path.join(root, "sub", "c.md.gz"), "wb") as f:  # sub/c.md is there as well (F089)
+            f.write(b"# C\n\nThe compressed copy of c.md.\n")
         with open(os.path.join(root, "bad.md.gz"), "wb") as f:
             f.write(b"this is not a gzip file")
         with open(os.path.join(root, "packed.md.gz"), "rb") as f:
@@ -807,6 +816,42 @@ class Audit2DataPrep(unittest.TestCase):
         self.assertGreater(threading.active_count(), before)
         reader.close()
         self.assertEqual(threading.active_count(), before)
+
+    # ---------------- F089: a.md and a.md.gz in one folder are one document id, so one document ----------------
+    def test_file_and_its_gz_copy_give_one_document(self):
+        folder = self.folder("f089")
+        with open(os.path.join(folder, "a.md"), "w", encoding="utf-8", newline="\n") as f:
+            f.write("The plain copy.\n")
+        with gzip.open(os.path.join(folder, "a.md.gz"), "wb") as f:
+            f.write(b"The compressed copy, edited later.\n")
+        with gzip.open(os.path.join(folder, "only.md.gz"), "wb") as f:
+            f.write(b"Compressed only.\n")
+        stats, ledger = data_prep._new_stats(), []
+        docs = list(data_prep.iter_markdown([folder], data_prep.MD_PATTERNS_DEFAULT, [], False, stats, ledger, "notes"))
+        self.assertEqual([(d[0], d[2]) for d in docs], [("a.md", "The plain copy.\n"), ("only.md", "Compressed only.\n")])
+        self.assertEqual(stats["scanned"], 3)
+        self.assertEqual(stats["skipped"]["duplicate_id"], 1)
+        self.assertEqual(len(ledger), 1)
+        self.assertEqual((ledger[0]["source"], ledger[0]["doc_id"], ledger[0]["status"]), ("notes", "a.md", "skipped"))
+        self.assertEqual(ledger[0]["reason"], "duplicate_id: a.md and a.md.gz both present; first in sort order kept")
+        # an excluded copy does not stand in the way of the other one
+        stats, ledger = data_prep._new_stats(), []
+        docs = list(data_prep.iter_markdown([folder], data_prep.MD_PATTERNS_DEFAULT, ["*.md"], False, stats, ledger))
+        self.assertEqual([d[0] for d in docs], [])
+        stats, ledger = data_prep._new_stats(), []
+        docs = list(data_prep.iter_markdown([folder], ["*.md.gz"], [], False, stats, ledger))
+        self.assertEqual([(d[0], d[2]) for d in docs],
+                         [("a.md", "The compressed copy, edited later.\n"), ("only.md", "Compressed only.\n")])
+        self.assertNotIn("duplicate_id", stats["skipped"])
+        # in a build: the id is once in docs.tsv as a document and once as a skipped row
+        out = os.path.join(folder, "scan")
+        with redirect_stdout(io.StringIO()):
+            data_prep.prepare(["--out", out, "--md-dir", folder, "--scan-only", "--threads", "2", "--workers", "1",
+                               "--min-chars", "1"])
+        rows = [line.split("\t") for line in read_file(os.path.join(out, "docs.tsv")).splitlines()[1:]]
+        self.assertEqual(sorted((r[1], r[3], r[4][:12]) for r in rows if r[1] == "a.md"),
+                         [("a.md", "skipped", "duplicate_id"), ("a.md", "train", "")])
+        self.assertIn("duplicate_id 1", read_file(os.path.join(out, "report.md")))
 
 
 if __name__ == "__main__":

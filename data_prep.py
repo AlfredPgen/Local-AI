@@ -963,7 +963,7 @@ def iter_markdown(dirs, patterns, excludes, recursive, stats, ledger, source="md
     `read_ahead_bytes` (the window then holds at most 64 x 8 MB); an excluded
     file is not read at all. Everything else, unpacking a .gz included, happens
     here, one file at a time in path order."""
-    seen = set()
+    seen, produced = set(), set()  # real paths looked at; ids of the documents given out
     bases = [os.path.basename(os.path.normpath(d)) or f"folder{k + 1}" for k, d in enumerate(dirs)]
     if len({b.lower() for b in bases}) < len(bases):
         bases = [f"{k + 1}-{b}" for k, b in enumerate(bases)]
@@ -1011,6 +1011,12 @@ def iter_markdown(dirs, patterns, excludes, recursive, stats, ledger, source="md
                 stats["skipped"]["excluded_by_glob"] += 1
                 ledger.append(_ledger_row(source, doc_id, rel, "skipped", "excluded_by_glob", size))
                 continue
+            if doc_id in produced:  # a.md was read and a.md.gz has the same id: one document, not two under one id
+                name = os.path.basename(rel)
+                stats["skipped"]["duplicate_id"] += 1
+                ledger.append(_ledger_row(source, doc_id, rel, "skipped", f"duplicate_id: {name} and {name}.gz both "
+                                          "present; first in sort order kept", size))
+                continue
             if size > 512 * 1024 * 1024:
                 stats["skipped"]["file_too_large"] += 1
                 ledger.append(_ledger_row(source, doc_id, rel, "skipped", "file_too_large", size))
@@ -1030,6 +1036,7 @@ def iter_markdown(dirs, patterns, excludes, recursive, stats, ledger, source="md
                     stats["skipped"]["file_too_large"] += 1
                     ledger.append(_ledger_row(source, doc_id, rel, "skipped", "file_too_large", len(raw)))
                     continue
+            produced.add(doc_id)
             yield doc_id, os.path.splitext(os.path.basename(rel))[0], decode_bytes(raw, stats["cleaning"]), {"path": path}
     finally:
         ahead.close()  # a caller that stops early: the reader threads end now, files not yet started are not read
