@@ -1168,6 +1168,38 @@ class Audit2DataPrep(unittest.TestCase):
         self.assertTrue(all(s in ("train", "val") for s, _ in status.values()), status)
         self.assertNotIn("\tsym\t", read_file(os.path.join(out, "duplicates.tsv")))
 
+    # ---------------- F055: a cluster whose other-source copies were dropped is no cross-source cluster ----------------
+    def test_dropped_copies_in_another_source_do_not_keep_a_group_out_of_validation(self):
+        """Twelve documents of md have a near-duplicate in a second source. With --near-dup drop the copies are
+        removed, so nothing of those clusters is left in the other source and the md documents can be
+        validation; with the default (group) both copies stay and the cluster is kept in training."""
+        c = self.corpus()
+        folder = self.folder("f055_in")
+        for i in range(10, 22):
+            with open(os.path.join(folder, f"twin_{i}.md"), "w", encoding="utf-8", newline="\n") as handle:
+                handle.write(read_file(os.path.join(c.md, f"topic_{i}.md")) + "\nOne more sentence about alleles.\n")
+        for i in range(3):
+            shutil.copy(os.path.join(c.notes, f"note_{i}.md"), folder)
+        argv = ["--md-dir", c.md, "--md-dir", f"twin={folder}", "--vocab-size", "600", "--val-fraction", "0.2",
+                "--threads", "2", "--workers", "1", "--keep-work"]
+        forced = {}
+        for mode in ("drop", "group"):
+            out = os.path.join(self.tmp, "f055_" + mode)
+            with redirect_stdout(io.StringIO()):
+                data_prep.prepare(["--out", out, "--near-dup", mode] + argv)
+            state = data_prep._load_state(os.path.join(out, "_work", data_prep.STATE_NAME))
+            forced[mode] = dict(state["forced_train"])
+            twins = [line.split("\t") for line in read_file(os.path.join(out, "docs.tsv")).splitlines()
+                     if line.startswith("twin\ttwin_")]
+            self.assertEqual(len(twins), 12)
+            if mode == "drop":
+                self.assertEqual({(row[3], row[4]) for row in twins}, {("skipped", "near_duplicate")})
+                self.assertEqual(state["cross_source"], set())
+            else:
+                self.assertEqual({row[3] for row in twins}, {"train"})
+        self.assertNotIn("cross_source_cluster", forced["drop"])
+        self.assertGreater(forced["group"].get("cross_source_cluster", 0), 0)
+
 
 if __name__ == "__main__":
     unittest.main()

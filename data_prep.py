@@ -2645,7 +2645,8 @@ def _prepare(args, state=None):
         del cut, near_dropped
         print(f"Near-duplicate clusters: {len(clusters):,} "
               f"({sum(len(m) for m in clusters.values()):,} documents; action: {args.near_dup})")
-        cross_source = {r for r, m in clusters.items() if len({docs[i][0] for i in m}) > 1}
+        # a cluster is cross-source by the members that are kept: copies removed by --near-dup drop do not count
+        cross_source = {r for r, m in clusters.items() if len({docs[i][0] for i in m if not dropped[i]}) > 1}
         split_of = np.zeros(n, dtype=np.int8)
         forced_train = collections.Counter()
         leakage, settled_val, kept_split = [], set(), collections.Counter()
