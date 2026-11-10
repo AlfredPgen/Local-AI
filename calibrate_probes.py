@@ -7,8 +7,10 @@ r"""Set the fact benchmark's difficulty labels from how reference language model
 
 If a reference model cannot be scored (too little free RAM on the CPU, or a failed
 sanity check), nothing is written: labels from fewer models differ from the full
-set's. Rerun when memory or the GPU is free (the models scored so far are cached),
-or pass --allow-partial.
+set's. Rerun when memory or the GPU is free, or pass --allow-partial. Scores are
+cached per device (the CPU scores in FP32, a GPU in BF16): a rerun with the same
+--device scores only the missing models, one with another --device scores every
+model again.
 
 Reference models are small open models with the Llama design, the same as tinyGPT's
 (RoPE, RMSNorm, SwiGLU, grouped-query attention). They are downloaded once from Hugging
@@ -343,7 +345,7 @@ def main():
             if n_params * 4 > 0.7 * free:
                 print(f"{repo}: SKIPPED on the CPU - needs {n_params * 4 / 2 ** 30:.1f} GiB in float32, "
                       f"{free / 2 ** 30:.1f} GiB free. Rerun later, or with --device cuda (or mps) when no training "
-                      "is running.")
+                      "is running (scores are cached per device: that run scores every model again).")
                 skipped.append(repo)
                 del model
                 continue
@@ -383,7 +385,8 @@ def main():
     if skipped and not args.allow_partial:
         raise SystemExit(f"Not scored: {', '.join(skipped)}. Labels from only some of the reference models differ "
                          "from the full set's, so nothing was written (no report, no labels). Rerun when RAM or "
-                         "the GPU is free (the models scored now are cached), or pass --allow-partial.")
+                         "the GPU is free (the models scored now are cached for a rerun with the same --device; "
+                         "another device scores every model again), or pass --allow-partial.")
 
     repos = list(per_model)
     strongest = max(repos, key=lambda r: per_model[r]["acc"])

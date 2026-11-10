@@ -133,6 +133,12 @@ class Audit2FinetuneTools(unittest.TestCase):
         self.assertIsNotNone(message, "a skipped model must end the run")
         self.assertIn("org/c", message)
         self.assertIn("--allow-partial", message)
+        # the scores made now are kept for a rerun on this device only (F021: one cache file per device type)
+        cached = sorted(os.listdir(os.path.join(os.path.dirname(probes), "cache")))
+        self.assertEqual(len(cached), 2)
+        self.assertTrue(all(name.endswith("_cpu.json") for name in cached), cached)
+        self.assertIn("same --device", message)
+        self.assertIn("cached per device", out)
         with open(probes, "rb") as f:
             self.assertEqual(f.read(), before, "labels were rewritten from a partial reference set")
         base = os.path.splitext(probes)[0]
