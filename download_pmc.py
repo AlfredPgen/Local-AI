@@ -184,12 +184,17 @@ def _finish_refresh(records, state_path):
     """The end of a --refresh-metadata harvest: the complete new files replace
     the old ones, the records first and then the state. A stop between the two
     leaves a complete state.json.new without records.jsonl.gz.new, which the
-    next start finishes by calling this again."""
+    next start finishes by calling this again. A new harvest that found no
+    paper at all (a server fault, not an empty literature) replaces nothing:
+    its state is removed, the earlier harvest stays, and False is returned."""
     if os.path.isfile(records + ".new"):
         os.replace(records + ".new", records)
-    elif not _read_state(state_path + ".new").get("records") and os.path.isfile(records):
-        os.remove(records)  # the new harvest found no paper at all
+    elif not _read_state(state_path + ".new").get("records"):
+        os.remove(state_path + ".new")
+        print("Warning: the metadata refresh found no paper at all; the earlier harvest is kept.", flush=True)
+        return False
     os.replace(state_path + ".new", state_path)
+    return True
 
 
 def harvest(query, folder, refresh=False):
@@ -214,10 +219,10 @@ def harvest(query, folder, refresh=False):
             print(f"Harvesting the metadata again into {records}.new; the earlier harvest stays in use until "
                   "it is complete.", flush=True)
         count, _ = _harvest_pages(query, records + ".new", state_path + ".new")
-        _finish_refresh(records, state_path)
-        print(f"Metadata: {count:,} papers in {records}")
-        return records
-    if unfinished:
+        if _finish_refresh(records, state_path):
+            print(f"Metadata: {count:,} papers in {records}")
+            return records
+    elif unfinished:
         print(f"An unfinished metadata refresh exists ({unfinished.get('records', 0):,} papers so far); the earlier "
               "harvest is used. Rerun with --refresh-metadata to continue it.", flush=True)
     count, cached = _harvest_pages(query, records, state_path)

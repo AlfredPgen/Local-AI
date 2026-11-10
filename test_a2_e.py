@@ -464,6 +464,30 @@ class Audit2Downloaders(unittest.TestCase):
         self.assertEqual(state()["records"], 7)
         self.assertEqual(self.pmc_ids(records), list(range(1, 1002)))
 
+    def test_f139_refresh_that_finds_no_paper_keeps_the_earlier_harvest(self):
+        """F139 (part A): a refresh whose search answers with no paper at all (a server fault) does not
+        replace the earlier harvest, also when the run stopped right after that answer."""
+        folder = os.path.join(self.tmp, "metadata")
+        records, state_path = os.path.join(folder, "records.jsonl.gz"), os.path.join(folder, "state.json")
+        with unittest.mock.patch.object(pmc, "http_get", side_effect=self.epmc_server({"*": (range(1, 4), "*")}, [])),                 redirect_stdout(io.StringIO()):
+            pmc.harvest(self.QUERY, folder)
+        self.assertEqual(self.pmc_ids(records), [1, 2, 3])
+        with unittest.mock.patch.object(pmc, "http_get", side_effect=self.epmc_server({"*": ([], "*")}, [])),                 redirect_stdout(io.StringIO()) as buf:
+            self.assertEqual(pmc.harvest(self.QUERY, folder, refresh=True), records)
+        self.assertIn("found no paper", buf.getvalue())
+        self.assertIn("Metadata: 3 papers from", buf.getvalue())
+        self.assertEqual(sorted(os.listdir(folder)), ["records.jsonl.gz", "state.json"])
+        self.assertEqual(self.pmc_ids(records), [1, 2, 3])
+        with open(state_path, encoding="utf-8") as f:
+            self.assertEqual((json.load(f)["records"]), 3)
+        # the run stopped between that answer and the clean-up: the next start keeps the earlier harvest too
+        with open(state_path + ".new", "w", encoding="utf-8") as f:
+            json.dump({"query": self.QUERY, "cursor": "*", "records": 0, "complete": True, "bytes": 0}, f)
+        with unittest.mock.patch.object(pmc, "http_get", side_effect=AssertionError("no request expected")),                 redirect_stdout(io.StringIO()):
+            pmc.harvest(self.QUERY, folder)
+        self.assertEqual(sorted(os.listdir(folder)), ["records.jsonl.gz", "state.json"])
+        self.assertEqual(self.pmc_ids(records), [1, 2, 3])
+
     def test_f141_pmc_http_get_honours_retry_after(self):
         """F141: on 429/503 the PMC http_get waits as long as the server's Retry-After asks (at least
         its own backoff); without the header, and for other errors, the backoff is unchanged."""
