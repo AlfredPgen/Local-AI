@@ -1374,6 +1374,20 @@ def _kept_type_folder(path, mine, candidates, args):
     return _norm(os.path.dirname(mine)) in folders and os.path.normcase(os.path.basename(mine)) in names
 
 
+def _earlier_type_output(path, candidates, free, args):
+    """The output of a .txt/.gz input of which no record is left (a lost manifest, a
+    run made before manifests existed), in the folder --by-type gave it before it
+    looked at the first lines (.txt: articles, .gz: tables): the first free
+    candidate name there, as that run chose it, if the file exists; else None."""
+    if not (args.by_type and args.out and _sniffed_type(path)):
+        return None
+    folder = os.path.join(args.out, TYPE_FOLDER["table" if path.lower().endswith(".gz") else "text"])
+    if _norm(folder) == _norm(os.path.dirname(candidates[0])):
+        return None
+    earlier = next(filter(free, (os.path.join(folder, os.path.basename(c)) for c in candidates)), None)
+    return earlier if earlier and os.path.exists(earlier) else None
+
+
 def plan_targets(files, args, owners=None):
     """[(path, target)] in input order, where no two inputs share an output and no
     output is another input. An input keeps the output an earlier run recorded for
@@ -1387,6 +1401,9 @@ def plan_targets(files, args, owners=None):
     # every recorded name is reserved, even one whose output was deleted: its owner makes it again
     claimed = set(owners)
     chosen = {}
+
+    def free(target):
+        return _norm(target) not in claimed and _norm(target) not in inputs
     for path in sorted(files, key=lambda f: not _is_md(f)):  # stable: keeps sorted order within each group
         later = _name_candidates(path, args, len(files))
         candidates = list(itertools.islice(later, 22))  # `later` goes on from the 23rd name
@@ -1399,8 +1416,10 @@ def plan_targets(files, args, owners=None):
             target = mine  # the name an earlier run gave it (same folder and options)
         else:
             for target in itertools.chain(candidates, later):  # the first free name, else the last one (__999)
-                if _norm(target) not in claimed and _norm(target) not in inputs:
+                if free(target):
                     break
+            if not mine and not os.path.exists(target):  # no second copy beside an unrecorded earlier one
+                target = _earlier_type_output(path, candidates, free, args) or target
         claimed.add(_norm(target))
         chosen[path] = target
     return [(path, chosen[path]) for path in files]

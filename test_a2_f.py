@@ -311,15 +311,23 @@ class Audit2DocsYoutubeConvert(unittest.TestCase):
             handle.write("# GWAS summary statistics: old\n")
         with open(os.path.join(out, "conversion_manifest.json"), "w", encoding="utf-8") as handle:
             json.dump({"outputs": {"articles/old.md": os.path.join(src, "old.txt")}}, handle)
+        # converted before as well, but no record is left (a lost manifest, a run older than manifests): a .txt
+        # was put in articles then and a .gz in tables, and each still counts as done where it is
+        shutil.copy(os.path.join(src, "old.txt"), os.path.join(src, "lost.txt"))
+        shutil.copy(os.path.join(src, "prose.txt.gz"), os.path.join(src, "lostprose.txt.gz"))
+        os.makedirs(os.path.join(out, "tables"))
+        for name in ("articles/lost.md", "tables/lostprose.md"):
+            with open(os.path.join(out, *name.split("/")), "w", encoding="utf-8") as handle:
+                handle.write("made by an earlier run\n")
         done = subprocess.run([sys.executable, os.path.join(HERE, "convert_to_markdown.py"), src, "--out", out,
                                "--by-type"], capture_output=True, text=True, encoding="utf-8", errors="replace",
                               timeout=600, env=dict(os.environ, PYTHONIOENCODING="utf-8"))
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         found = sorted(os.path.relpath(os.path.join(folder, name), out).replace(os.sep, "/")
                        for folder, _, names in os.walk(out) for name in names if name.endswith(".md"))
-        self.assertEqual(found, ["articles/notes.md", "articles/old.md", "articles/prose.md", "tables/a.md",
-                                 "tables/counts.md", "tables/matrix.md", "tables/sumstats.md"],
-                         done.stdout + done.stderr)
+        self.assertEqual(found, ["articles/lost.md", "articles/notes.md", "articles/old.md", "articles/prose.md",
+                                 "tables/a.md", "tables/counts.md", "tables/lostprose.md", "tables/matrix.md",
+                                 "tables/sumstats.md"], done.stdout + done.stderr)
         with open(os.path.join(out, "tables", "a.md"), encoding="utf-8") as handle:
             self.assertIn("30 genetic variants", handle.read())
         with open(os.path.join(out, "tables", "counts.md"), encoding="utf-8") as handle:
@@ -339,6 +347,18 @@ class Audit2DocsYoutubeConvert(unittest.TestCase):
         self.assertEqual(conv.convert_table_or_text(spaced, args)[1], "text")
         args.no_gwas = False
         self.assertEqual([folder(os.path.join(src, "a.txt")), folder(spaced)], ["tables", "tables"])
+        # the unrecorded earlier output is kept only while it is nobody else's and nothing is at the new place
+        lost, files = os.path.join(src, "lost.txt"), sorted(os.path.join(src, name) for name in os.listdir(src))
+
+        def planned(owners=None):
+            return os.path.relpath(dict(conv.plan_targets(files, args, owners))[lost], out).replace(os.sep, "/")
+
+        self.assertEqual(planned(), "articles/lost.md")
+        earlier = os.path.join(out, "articles", "lost.md")
+        self.assertEqual(planned({conv._norm(earlier): (earlier, os.path.join(src, "notes.txt"))}), "tables/lost.md")
+        with open(os.path.join(out, "tables", "lost.md"), "w", encoding="utf-8") as handle:
+            handle.write("made by this version\n")
+        self.assertEqual(planned(), "tables/lost.md")
 
     def test_pdf_page_count_is_one_cached_function(self):
         """F038: one page counter (0 for a file that cannot be opened), each PDF opened once; --by-type sorts a
