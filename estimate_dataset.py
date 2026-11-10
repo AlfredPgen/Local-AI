@@ -290,7 +290,7 @@ def train_tokenizer(tallies, vocab, work, args, estimates):
         input_sentence_size=3_000_000, shuffle_input_sentence=True, num_threads=os.cpu_count() or 4, minloglevel=2)
     tok = dp.Tokenizer.from_file(os.path.join(work, "spm.model"), "lines")
     if extra:
-        proto, _ = dp.superbpe_extend(tok.proto, corpus, extra, args.superbpe_max_words,
+        proto, _ = dp.superbpe_extend(tok.proto, corpus, extra, args.superbpe_max_words, seed=seed,
                                       threads=os.cpu_count() or 4)
         tok = dp.Tokenizer(proto, "lines")
     return tok

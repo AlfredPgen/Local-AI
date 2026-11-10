@@ -305,6 +305,30 @@ class Audit2PipelineTools(unittest.TestCase):
             self.run_estimate(argv + ["--tokenizer", model])
             self.assertEqual((len(trained), len(measured), len(measured[1])), (8, 2, 10), "a given tokenizer: all")
 
+    def test_estimate_passes_the_seed_to_the_superbpe_stage(self):
+        """F154: the SuperBPE stage of the estimate's tokenizer samples with --seed, as a build's does (it used
+        superbpe_extend's own default, 1234, whatever --seed said)."""
+        import types
+        import data_prep as dp
+        import estimate_dataset
+        tally = estimate_dataset.Tally("md", "markdown")
+        for i in range(6):
+            tally.keep(T.paragraphs(40 + i, 30))
+        args = types.SimpleNamespace(superbpe=True, superbpe_fraction=0.1, superbpe_max_words=4, seed=7,
+                                     tokenizer_weights=None)
+        work = os.path.join(self.tmp, "f154")
+        os.makedirs(work, exist_ok=True)
+        seen = {}
+
+        def extend(proto, corpus, extra, max_words, **kwargs):
+            seen.update(kwargs, extra=extra, max_words=max_words)
+            return proto, []
+
+        with unittest.mock.patch.object(dp, "superbpe_extend", extend):
+            tok = estimate_dataset.train_tokenizer([tally], 600, work, args, {"md": tally.estimate()})
+        self.assertEqual((seen.get("seed"), seen["extra"], seen["max_words"]), (7, 60, 4))
+        self.assertGreater(tok.vocab_size, 100)
+
 
 if __name__ == "__main__":
     unittest.main()
