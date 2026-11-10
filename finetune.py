@@ -453,8 +453,10 @@ def ask(args):
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else list(argv)
     log = tiny_gpt._log_path_from(argv)  # understands both "--log-file PATH" and "--log-file=PATH"
-    tiny_gpt.start_log(log)
-    print(f"\n--- finetune {tiny_gpt.now_iso()} | {' '.join(argv)} ---")
+    # --help is no run: its usage text is printed, not written to the log (argument errors are still logged)
+    if not any(a in ("-h", "--help") for a in argv):
+        tiny_gpt.start_log(log)
+        print(f"\n--- finetune {tiny_gpt.now_iso()} | {' '.join(argv)} ---")
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="mode", required=True)
     for mode in ("sft", "dpo"):

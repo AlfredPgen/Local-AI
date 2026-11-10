@@ -295,6 +295,27 @@ class Audit2FinetuneTools(unittest.TestCase):
         for key in finals[0]:
             self.assertTrue(torch.equal(finals[0][key], finals[1][key]), key)
 
+    def test_finetune_help_is_not_written_to_the_log(self):
+        """F323 (finetune half): --help prints the usage text and neither creates nor appends to the log; an
+        argument error is still logged."""
+        import finetune
+        for i, argv in enumerate((["sft", "--help"], ["dpo", "-h"], ["--help"], ["ask", "--help"])):
+            log = os.path.join(self.tmp, f"help_{i}.log")
+            with redirect_stdout(io.StringIO()) as out, redirect_stderr(io.StringIO()), \
+                    self.assertRaises(SystemExit) as caught:
+                finetune.main(argv + ["--log-file", log])
+            self.assertEqual(caught.exception.code, 0)
+            self.assertTrue(out.getvalue().startswith("usage:"), out.getvalue()[:80])
+            self.assertFalse(os.path.exists(log), argv)
+        log = os.path.join(self.tmp, "usage_error.log")
+        with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as caught:
+            finetune.main(["sft", "--name", "x", "--log-file", log])
+        self.assertEqual(caught.exception.code, 2)
+        with open(log, encoding="utf-8") as f:
+            text = f.read()
+        self.assertIn("--- finetune ", text)
+        self.assertIn("required", text)
+
     def test_read_jsonl_names_the_line_that_is_not_an_object(self):
         """F158: a JSON line that is valid but not an object ends with the file:line message, not an
         AttributeError."""
