@@ -415,3 +415,37 @@ class Audit2TinyGptB(unittest.TestCase):
         applied, note = tiny_gpt.resume_min_lr(changed, 50, 0.5)
         self.assertTrue(applied)
         self.assertEqual(changed["min_lr"], 5e-4)
+
+    def _refused(self, argv):
+        """The message argparse prints when parse_args refuses `argv` (fails when it is accepted)."""
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err), self.assertRaises(SystemExit, msg=argv):
+            tiny_gpt.parse_args(["--name", "x", "--out-dir", self.tmp] + argv)
+        return err.getvalue()
+
+    def test_unchecked_inputs_are_refused(self):
+        """F369: a RoPE base below 1, a negative z-loss weight or top-k, a token budget that is not a finite
+        number and a warm-up as long as the planned run are refused with a message instead of a NaN model, a
+        traceback or a run that never leaves its warm-up."""
+        self.assertIn("--rope-base must be between", self._refused(["--rope-base", "-5"]))
+        self.assertIn("--rope-base must be between", self._refused(["--rope-base", "0"]))
+        self.assertIn("--rope-base must be between", self._refused(["--rope-base", "nan"]))
+        self.assertIn("--z-loss must be between", self._refused(["--z-loss", "-1"]))
+        self.assertIn("--top-k must be", self._refused(["--top-k", "-3"]))
+        for flag in ("--train-tokens", "--epochs"):
+            for value in ("nan", "inf"):
+                self.assertIn("finite", self._refused([flag, value]), (flag, value))
+        ok = tiny_gpt.parse_args(["--name", "x", "--out-dir", self.tmp, "--rope-base", "500000", "--z-loss", "0",
+                                  "--top-k", "0", "--train-tokens", "1e6"])
+        self.assertEqual((ok.rope_base, ok.z_loss, ok.top_k, ok.train_tokens), (500000.0, 0.0, 0, 1e6))
+        self.assertIsNone(tiny_gpt.parse_args(["--name", "x", "--out-dir", self.tmp]).rope_base)
+        # a warm-up as long as the planned run (no --steps for validate_args to compare with)
+        manifest = toy_manifest(tokens=200_000, vocab=512)
+        _, st, _ = self._plan([], manifest)
+        with self.assertRaises(SystemExit) as caught:
+            self._plan(["--warmup-steps", str(st["steps"])], manifest)
+        self.assertIn("--warmup-steps", str(caught.exception))
+        self.assertIn(f"{st['steps']:,}", str(caught.exception))
+        _, st_ok, _ = self._plan(["--warmup-steps", str(st["steps"] - 1)], manifest)
+        self.assertEqual((st_ok["warmup_steps"], st_ok["steps"]), (st["steps"] - 1, st["steps"]))
+        self.assertLess(st["warmup_steps"], st["steps"], "the default warm-up is never the whole run")

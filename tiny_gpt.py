@@ -3013,6 +3013,8 @@ def plan_run(args, manifest, device, amp_dtype, token_cap=None, fixed_cfg=None, 
     lr = args.lr or heuristic_lr(n_active) * lr_factor * lr_scale
     min_lr_ratio = resolve_min_lr_ratio(args.min_lr_ratio, args.schedule)
     warmup = args.warmup_steps if args.warmup_steps is not None else int(min(max(round(0.02 * steps), 50), 2000, max(1, steps // 10)))
+    if args.warmup_steps is not None and args.warmup_steps >= steps:  # validate_args can only compare with --steps
+        raise SystemExit(f"--warmup-steps {args.warmup_steps:,} must be smaller than the {steps:,} planned steps.")
     mix_alpha = 1.0 if args.mix_alpha is None else float(args.mix_alpha)
     weights = mix_weights(args.mix, train_by_source, train_by_source, mix_alpha)
     raw_share = {s: weights[s] * n for s, n in train_by_source.items()}
@@ -3711,7 +3713,8 @@ def validate_args(args, parser):
                          ("tokens_per_param", 0.1, 1e6), ("max_epochs", 0.01, 1e4), ("temperature", 0.0, 10.0),
                          ("mix_alpha", 0.0, 2.0), ("lr_scale", 0.01, 100.0), ("lb_loss", 0.0, 10.0),
                          ("router_z_loss", 0.0, 10.0), ("bias_rate", 0.0, 1.0), ("tokens_per_total_param", 0.0, 1e6),
-                         ("expert_hidden", 0, 1e6), ("shared_hidden", 0, 1e6)):
+                         ("expert_hidden", 0, 1e6), ("shared_hidden", 0, 1e6), ("rope_base", 1, 1e9),
+                         ("z_loss", 0, 10)):
         value = getattr(args, name)
         if value is not None and not lo <= value <= hi:
             parser.error(f"--{name.replace('_', '-')} must be between {lo} and {hi}")
@@ -3721,6 +3724,8 @@ def validate_args(args, parser):
         parser.error("--experts-per-token must not exceed --experts")
     if not 0 < args.watermark_gamma < 1:
         parser.error("--watermark-gamma must be between 0 and 1")
+    if args.top_k < 0:
+        parser.error("--top-k must be >= 0 (0 = no cut)")
     if args.ema is not None:  # "off", "on" or a per-step decay; None = the default for the run (see resolve_ema)
         if str(args.ema).lower() == "off":
             args.ema = 0.0
@@ -3747,6 +3752,8 @@ def validate_args(args, parser):
         parser.error("--log-every/--sample-every must be >= 0")
     if args.resume and args.init_from:
         parser.error("use either --resume or --init-from, not both")
+    if any(value is not None and not math.isfinite(value) for value in (args.train_tokens, args.epochs)):
+        parser.error("--train-tokens/--epochs must be finite numbers")
     if args.train_tokens is not None and args.train_tokens <= 0 or args.epochs is not None and args.epochs <= 0:
         parser.error("--train-tokens/--epochs must be positive")
     if sum(x is not None for x in (args.steps, args.train_tokens, args.epochs)) > 1:
