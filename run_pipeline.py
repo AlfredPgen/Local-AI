@@ -151,10 +151,11 @@ def gpu_busy():
 def step_build():
     if dataset_ready():
         print(f"The dataset is already built: {DATASET}\n(To rebuild, delete that folder or change DATASET at the "
-              "top of run_pipeline.py. A rebuild trains a new tokenizer (32,768 pieces for this much text): existing "
+              "top of run_pipeline.py. A rebuild trains a new tokenizer (its size follows the amount of text): existing "
               "models can only be continued with `continue`, not resumed.)")
         return 0
-    print(f"Building {DATASET} from {DATA}. This takes about 2 hours; the report is {DATASET}\\report.md.")
+    print(f"Building {DATASET} from {DATA}. This takes about 2 hours; the report is "
+          f"{os.path.join(DATASET, 'report.md')}.")
     return run(build_command())
 
 
