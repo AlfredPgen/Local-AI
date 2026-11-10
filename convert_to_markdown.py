@@ -1249,7 +1249,7 @@ def _table_text(path, args):
     return bool(cols) or _tab_table(sample, delim)
 
 
-def plan_target(path, args, n_files):
+def plan_target(path, args):
     """Output path decided before converting, so existing outputs are skipped cheaply."""
     base = os.path.basename(path)
     base = re.sub(r"(\.gz)$", "", base, flags=re.IGNORECASE)
@@ -1324,12 +1324,12 @@ def save_manifest(path, owners):
     os.replace(path + ".part", path)
 
 
-def _name_candidates(path, args, n_files):
+def _name_candidates(path, args):
     """Output names for one input, best first: its plain name, then (for a clash) its
     source extension (notes.docx.md, not for Markdown), its folder name (media__p2.md)
     and a number (__2 to __999). A generator: the first name is nearly always the one
     used, and 22 are enough to recognise a name an earlier run gave."""
-    target = plan_target(path, args, n_files)
+    target = plan_target(path, args)
     stem = target[:-3] if target.lower().endswith(".md") else target
     ext = os.path.basename(path).lower().replace(".gz", "").rsplit(".", 1)[-1]
     parent = re.sub(r"[^\w.-]+", "_", os.path.basename(os.path.dirname(os.path.abspath(path)))) or "folder"
@@ -1355,7 +1355,7 @@ def legacy_outputs(files, args):
     for path in files:
         if _is_md(path):
             continue
-        for candidate in itertools.islice(_name_candidates(path, args, len(files)), 1, 22):
+        for candidate in itertools.islice(_name_candidates(path, args), 1, 22):
             key = _norm(candidate)
             if key in names and key not in owners:
                 owners[key] = (names[key], os.path.abspath(path))
@@ -1405,7 +1405,7 @@ def plan_targets(files, args, owners=None):
     def free(target):
         return _norm(target) not in claimed and _norm(target) not in inputs
     for path in sorted(files, key=lambda f: not _is_md(f)):  # stable: keeps sorted order within each group
-        later = _name_candidates(path, args, len(files))
+        later = _name_candidates(path, args)
         candidates = list(itertools.islice(later, 22))  # `later` goes on from the 23rd name
         if _norm(candidates[0]) == _norm(path):
             chosen[path] = candidates[0]  # reported as "would overwrite the input"

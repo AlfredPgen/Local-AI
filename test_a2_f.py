@@ -346,7 +346,7 @@ class Audit2DocsYoutubeConvert(unittest.TestCase):
         args = argparse.Namespace(out=out, by_type=True, name_prefix="", book_pages=150, no_gwas=True)
 
         def folder(path):
-            return os.path.basename(os.path.dirname(conv.plan_target(path, args, 5)))
+            return os.path.basename(os.path.dirname(conv.plan_target(path, args)))
 
         self.assertEqual([folder(os.path.join(src, "a.txt")), folder(spaced)], ["tables", "articles"])
         self.assertEqual(conv.convert_table_or_text(spaced, args)[1], "text")
@@ -394,9 +394,9 @@ class Audit2DocsYoutubeConvert(unittest.TestCase):
             self.assertEqual(max(conv.page_count(broken), 1), 1)  # the time limit counts at least one page
             args = argparse.Namespace(out=os.path.join(folder, "out"), by_type=True, name_prefix="", book_pages=2,
                                       no_gwas=False)
-            kinds = [os.path.basename(os.path.dirname(conv.plan_target(p, args, 2))) for p in (two, broken)]
+            kinds = [os.path.basename(os.path.dirname(conv.plan_target(p, args))) for p in (two, broken)]
             args.book_pages = 3
-            kinds.append(os.path.basename(os.path.dirname(conv.plan_target(two, args, 2))))
+            kinds.append(os.path.basename(os.path.dirname(conv.plan_target(two, args))))
         self.assertEqual(kinds, ["books", "articles", "articles"])
         self.assertEqual(opened, [two, broken])  # once each, whatever asked
 
@@ -419,7 +419,7 @@ class Audit2DocsYoutubeConvert(unittest.TestCase):
         args = argparse.Namespace(out=out, by_type=False, name_prefix="", book_pages=150, no_gwas=False)
 
         def reference(path):  # the list this function built before the change
-            target = conv.plan_target(path, args, len(files))
+            target = conv.plan_target(path, args)
             stem = target[:-3]
             ext = os.path.basename(path).lower().replace(".gz", "").rsplit(".", 1)[-1]
             parent = re.sub(r"[^\w.-]+", "_", os.path.basename(os.path.dirname(os.path.abspath(path)))) or "folder"
@@ -427,7 +427,7 @@ class Audit2DocsYoutubeConvert(unittest.TestCase):
             return head + [f"{stem}__{k}.md" for k in range(2, 1000)]
 
         for path in files[:2]:
-            self.assertEqual(list(conv._name_candidates(path, args, len(files))), reference(path))
+            self.assertEqual(list(conv._name_candidates(path, args)), reference(path))
         planned = conv.plan_targets(files, args)
         self.assertEqual([p for p, _ in planned], files)
         self.assertEqual([os.path.basename(t) for _, t in planned],
@@ -445,7 +445,7 @@ class Audit2DocsYoutubeConvert(unittest.TestCase):
         legacy = conv.legacy_outputs(files + [os.path.join(out, "x__sub.md"), os.path.join(out, "x__20.md"),
                                               os.path.join(out, "x__21.md")], args)
         self.assertEqual(sorted(os.path.basename(t) for t, _ in legacy.values()), ["x__20.md", "x__sub.md"])
-        self.assertTrue(inspect.isgenerator(conv._name_candidates(files[0], args, len(files))))
+        self.assertTrue(inspect.isgenerator(conv._name_candidates(files[0], args)))
 
     def test_pdf_layout_fast_reaches_the_child_process(self):
         """F031: --pdf-layout fast converts without pymupdf4llm's layout model, also in the child process every
