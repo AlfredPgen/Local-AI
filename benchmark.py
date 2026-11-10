@@ -529,7 +529,8 @@ def download_one(spec, man, force=False):
         return old, "up to date"
     os.makedirs(raw_dir, exist_ok=True)
     for f in spec["files"]:
-        hf_hub_download(spec["repo"], f, repo_type="dataset", revision=info.sha, local_dir=raw_dir)
+        hf_hub_download(spec["repo"], f, repo_type="dataset", revision=info.sha, local_dir=raw_dir,
+                        force_download=force)
     items = spec["normalise"](raw_paths)
     bad = [(it["id"], why) for it in items if (why := valid_item(it))]
     items = [it for it in items if not valid_item(it)]

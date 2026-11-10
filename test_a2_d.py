@@ -91,6 +91,51 @@ class Audit2Benchmark(unittest.TestCase):
         self.assertEqual([r["benchmark"] for r in rows], ["medcalc"])
         self.assertIn("integer rule: official", rows[0]["notes"])
 
+    def fake_download(self, label, force):
+        """download_one on a made-up benchmark with huggingface_hub replaced by a stand-in (no network):
+        (manifest entry, status, keyword arguments of every hf_hub_download call, items written)."""
+        import json
+        import types
+        b = self.b
+        bench = os.path.join(self.tmp, label)
+        calls = []
+
+        def hf_hub_download(repo, name, local_dir=None, **kwargs):
+            calls.append(kwargs)
+            path = os.path.join(local_dir, *name.split("/"))
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w", encoding="utf-8", newline="\n") as handle:
+                for i in range(3):
+                    handle.write(json.dumps({"n": i}) + "\n")
+            return path
+
+        class HfApi:
+            def dataset_info(self, repo):
+                return types.SimpleNamespace(gated=False, card_data=None, sha="rev1")
+
+        def normalise(raw):
+            items = [b.mcq_item(f"t{r['n']}", f"Question {r['n']}?", ["a", "b"], "a", "cat")
+                     for r in b.read_table(raw[0])]
+            return items + [dict(items[0], id="bad", answer="z")]
+
+        spec = b._spec("toy", "Toy", "knowledge", "someone/toy", ["data/t.jsonl"], "MIT", normalise)
+        hub = types.SimpleNamespace(HfApi=HfApi, hf_hub_download=hf_hub_download)
+        with unittest.mock.patch.dict(sys.modules, {"huggingface_hub": hub}), \
+                unittest.mock.patch.object(b, "BENCH_DIR", bench):
+            entry, status = b.download_one(spec, {"benchmarks": {}}, force=force)
+            items = b.read_items("toy")
+        return entry, status, calls, items
+
+    def test_download_force_downloads_again(self):
+        """F012: `download --force` tells hf_hub_download to fetch the file again (it used to re-normalise the
+        cached copy only); without --force nothing changes."""
+        entry, status, calls, items = self.fake_download("f012_force", True)
+        self.assertEqual((status, len(calls)), ("downloaded", 1))
+        self.assertIs(calls[0].get("force_download"), True)
+        self.assertEqual((calls[0]["repo_type"], calls[0]["revision"]), ("dataset", "rev1"))
+        _, _, calls, _ = self.fake_download("f012_plain", False)
+        self.assertFalse(calls[0].get("force_download"))
+
     def test_generated_code_gets_no_stdin(self):
         """F020: the jailed program reads /dev/null, not the rest of the wrapper script piped to `bash -s` (which
         holds the clean-up lines), and the unsafe local runner gives its child no stdin either."""
