@@ -34,8 +34,12 @@ def main():
     rows = list(csv.DictReader(lines, delimiter="\t"))  # '#' lines are comments, as in download_docs.py
     out = []
     for r in rows:
-        res = check(r["url"].strip())
-        out.append({"tool": r["tool"], "url": r["url"], **res})
+        url = (r.get("url") or "").strip()  # a row that ends before the url column has None there
+        if not url:
+            out.append({"tool": r.get("tool"), "url": url, "status": None, "ok": False, "error": "no url"})
+            continue
+        res = check(url)
+        out.append({"tool": r.get("tool"), "url": url, **res})
         time.sleep(1)
     bad = [o for o in out if not o["ok"]]
     print(json.dumps({"sources": len(out), "failed": len(bad), "failures": bad,

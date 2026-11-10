@@ -425,6 +425,39 @@ class Audit2PipelineTools(unittest.TestCase):
                          ("Biobank stud*", "T cell", "of the", "mixed model*"))
         self.assertGreater(len(nested), len(kw_covered.find(terms, False)))
 
+    def tool_main(self, module, argv):
+        """stdout of module.main() run with the command line `argv`. The tools reconfigure sys.stdout, which an
+        io.StringIO cannot do, so the output goes to a text wrapper around bytes."""
+        raw = io.BytesIO()
+        out = io.TextIOWrapper(raw, encoding="utf-8", newline="\n")
+        with unittest.mock.patch.object(sys, "argv", argv), unittest.mock.patch.object(sys, "stdout", out):
+            module.main()
+            out.flush()
+        return raw.getvalue().decode("utf-8")
+
+    def test_url_check_reports_a_row_without_a_url(self):
+        """F385: a row whose url field is missing or empty is listed as failed ('no url') and not requested;
+        it used to end the whole check with AttributeError before any report was printed."""
+        import url_check
+        path = os.path.join(self.tmp, "sources.tsv")
+        with open(path, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write("# comment\ntool\turl\nalpha\t https://example.org/a \nbeta\ngamma\t\n")
+        asked = []
+
+        def check(url):
+            asked.append(url)
+            return {"status": 200, "final": url, "type": "text/html", "bytes_read": 5, "ok": True}
+
+        with unittest.mock.patch.object(url_check, "check", check), \
+                unittest.mock.patch.object(url_check.time, "sleep"):
+            report = json.loads(self.tool_main(url_check, ["url_check.py", path]))
+        self.assertEqual(asked, ["https://example.org/a"])
+        self.assertEqual((report["sources"], report["failed"]), (3, 2))
+        self.assertEqual(report["failures"],
+                         [{"tool": "beta", "url": "", "status": None, "ok": False, "error": "no url"},
+                          {"tool": "gamma", "url": "", "status": None, "ok": False, "error": "no url"}])
+        self.assertEqual(report["redirected"], [])  # the stripped url is the one reported
+
 
 if __name__ == "__main__":
     unittest.main()
