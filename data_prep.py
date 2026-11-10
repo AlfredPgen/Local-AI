@@ -7,7 +7,8 @@ record is dropped without a reason in docs.tsv / report.md.
                (e.g. Wikipedia), Parquet shards (e.g. FineWeb-Edu) and JSONL.
   2. clean     UTF-8 decode, BOM/CRLF/NFC normalisation, control characters,
                trailing spaces, runs of blank lines.
-  3. filter    empty/short records, replacement-character damage, optional
+  3. filter    empty/short records, replacement-character damage, documents
+               that are clearly not English (--language en), optional
                case-insensitive whole-word include/exclude keywords.
   4. dedup     exact duplicates (normalised-text hash) are skipped; near
                duplicates (MinHash-LSH, word 5-grams) are grouped so they land
@@ -27,8 +28,8 @@ in pass 1, deleted as pass 2 consumes them) and token files are written
 incrementally, so the text itself is never held in RAM and the disk needs about
 0.4x the corpus at the peak. The near-duplicate signatures live in a
 memory-mapped work file; what stays in RAM is the per-document metadata (id,
-title, counts: about 0.5 KB per kept document, measured 1.4 KB before the
-signatures and the ledger moved out). The trainer memory-maps the token files.
+title, counts: about 0.5 KB per kept document). The trainer memory-maps the
+token files.
 A build that fails after pass 2 keeps its work files and continues with
 --resume (tokenizer and tokenization only, not the hours of reading).
 
@@ -38,14 +39,14 @@ only handles text.
 
 Examples
 --------
-    python data_prep.py --out datasets\bio_v1 --md-dir %USERPROFILE%\ai_training_data ^
-        --wiki-dir %USERPROFILE%\ai_training_data\wikipedia --wiki-max-docs 100000 ^
+    python data_prep.py --out datasets\bio_v1 --text-root $HOME\ai_training_data `
+        --wiki-dir $HOME\ai_training_data\wikipedia --wiki-max-docs 100000 `
         --include-keywords keywords.txt --keyword-min-distinct 3
 
-    python data_prep.py --out datasets\fineweb_bio --parquet "D:\fineweb-edu\*.parquet" ^
+    python data_prep.py --out datasets\fineweb_bio --parquet "D:\fineweb-edu\*.parquet" `
         --parquet-name fineweb --min-score 3 --include-keywords keywords.txt
 
-    python data_prep.py --out datasets\probe --md-dir %USERPROFILE%\ai_training_data --scan-only
+    python data_prep.py --out datasets\probe --text-root $HOME\ai_training_data --scan-only
 """
 
 import argparse
@@ -557,18 +558,24 @@ PREFILTER_TERMS_PER_PATTERN = 200
 
 def _prefilter_patterns(terms):
     """RE2 patterns for the vectorised C++ prefilter; the SUM of their match
-    counts is never below the Python matcher's count, so no document the full
-    check would keep is rejected early. One pattern counts overlapping terms
-    once ('genetic drift' also contains 'genetic*'), so terms whose matches
-    could overlap go to different groups (2,385 terms -> 5 groups).
+    counts is not below the Python matcher's count on text that cleaning
+    leaves unchanged and that has only ASCII between the words of a phrase, so
+    no such document the full check would keep is rejected early. Three known
+    exceptions, all rare: non-ASCII letters inside the non-word run that joins
+    two phrase words (RE2's non-word class is ASCII-only, so one long match
+    can hide two real ones); accents that are not NFC-normalised in the raw
+    text (the full check sees the cleaned text); and the scan window, cut on
+    the raw text here and on the cleaned text in the full check. One pattern
+    counts overlapping terms once ('genetic drift' also contains 'genetic*'),
+    so terms whose matches could overlap go to different groups.
     Words are joined by any non-word run, as the Python matcher allows; word
     boundaries are only required next to ASCII word characters.
 
-    Each group is split into patterns of at most 200 terms (2,385 terms -> 16
-    patterns): a larger alternation outgrows RE2's fast automaton memory and
-    falls back to a far slower matcher (one pattern of 2,104 terms ran at 0.22
-    MB/s on Wikipedia text; 16 patterns of <= 200 terms at 14.4 MB/s, with
-    identical counts, since terms within a group never overlap).
+    Each group is split into patterns of at most 200 terms (the 22,650 terms
+    of keywords.txt give 120 patterns): a larger alternation outgrows RE2's
+    fast automaton memory and falls back to a far slower matcher (one pattern
+    of 2,104 terms ran at 0.22 MB/s on Wikipedia text), and the counts are
+    identical, since terms within a group never overlap.
 
     RE2 counts non-overlapping matches, but a phrase of n words whose last
     words can repeat its first ones ('Gallus gallus' in 'Gallus gallus
@@ -630,7 +637,7 @@ def _prefilter_patterns(terms):
 
 def prefilter_cache_path(keyword_spec):
     """Where the RE2 prefilter patterns of a keyword FILE are cached: next to it,
-    <file>.prefilter.json (None for literal comma-separated terms)."""
+    <file>.prefilter.json (None unless the value is one existing file)."""
     if keyword_spec and os.path.isfile(keyword_spec):
         return os.path.abspath(keyword_spec) + ".prefilter.json"
     return None
@@ -711,10 +718,9 @@ class _TermMatcher:
     def __init__(self, terms):
         self.single, self.single_cs = {}, {}
         # Phrases are indexed by their first TWO words, so at a text position only the phrases that can
-        # actually start there are tried ('hla' begins 88 phrases of keywords.txt, 'cell' 45; the old
-        # first-word table looped over all of them at every 'cell'). A two-word phrase whose second word
-        # carries the trailing wildcard ('genetic drif*') cannot be looked up exactly and stays in a
-        # first-word table. The counts are identical to the first-word matcher's, about 2x faster.
+        # actually start there are tried ('hla' begins 88 phrases of keywords.txt, 'cell' 45). A two-word
+        # phrase whose second word carries the trailing wildcard ('genetic drif*') cannot be looked up
+        # exactly and stays in a first-word table.
         self.phrase = _PhraseTable()
         self.phrase_cs = _PhraseTable()
         self.prefix, self.prefix_cs = _Affixes(False), _Affixes(False)
@@ -789,7 +795,7 @@ class _PhraseTable:
         """Matches starting at each position of the word sequence: a phrase of n
         words matches when words 2..n-1 are equal and the last word is equal (or
         starts with it, for a trailing wildcard); every (position, phrase) pair
-        counts once, as in the first-word matcher."""
+        counts once."""
         n = len(seq)
         pairs, open_second = self.pairs, self.open_second
         for i, w in enumerate(seq):
@@ -1024,7 +1030,8 @@ class ArrowTableSource:
 
 def _vector_scores(arrays, kw, text_col, title_col, score_col, min_score):
     """Vectorised (RE2, C++) prefilter; returns numpy arrays (weighted hits, chars, score_ok).
-    Hits are an upper bound of the full check's weighted hits (see _prefilter_patterns)."""
+    Hits are an upper bound of the full check's weighted hits, with the rare
+    exceptions listed in _prefilter_patterns."""
     import pyarrow.compute as pc
     text = arrays[text_col]
     n = len(text)
@@ -1036,7 +1043,8 @@ def _vector_scores(arrays, kw, text_col, title_col, score_col, min_score):
                           .to_numpy(zero_copy_only=False), dtype=np.int64)
 
     if kw is not None and kw.include_patterns:
-        body = pc.utf8_slice_codeunits(text, 0, kw.scan_chars)  # characters, as the Python check slices
+        # characters, as the Python check slices (it slices the cleaned text, this the raw text)
+        body = pc.utf8_slice_codeunits(text, 0, kw.scan_chars)
         for pattern in kw.include_patterns:
             hits += count(body, pattern)
             if title_col in arrays:
@@ -1053,7 +1061,7 @@ def _vector_scores(arrays, kw, text_col, title_col, score_col, min_score):
 def _score_file(source, file_index, kw, min_score):
     """Pass A of 'top' selection for one file (runs in a worker thread; pyarrow
     compute releases the GIL). The candidates come back as numpy columns
-    (-score, file, batch, row), 32 bytes each instead of a ~150-byte Python tuple."""
+    (-score, file, batch, row), 32 bytes each."""
     need = kw is not None and bool(kw.include_patterns)
     counts = collections.Counter({"scanned": 0})
     cols = [[], [], []]
@@ -1068,7 +1076,7 @@ def _score_file(source, file_index, kw, min_score):
             counts["keyword_min_hits"] += int((keep & (hits < kw.min_hits)).sum())
             keep &= hits >= kw.min_hits
         rows = np.nonzero(keep)[0]
-        # the same IEEE operations as hits / math.sqrt(max(chars, 500)) per row, so the ranking is unchanged
+        # identical (the same IEEE operations) to the per-row hits / math.sqrt(max(chars, 500))
         cols[0].append(-(hits[rows].astype(np.float64) / np.sqrt(np.maximum(chars[rows], 500).astype(np.float64))))
         cols[1].append(np.full(len(rows), batch_index, dtype=np.int64))
         cols[2].append(rows.astype(np.int64))
@@ -1078,8 +1086,8 @@ def _score_file(source, file_index, kw, min_score):
 
 
 def _best_candidates(cands, limit):
-    """The `limit` first candidates in (-score, file, batch, row) order, as the
-    tuple sort did; all of them when limit is None."""
+    """The `limit` first candidates in (-score, file, batch, row) order; all of
+    them when limit is None."""
     neg, files, batches, rows = (np.concatenate([c[k] for c in cands]) for k in range(4))
     order = np.lexsort((rows, batches, files, neg))
     if limit is not None:
@@ -1512,7 +1520,7 @@ class MinHasher:
 
 class UnionFind:
     """Disjoint sets over 0..n-1 with path halving; the parent table is an int32
-    array (4 B per document instead of a Python list's 8 B pointer plus int)."""
+    array (4 B per document)."""
 
     def __init__(self, n):
         self.parent = np.arange(n, dtype=np.int32)
@@ -1785,7 +1793,7 @@ def _structural_line(line, next_line=None):
     (>= 80 characters): "Materials and Methods" or "Etymology" before its section
     text stays; the category lists that end web articles (short line after short
     line) are still boilerplate. Callers pass that next line; without it the
-    heading rule is off (the old behaviour)."""
+    heading rule is off."""
     if not re.search(r"[A-Za-z0-9]", line) or line.startswith("#"):
         return True
     if any(mark in line for mark in _MATHS_MARKS):
@@ -1864,7 +1872,8 @@ def parse_args(argv=None):
     g.add_argument("--wiki-split", default="train")
     g.add_argument("--wiki-max-docs", type=int, default=0, help="max documents kept (0 = all that pass)")
     g.add_argument("--wiki-select", choices=("auto", "first", "top"), default="auto",
-                   help="first = dump order; top = rank all by keyword density (auto: top when keywords are set)")
+                   help="first = dump order; top = rank all by keyword density (auto: top when keywords and "
+                        "--wiki-max-docs are set, else first)")
     g = p.add_argument_group("Parquet / JSONL shards (FineWeb-Edu etc.)")
     g.add_argument("--parquet", action="append", default=[], help="glob of .parquet files (repeatable)")
     g.add_argument("--parquet-name", default="web", help="source name used in reports and token files")
@@ -2327,8 +2336,7 @@ def _prepare(args, state=None):
         total_docs = sum(s["stats"]["accepted"] for s in sources.values())
         near_enabled = args.near_dup != "off" and total_docs > 1
         if near_enabled and args.near_dup_max_docs and total_docs > args.near_dup_max_docs:
-            # a guard the user set, not a silent switch-off: the 2026-10 build would have skipped near-duplicate
-            # detection at 2.8M documents with only a note in the report
+            # a guard the user set, not a silent switch-off
             raise SystemExit(f"{total_docs:,} documents exceed --near-dup-max-docs {args.near_dup_max_docs:,}. "
                              "Raise the limit (0 = none; the signatures live in a memory-mapped work file, 512 B per "
                              "document on disk) or pass --near-dup off.")
@@ -2400,7 +2408,7 @@ def _prepare(args, state=None):
             active = np.asarray(sorted(set(range(n)) - cut), dtype=np.int64) if cut else None
             roots = lsh_clusters(signatures[:, :n, :], args.near_dup_threshold, active=active)
         root_counts = collections.Counter(roots.tolist())
-        clusters = {}  # root -> members, for clusters of 2+ documents only (a dict entry per document was 150 B)
+        clusters = {}  # root -> members, for clusters of 2+ documents only
         for i, r in enumerate(roots.tolist()):
             if root_counts[r] > 1:
                 clusters.setdefault(r, []).append(i)
@@ -2444,7 +2452,7 @@ def _prepare(args, state=None):
         if not args.scan_only:
             _save_state(state_path, st)  # from here on a failure keeps the work files for --resume
 
-    # per-document arrays for the split (a Python loop over 10M documents per source took minutes)
+    # per-document arrays for the split
     src_index = {name: k for k, name in enumerate(sources)}
     src_of = np.fromiter((src_index[d[0]] for d in docs), dtype=np.int16, count=n)
     chars_of = np.fromiter((d[3] for d in docs), dtype=np.int64, count=n)
@@ -2949,9 +2957,8 @@ def parse_tokenizer_weights(spec, names=None):
 
 def _train_tokenizer(spool2, docs, split_of, sources, vocab, args, work):
     import sentencepiece as spm
-    # Default: every training document has the same inclusion probability, so
-    # each source contributes in proportion to its size. --tokenizer-weights
-    # multiplies a source's share (total sample size stays near the budget).
+    # --tokenizer-weights multiplies a source's share of the sample (default 1: each source in proportion
+    # to its training characters); windows are sampled, see tokenizer_sample_lines.
     weights = {n: 1.0 for n in sources}
     try:
         weights.update(parse_tokenizer_weights(args.tokenizer_weights, list(sources)))
@@ -3149,9 +3156,9 @@ def tokenizer_sample_lines(text, source, doc_id, seed, prob, window=TOKENIZER_WI
     characters (a longer line is cut into pieces of `window`); window w is kept
     when stable_unit(seed, "tok", source, id, w) < prob, deterministic for any
     worker count. In a build prob = sample_chars x weight / mass, so every
-    source contributes its share in characters. Sampling whole documents did
-    not: at probability 0.01 the 83 training books were all absent from the
-    sample with probability 0.44 (and were, in the 2026-10 build)."""
+    source contributes its share in characters. Sampling whole documents would
+    not: at probability 0.01 the 83 training books are all absent from the
+    sample with probability 0.44."""
     out = []
     if prob <= 0:
         return out
@@ -3516,8 +3523,7 @@ def _leakage_audit(spool2, docs, split_of, dropped, n=13, keep_mod=16, workers=1
     """Per validation document: the share of its sampled word 13-grams that also
     occur in training documents. The validation side (about 5% of the text) is
     hashed first; the training text is then checked against it in the workers,
-    so memory stays at a few hundred MB for any corpus size (sorting every
-    training hash needed several GB for 4 billion tokens). Rows:
+    so memory stays at a few hundred MB for any corpus size. Rows:
     (overlap, source, id, title, sampled 13-grams, document index), highest
     overlap first; the index lets the caller act on the row."""
     print("\nLeakage audit: sampled word 13-gram overlap of validation documents with training ...", flush=True)
@@ -3683,8 +3689,8 @@ def _write_report(out, args, sources, ledger, duplicates, removed_lines, line_ex
         L.append(f"- {name}: validation {info.get('val_chars', 0):,} chars "
                  f"(target {info.get('val_chars_target', 0):,}); train {info.get('train_chars', 0):,} chars")
         if info["stats"]["accepted"] >= 2 and not info.get("val_chars", 0) and not scan_only:
-            # the split rule stays: a source of 1-2 documents cannot give a meaningful validation loss, and a
-            # group above a quarter of the budget stays in training; the report says so instead of staying silent
+            # a source of 1-2 documents cannot give a meaningful validation loss, and a group above
+            # --max-val-group-share of the budget stays in training: the report says so
             L.append(f"- **WARNING:** `{name}` has {info['stats']['accepted']:,} documents but no validation text "
                      "(each group is too large for the validation budget, or the source is too small); its "
                      "validation loss is not measured. More documents, or --max-val-group-share, would give it one.")
