@@ -83,6 +83,23 @@ class Audit2TinyGptA(unittest.TestCase):
         for key in ("loss", "top1", "ece"):
             self.assertAlmostEqual(cpu[key], mps[key], delta=1e-4, msg=key)
 
+    def test_read_probes_refuses_a_four_column_line(self):
+        """F351: a long-form line without its distractor column is refused with its line number, not read as a
+        short-form probe with shifted fields; trailing tabs are not columns."""
+        path = os.path.join(self.tmp, "probes4.tsv")
+        good = "genetics\teasy\tGenes are made of\tDNA\tsugar|fat|salt\t\t\nOld prompt\tanswer\tx|y\t\n"
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("# comment\n" + good)
+        probes = tiny_gpt.read_probes(path)
+        self.assertEqual([(p["category"], p["prompt"], p["answer"], p["distractors"]) for p in probes],
+                         [("genetics", "Genes are made of", "DNA", ["sugar", "fat", "salt"]),
+                          ("general", "Old prompt", "answer", ["x", "y"])])
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("# comment\n" + good + "genetics\teasy\tGenes are made of\tDNA\n")
+        with self.assertRaises(SystemExit) as ctx:
+            tiny_gpt.read_probes(path)
+        self.assertIn("probes4.tsv:4:", str(ctx.exception.code))
+
 
 if __name__ == "__main__":
     unittest.main()

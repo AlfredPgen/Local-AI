@@ -2174,9 +2174,11 @@ def read_probes(path):
             if not line.strip() or line.lstrip().startswith("#"):
                 continue
             parts = [p.strip() for p in line.rstrip("\n").split("\t")]
+            while parts and not parts[-1]:  # trailing tabs are not columns
+                parts.pop()
             if len(parts) >= 5:
                 category, difficulty, prompt, answer, options = parts[:5]
-            elif len(parts) >= 3:
+            elif len(parts) == 3:  # exactly three: four columns are a long-form line without its distractors
                 category, difficulty, (prompt, answer, options) = "general", "unrated", parts[:3]
             else:
                 raise SystemExit(f"{path}:{line_no}: expected category<TAB>difficulty<TAB>prompt<TAB>answer<TAB>"
