@@ -3273,6 +3273,8 @@ def parse_moe_label(text):
 
 # compiled / eager training speed, measured on the RTX 3070 (1.31x at 6 layers, 1.45x at the 216M shape)
 COMPILE_SPEEDUP = 1.35
+# share of a time budget that goes to training steps: evaluation, sampling and checkpoints take about 8 %
+TIME_BUDGET_EFFICIENCY = 0.92
 # how much slower hours of training run than a short test on a cool device: a laptop GPU's power and heat limits
 # (sm clock 430-1290 MHz across runs on this RTX 3070); a desktop-class Mac or a CPU hardly throttles
 SLOW_FACTOR = {"cuda": 1.6, "mps": 1.1, "cpu": 1.1}
@@ -3301,7 +3303,7 @@ def plan_with_time_budget(args, manifest, device, amp_dtype, fixed_cfg=None, ver
     hours = args.time_budget_hours
     if not hours:
         return cfg, settings, lines
-    budget_s = hours * 3600 * 0.92
+    budget_s = hours * 3600 * TIME_BUDGET_EFFICIENCY
     r = args.tokens_per_param
     speed, speed_note = sustained_speed(args.out_dir, device)
     slow = SLOW_FACTOR.get(device.type, SLOW_FACTOR["cuda"])
