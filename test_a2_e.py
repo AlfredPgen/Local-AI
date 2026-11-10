@@ -272,6 +272,32 @@ class Audit2Downloaders(unittest.TestCase):
         self.assertRegex(state["harvested_until"], r"^\d{4}-\d{2}-\d{2}$")
         self.assertEqual([r["id"] for r in ax.read_cache(cache, ["q-bio"])], ["2101.00009"])
 
+    def test_f119_update_of_an_old_state_that_fails_leaves_no_finished_set_without_records(self):
+        """F119: --update on a finished set without 'harvested_until' starts the set again. When its first
+        request fails, the progress file must say so: the next run harvests the set instead of calling a
+        set 'cached' whose records are gone."""
+        cache = os.path.join(self.tmp, "cache")
+        os.makedirs(cache)
+        records, progress = os.path.join(cache, "q-bio.jsonl.gz"), os.path.join(cache, "q-bio.state.json")
+        with gzip.open(records, "wt", encoding="utf-8") as f:
+            for i in range(5):
+                f.write(json.dumps({"id": f"0901.0000{i}", "title": "old"}) + "\n")
+        with open(progress, "w", encoding="utf-8") as f:
+            json.dump({"token": None, "pages": 1, "records": 5, "complete": True}, f)
+        with unittest.mock.patch.object(ax, "http_get", side_effect=OSError("network is down")), \
+                redirect_stdout(io.StringIO()), self.assertRaises(OSError):
+            ax.harvest("q-bio", cache, update=True)
+        with open(progress, encoding="utf-8") as f:
+            state = json.load(f)
+        self.assertEqual((state["complete"], state["records"], state["pages"]), (False, 0, 0))
+        self.assertFalse([name for name in os.listdir(cache) if name.endswith(".part")])
+        # the next run, without --update: the set is harvested, not reported as cached
+        with unittest.mock.patch.object(ax, "http_get", return_value=self.OAI_PAGE) as get, \
+                redirect_stdout(io.StringIO()):
+            self.assertEqual(ax.harvest("q-bio", cache), 1)
+        self.assertEqual(get.call_count, 1)
+        self.assertEqual([r["id"] for r in ax.read_cache(cache, ["q-bio"])], ["2101.00009"])
+
     def test_f115_progress_line_counts_checked_papers(self):
         """F115: build_list prints its progress every 200,000 papers checked, whether or not that paper
         is kept."""

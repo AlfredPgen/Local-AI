@@ -282,6 +282,12 @@ def harvest(set_spec, cache_dir, update=False):
     if os.path.isfile(state_path):
         with open(state_path, encoding="utf-8") as handle:
             state.update(json.load(handle))
+
+    def save():
+        with open(state_path + ".part", "w", encoding="utf-8") as handle:
+            json.dump(state, handle)
+        os.replace(state_path + ".part", state_path)
+
     # "bytes": the cache size when the progress file was last written. Anything after it is a page whose
     # progress was never saved (possibly a gzip member cut off by a crash): cut it off, it is fetched again.
     if state.get("bytes") is not None and os.path.isfile(cache_path) and os.path.getsize(cache_path) > state["bytes"]:
@@ -292,6 +298,7 @@ def harvest(set_spec, cache_dir, update=False):
         print(f"  [{set_spec}] cached: {state['records']:,} records, but not the day that harvest ended; "
               "harvesting the set again", flush=True)
         state.update(token=None, pages=0, records=0, bytes=0, complete=False, **{"from": None})
+        save()  # first: if the run stops before the first page arrives, the next one must not call the set cached
     if state["complete"] and update:
         start = (datetime.date.fromisoformat(state["harvested_until"]) - datetime.timedelta(days=3)).isoformat()
         print(f"  [{set_spec}] cached: {state['records']:,} records; adding papers new or changed since {start}",
@@ -354,9 +361,7 @@ def harvest(set_spec, cache_dir, update=False):
                 state["complete"] = False
         if state["complete"]:
             state["harvested_until"] = datetime.date.today().isoformat()
-        with open(state_path + ".part", "w", encoding="utf-8") as handle:
-            json.dump(state, handle)
-        os.replace(state_path + ".part", state_path)
+        save()
         if state["pages"] % 20 == 0 or state["complete"]:
             print(f"  [{set_spec}] {state['records']:,} records, {state['pages']:,} pages "
                   f"({time.time() - t0:,.0f} s)", flush=True)
