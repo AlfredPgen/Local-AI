@@ -69,7 +69,6 @@ RESULTS_CSV = os.path.join(HERE, "results", "benchmarks.csv")
 RESULT_COLUMNS = ["time", "checkpoint", "step", "params", "benchmark", "category", "n", "accuracy", "low", "high",
                   "chance", "floor", "notes"]
 MCQ_TEMPLATE = "{prompt}\nAnswer:"
-LETTERS = "ABCDEFGHIJKLMNOP"
 GROUPS = ["knowledge", "medicine", "biology", "statistics", "code", "3d"]
 SANDBOX_SITE = "$HOME/.cache/tinygpt-sandbox/site"  # inside WSL; mounted read-only as /site
 
