@@ -3479,8 +3479,8 @@ def parse_args(argv=None):
     g.add_argument("--ffn-hidden", type=int, help="SwiGLU hidden width (default: 8 d_model / 3 rounded up to 64)")
     g.add_argument("--rope-base", type=float, help="default: 10,000 up to ctx 2048, then 10,000 x (ctx/2048)^2")
     g.add_argument("--tie-embeddings", choices=("on", "off"), default="on",
-                   help="share the input embedding with the output layer (default on, as Llama 3.2, Qwen2.5 and "
-                        "Gemma do at every size); off trains a separate output matrix")
+                   help="share the input embedding with the output layer (default on, as Llama 3.2 and Gemma do "
+                        "(Qwen2.5 in its small models)); off trains a separate output matrix")
     g.add_argument("--qk-norm", choices=("on", "off"),
                    help="RMSNorm over each query and key head before RoPE (QK-norm, as in Gemma 3, Qwen3 and OLMo 2; "
                         "keeps high learning rates stable): default on for new runs; a checkpoint keeps its own "
