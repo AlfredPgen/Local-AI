@@ -708,6 +708,35 @@ def clean_markdown(body, title, abstract):
     return head + body + "\n"
 
 
+MAX_PDF_BACK_MATTER = 3000  # characters of a back-matter section (other than the references) a PDF may lose
+
+
+def drop_pdf_back_matter(md):
+    """Markdown from a PDF without its reference list and its short back-matter
+    sections (acknowledgements, funding, ...: the headings of SKIP_SECTION_RE),
+    as the LaTeX and JATS routes leave them out. A section runs to the next
+    heading of any level. PDF headings are often missing, so a back-matter
+    heading may be followed by body text ('Correspondence' on a title page):
+    a section longer than MAX_PDF_BACK_MATTER characters is dropped only when
+    its heading says 'references', otherwise it is kept whole."""
+    out, section, back_matter = [], [], None  # back_matter: the heading text of a section that may be dropped
+
+    def close():
+        if back_matter is None or ("references" not in back_matter.lower()
+                                   and len("\n".join(section[1:])) > MAX_PDF_BACK_MATTER):
+            out.extend(section)
+
+    for line in md.split("\n"):
+        m = _HEADING_RE.match(line)
+        if m:
+            close()
+            title = re.sub(r"^[\d.\s]+", "", m.group(2))
+            section, back_matter = [], title if SKIP_SECTION_RE.match(title) else None
+        section.append(line)
+    close()
+    return "\n".join(out)
+
+
 def pdf_markdown(pdf_bytes, seconds=PDF_SECONDS):
     """Markdown of a PDF, converted in a child process that is stopped after
     `seconds` (raises subprocess.TimeoutExpired): one pathological PDF must not
@@ -723,7 +752,7 @@ def pdf_markdown(pdf_bytes, seconds=PDF_SECONDS):
             raise RuntimeError(err[-1][:120] if err else f"PDF converter exit code {done.returncode}")
         with open(out, encoding="utf-8") as handle:
             text = handle.read()
-    text = EMAIL_RE.sub("[email]", text.replace("\r\n", "\n"))
+    text = drop_pdf_back_matter(EMAIL_RE.sub("[email]", text.replace("\r\n", "\n")))
     return re.sub(r"\n{3,}", "\n\n", text).strip() + "\n"
 
 

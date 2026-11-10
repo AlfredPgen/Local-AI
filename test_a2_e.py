@@ -116,8 +116,44 @@ class Audit2Downloaders(unittest.TestCase):
         self.assertEqual(ax.read_report(report, limits), {ROW["id"]: "ok"})
         self.assertEqual(limits, {})
 
+    def test_f124_pdf_route_drops_references_and_short_back_matter(self):
+        """F124: Markdown from a PDF loses its reference list and short back-matter sections; a long
+        section under a back-matter heading that is no reference list (PDF headings are often missing,
+        so it may be body text) is kept whole."""
+        intro, thanks, refs, appendix = "Drift changes allele frequencies.", "We thank the funders. " * 9, \
+            "\n".join(f"[{i}] Wright S. 1931. Evolution in Mendelian populations. Genetics 16." for i in range(80)), \
+            "Derivation of the variance."
+        self.assertGreater(len(refs), 5000)
+        md = (f"# Intro\n\n{intro}\n\n## **Acknowledgements**\n\n{thanks}\n\n# **References:**\n\n{refs}\n\n"
+              f"## Appendix A\n\n{appendix}\n")
+        cut = ax.drop_pdf_back_matter(md)
+        self.assertEqual(cut, f"# Intro\n\n{intro}\n\n## Appendix A\n\n{appendix}\n")
+        # a long section after a back-matter heading that is not "References": nothing is removed
+        body = "The abstract and the results follow the title page here. " * 100
+        long_md = f"# Title\n\n## **Correspondence**\n\n{body}\n\n# Discussion\n\nText.\n"
+        self.assertGreater(len(body), ax.MAX_PDF_BACK_MATTER)
+        self.assertEqual(ax.drop_pdf_back_matter(long_md), long_md)
+        # the same heading over a short section is back matter
+        self.assertEqual(ax.drop_pdf_back_matter("# Title\n\nText.\n\n## 7. Funding\n\nGrant 1.\n\n# Methods\n\nM.\n"),
+                         "# Title\n\nText.\n\n# Methods\n\nM.\n")
+        # a long reference list is dropped whatever its length, up to the next heading of any level
+        self.assertEqual(ax.drop_pdf_back_matter(f"# A\n\na\n\n### References\n\n{refs}\n\n###### Table 3\n\nt\n"),
+                         "# A\n\na\n\n###### Table 3\n\nt\n")
+        plain = "# Intro\n\nText about references and funding.\n\n## Methods\n\nMore.\n\n**References**\n\n[1] x\n"
+        self.assertEqual(ax.drop_pdf_back_matter(plain), plain)
+        self.assertEqual(ax.drop_pdf_back_matter(""), "")
+
+        def child(cmd, **kwargs):  # the PDF converter child: writes the Markdown file it is asked for
+            with open(cmd[-1], "w", encoding="utf-8") as f:
+                f.write(md.replace("\n", "\r\n") + "\r\nContact: someone@example.org\r\n")
+            return unittest.mock.Mock(returncode=0, stderr=b"")
+
+        with unittest.mock.patch.object(ax.subprocess, "run", side_effect=child):
+            text = ax.pdf_markdown(PDF)
+        self.assertEqual(text, f"# Intro\n\n{intro}\n\n## Appendix A\n\n{appendix}\n\nContact: [email]\n")
+
     # ---------------- download_pmc.py ----------------
-    QUERY = "OPEN_ACCESS:y AND TEST:y"
+    QUERY ="OPEN_ACCESS:y AND TEST:y"
 
     @staticmethod
     def epmc_page(ids, cursor, total=0, cited=None):
