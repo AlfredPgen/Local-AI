@@ -377,6 +377,14 @@ class Audit2PipelineTools(unittest.TestCase):
             out, load = self.gpu_check_load(used, util)
             self.assertEqual((tiny_gpt.GPU_BUSY_MESSAGE in out, load.called), (busy, not busy), (used, util))
 
+    def test_gpu_check_busy_warning_says_the_caveat_once(self):
+        """F165: the warning is the shared message plus the --force hint; the driver-reset caveat that the
+        message already holds is not repeated."""
+        import tiny_gpt
+        out, _ = self.gpu_check_load(3000, 10)
+        self.assertTrue(out.endswith("\n" + tiny_gpt.GPU_BUSY_MESSAGE + " Or pass --force.\n"), out[-400:])
+        self.assertEqual(out.count("driver"), tiny_gpt.GPU_BUSY_MESSAGE.count("driver"))
+
 
 if __name__ == "__main__":
     unittest.main()
