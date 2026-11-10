@@ -1348,7 +1348,7 @@ def floor_colour(group):
 def panel_facts(ax, history, ck, args):
     """Fact-probe accuracy and its floor at every evaluation: faint points, and the mean of the last five as
     the line (one evaluation of a few hundred probes moves by chance)."""
-    from matplotlib.ticker import PercentFormatter
+    from matplotlib.ticker import FuncFormatter
     title = "Biology facts"
     acc, floor = _series(history, "probe_acc"), _series(history, "probe_floor")
     report = stored_probes(ck, args, raw_weights=bool(acc))  # without a curve it would be shown as this file's score
@@ -1384,7 +1384,8 @@ def panel_facts(ax, history, ck, args):
         values.append(report["chance"])
     pad = 0.12 * (max(values) - min(values)) or 0.02
     ax.set_ylim(max(0.0, min(values) - pad), min(0.999, max(values) + pad))
-    ax.yaxis.set_major_formatter(PercentFormatter(1.0, decimals=0))
+    # as many decimals as the tick has (15%, 15.5%): whole percents would repeat when the scores lie close together
+    ax.yaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{round(100 * v, 2):g}%"))
     ax.set_xlabel("optimizer step")
     ax.set_ylabel("probes answered correctly")
     place_legend(ax)

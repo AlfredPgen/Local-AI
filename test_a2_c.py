@@ -553,6 +553,18 @@ class Audit2Viewer(unittest.TestCase):
         older = [{k: v for k, v in h.items() if k != "probe_floor"} for h in rows]
         view_pt.panel_facts(ax, older, ck, args)
         self.assertRegex(ax.get_title(loc="left"), r"^Biology facts: \d+% right$")
+        # scores a few points or less apart (and no chance line to widen the axis): no y label appears twice
+        for spread in (0.0, 0.001, 0.02, 0.3):
+            close = [dict(h, probe_acc=0.15 + spread * (i % 3) / 2, probe_floor=None) for i, h in enumerate(rows)]
+            fig, ax = one_axes()
+            view_pt.panel_facts(ax, close, ck, args)
+            fig.canvas.draw()
+            y0, y1 = ax.get_ylim()
+            ticks = [t.get_text() for t, v in zip(ax.get_yticklabels(), ax.get_yticks()) if y0 <= v <= y1]
+            self.assertGreaterEqual(len(ticks), 2, spread)
+            self.assertEqual(len(set(ticks)), len(ticks), (spread, ticks))
+            self.assertTrue(all(t.endswith("%") for t in ticks), ticks)
+        self.assertIn("20%", ticks, "whole percents stay without decimals")
         tuned = open_ck(toy_file(self.tmp, "F_sft.pt", rows, finetune={"method": "sft", "base": "F.pt"}))
         fig, ax = one_axes()
         view_pt.panel_facts(ax, rows, tuned, args)
