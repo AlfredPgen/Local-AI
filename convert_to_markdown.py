@@ -847,7 +847,9 @@ def _neglog10(text):
     value = float(text)
     if value > 0:
         return -math.log10(value)
-    if value == 0:  # underflowed: the strongest hits ('0' in PLINK output), as in _gwas_fast
+    # underflowed: the strongest hits ('0' in PLINK output). Only this slow reader can do it: the fast (pyarrow)
+    # reader gets floats, so it prints '< 1e-300' for anything below about 1e-308
+    if value == 0:
         if "e" in text.lower():
             from decimal import Decimal, InvalidOperation
             try:

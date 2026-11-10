@@ -67,10 +67,10 @@ BOT_CHECK = ("confirm you", "not a bot", "sign in to confirm")
 # YouTube limiting this session ("Video unavailable. This content isn't available, try again later. The current
 # session has been rate-limited"): every further video would fail the same way, so the run stops
 RATE_LIMITED = ("rate-limited", "rate limited", "content isn't available, try again later")
-# failures of this run, not of the video (the JavaScript challenge failed, an old yt-dlp): retried later
 # the page loaded but no audio/video format could be read (no "try again later" here: that is also YouTube's
 # rate-limit message, which must stop the run instead of being retried)
 FORMAT_FAILURE = ("requested format is not available", "not available on this app", "only images are available")
+# failures of this run, not of the video (the JavaScript challenge failed, an old yt-dlp): retried later
 TRANSIENT = FORMAT_FAILURE + ("try again later",)
 UPCOMING = ("premieres in", "live event will begin")
 UNAVAILABLE = ("private video", "members-only", "join this channel", "video unavailable", "has been removed",

@@ -1800,7 +1800,7 @@ def repo_document(ctx, rel, data, action):
 
 
 def github_api_files(ctx, owner, repo, ref):
-    """(entries, reader, notes) from the GitHub API's file list and raw.githubusercontent.com."""
+    """(entries, reader, branch, notes) from the GitHub API's file list and raw.githubusercontent.com."""
     api = f"https://api.github.com/repos/{owner}/{repo}"
     headers = {"Accept": "application/vnd.github+json"}
     got = ctx.http.get(api, 5 << 20, headers=headers)
