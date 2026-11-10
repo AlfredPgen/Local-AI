@@ -352,6 +352,81 @@ class Audit2Downloaders(unittest.TestCase):
             with open(path, encoding="utf-8") as f:
                 self.assertEqual([tuple(line.split("\t")) for line in f.read().splitlines()[3:]], rows)
 
+    def test_f144_pmc_scored_matches_are_reused(self):
+        """F144: a --keywords run scores the metadata once (metadata/matches.tsv) and later runs select from
+        that file; changed keywords, thresholds, rank or metadata, and --rebuild-list, score again; the rows
+        are those of a fresh selection, also with --new and its skip set and with a comma-separated spec."""
+        untitled = [(9, "eng", 60, "", "Genetic drift, allele selection and more genetic drift.")]
+        records, keywords, dp = self.keyword_records(untitled)
+        with open(os.path.join(self.tmp, "metadata", "state.json"), "w", encoding="utf-8") as f:
+            json.dump({"query": pmc.HARVEST_QUERY, "cursor": "c", "records": 9, "complete": True}, f)
+        out, listing = os.path.join(self.tmp, "out"), os.path.join(self.tmp, "list.tsv")
+        real = dp.KeywordFilter.evaluate
+
+        def run(*options, spec=keywords):
+            """(KeywordFilter.evaluate calls, list rows, console text) of one --list-only run."""
+            calls = []
+
+            def evaluate(kw, title, text):
+                calls.append(title)
+                return real(kw, title, text)
+
+            with unittest.mock.patch.object(dp.KeywordFilter, "evaluate", evaluate), \
+                    unittest.mock.patch.object(pmc, "http_get", side_effect=AssertionError("no request expected")), \
+                    redirect_stdout(io.StringIO()) as buf:
+                pmc.main(["--out", out, "--meta", self.tmp, "--keywords", spec, "--list-only", *options])
+            with open(listing, encoding="utf-8", newline="\n") as f:
+                lines = f.read().split("\n")
+            self.assertTrue(lines[0].startswith("# keywords: ") and lines[1].startswith("# metadata: ")
+                            and lines[2].startswith("# complete: "), lines[:3])
+            return len(calls), [tuple(line.split("\t")) for line in lines[3:] if line], buf.getvalue()
+
+        def fresh(spec=keywords, min_hits=3, limit=100_000, rank="density", skip=()):
+            return self.reference_rows(dp, records, spec, min_hits, 3, limit, rank, skip)
+
+        calls, rows, text = run()
+        self.assertEqual((calls, rows), (7, fresh()))  # 7: the nine papers without the two in another language
+        self.assertIn(("PMC9", "9", "2020", "60", "J Test", ""), rows)  # an empty title keeps its field
+        self.assertNotIn("--rebuild-list", text)
+        calls, again, text = run()
+        self.assertEqual((calls, again), (0, rows))
+        self.assertIn("(--rebuild-list scores again)", text)
+        self.assertEqual(run("--rebuild-list")[:2], (7, rows))
+        self.assertEqual(run()[0], 0)
+        # --new N: the best N that are not downloaded yet, from the cache; equal to a fresh selection
+        os.makedirs(out, exist_ok=True)
+        with open(os.path.join(out, f"{rows[0][0]}__x.md"), "w", encoding="utf-8") as f:
+            f.write("x")
+        with open(os.path.join(self.tmp, "report.tsv"), "w", encoding="utf-8", newline="\n") as f:
+            f.write("\t".join(pmc.REPORT_COLUMNS) + "\n" + "\t".join([rows[2][0], "no_body", "0", "", "", "", "", ""])
+                    + "\n" + "\t".join([rows[3][0], "error: x", "0", "", "", "", "", ""]) + "\n")
+        skip = {rows[0][0], rows[2][0]}
+        self.assertEqual(run("--new", "2")[:2], (0, fresh(limit=2, skip=skip)))
+        self.assertEqual(run("--new", "2")[1], [rows[1], rows[3]])
+        self.assertEqual(run("--max-papers", "3")[:2], (0, rows[:3]))
+        # another rank, threshold, keyword list or metadata: scored again, then reused
+        self.assertEqual(run("--rank", "cited")[:2], (7, fresh(rank="cited")))
+        self.assertEqual(run("--rank", "cited", "--new", "2")[:2], (0, fresh(rank="cited", limit=2, skip=skip)))
+        self.assertEqual(run("--min-hits", "9")[:2], (7, fresh(min_hits=9)))
+        self.assertEqual(run("--min-hits", "9")[0], 0)
+        listed = "genetic*,allele*,drift"
+        self.assertEqual(run(spec=listed)[:2], (7, fresh(spec=listed)))
+        self.assertEqual(run(spec=listed)[0], 0)
+        self.assertEqual(run()[0], 7)
+        with open(keywords, "a", encoding="utf-8") as f:
+            f.write("pasta\nwater\nsalt\n")
+        calls, edited, _ = run()
+        self.assertEqual((calls, edited), (7, fresh()))
+        self.assertIn("PMC2", [r[0] for r in edited])
+        with open(records, "ab") as f:  # the harvest went on: one more page
+            f.write(gzip.compress((json.dumps(
+                {"pmcid": "PMC500", "pmid": "500", "year": "2021", "cited": 3, "journal": "J Test", "lang": "eng",
+                 "title": "Selection", "abstract": "Genetic drift and allele selection."}) + "\n").encode("utf-8")))
+        calls, grown, _ = run()
+        self.assertEqual((calls, grown), (8, fresh()))
+        self.assertEqual(run()[:2], (0, grown))
+        self.assertFalse([name for name in os.listdir(os.path.join(self.tmp, "metadata")) if name.endswith(".part")])
+
 
 if __name__ == "__main__":
     unittest.main()
