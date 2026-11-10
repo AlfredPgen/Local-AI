@@ -186,11 +186,13 @@ _AI_TRAIN_NO = re.compile(r"^\s*content-signal\s*:.*\bai-train\s*=\s*no\b", re.I
 
 
 def parse_robots(rp, text):
-    """robotparser.parse with three fixes: a rule 'Disallow: //' (paths starting
+    """robotparser.parse with four fixes: a rule 'Disallow: //' (paths starting
     with '//') is not read as 'disallow everything'; '*' and '$' in rules work as
     wildcards (as Google and Bing read them) instead of literally, matched against
     the rule as written ('Disallow: /*?' keeps its '?', which robotparser's own
-    normalising drops); and a fractional Crawl-delay (2.5) counts, rounded up."""
+    normalising drops); a fractional Crawl-delay (2.5) counts, rounded up; and the
+    longest matching rule wins, Allow on a tie (RFC 9309), not the first one in
+    the file ('Allow: /' above 'Disallow: /private/' still refuses /private/)."""
     lines, wild = [], {}
     for line in text.splitlines():
         line = _ROBOTS_DOUBLE_SLASH.sub(r"\1//*", line)
@@ -205,6 +207,7 @@ def parse_robots(rp, text):
         lines.append(line)
     rp.parse(lines)
     for entry in rp.entries + ([rp.default_entry] if rp.default_entry else []):
+        length = {}  # of each rule as written (never of the placeholder path of a wildcard rule)
         for rule in entry.rulelines:
             raw = wild.get(rule.path)
             if raw is not None:
@@ -213,6 +216,12 @@ def parse_robots(rp, text):
                 rx = re.compile("^" + ".*".join(re.escape(p) for p in raw.rstrip("$").split("*"))
                                 + ("$" if anchored else ""))
                 rule.applies_to = lambda filename, rx=rx: bool(rx.match(urllib.parse.unquote(filename)))
+                length[id(rule)] = len(raw)
+            else:
+                length[id(rule)] = len(urllib.parse.unquote(rule.path))
+        # robotparser takes the first rule that matches: longest first, Allow before Disallow at equal length
+        # (an empty 'Disallow:' is an allow rule of length 0 and goes last)
+        entry.rulelines.sort(key=lambda rule: (-length[id(rule)], not rule.allowance))
 
 
 class Fetched:
