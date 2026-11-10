@@ -219,7 +219,21 @@ def train(args):
     out_path = os.path.join(args.out_dir, args.name + ".pt")
     if os.path.exists(out_path) and not args.overwrite:
         raise SystemExit(f"{out_path} exists; choose a new --name or pass --overwrite.")
-    fields = ["prompt", "response"] if args.mode == "sft" else ["prompt", "chosen", "rejected"]
+    # each finished epoch but the last is kept in <name>_partial.pt, so an interruption loses at most one epoch;
+    # <name>.pt is written only by a finished run. The partial file is replaced by a rerun and removed at the end:
+    # without --overwrite only an interrupted fine-tune's own file (it records epochs_done), not a checkpoint that
+    # was given this name
+    partial_path = os.path.join(args.out_dir, args.name + "_partial.pt")
+    if os.path.exists(partial_path) and not args.overwrite:
+        try:
+            old = tiny_gpt.safe_load(partial_path, args.trust_checkpoint, mmap=True)
+            old = old.get("finetune") if isinstance(old, dict) else None
+        except SystemExit:  # not readable: not known to be an epoch file
+            old = None
+        if not (isinstance(old, dict) and "epochs_done" in old):
+            raise SystemExit(f"{partial_path} exists and is not the epoch file of an interrupted fine-tune (this "
+                             "run would replace and then delete it); choose a new --name or pass --overwrite.")
+    fields =["prompt", "response"] if args.mode == "sft" else ["prompt", "chosen", "rejected"]
     rows = read_jsonl(args.data, fields)
     random.Random(args.seed).shuffle(rows)
     n_val = max(1, int(round(args.val_fraction * len(rows))))
@@ -374,9 +388,6 @@ def train(args):
     info = {"method": args.mode, "base": os.path.abspath(args.base), "data": os.path.abspath(args.data),
             "examples": len(rows), "epochs": args.epochs, "lr": args.lr, "template": TEMPLATE,
             **({"beta": args.beta} if args.mode == "dpo" else {})}
-    # each finished epoch but the last is kept in <name>_partial.pt, so an interruption loses at most one epoch;
-    # <name>.pt is written only by a finished run
-    partial_path = os.path.join(args.out_dir, args.name + "_partial.pt")
     history, step, t0 = [], 0, time.time()
     val_loss, val_info = evaluate_items(val_items)
     print(f"epoch 0 | held-out loss {val_loss:.4f}" + "".join(f" | {k} {v:.3f}" for k, v in val_info.items()))

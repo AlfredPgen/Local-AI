@@ -295,6 +295,34 @@ class Audit2FinetuneTools(unittest.TestCase):
         for key in finals[0]:
             self.assertTrue(torch.equal(finals[0][key], finals[1][key]), key)
 
+    def test_finetune_keeps_a_checkpoint_named_like_a_partial_file(self):
+        """F163: <name>_partial.pt is replaced and removed without --overwrite only when it is the epoch file of
+        an interrupted fine-tune (it records epochs_done). A finished checkpoint that has this name stops the
+        run, whatever the number of epochs; --overwrite lets the run take the name."""
+        folder = os.path.join(self.tmp, "named_partial")
+        os.makedirs(folder)
+        base = self.finetune_base("ft_base_named.pt")
+        tok = self.sentencepiece()
+        kept = self.save_checkpoint(toy_model(8, ctx=64, vocab=tok.vocab_size),
+                                    os.path.join("named_partial", "T_partial.pt"),
+                                    tokenizer={"proto": tok.proto, **tok.meta()},
+                                    finetune={"method": "sft", "base": os.path.abspath(base), "epochs": 1,
+                                              "history": []})
+        with open(kept, "rb") as f:
+            before = f.read()
+        for epochs in (2, 1):
+            with self.assertRaises(SystemExit) as caught:
+                self.finetune(folder, "sft", base, "T", epochs=epochs)
+            message = str(caught.exception.code)
+            self.assertIn("T_partial.pt", message)
+            self.assertIn("--overwrite", message)
+            self.assertFalse(os.path.exists(os.path.join(folder, "T.pt")), "stopped before training")
+            with open(kept, "rb") as f:
+                self.assertEqual(f.read(), before, f"a finished checkpoint was replaced ({epochs} epochs)")
+        saved, _ = self.finetune(folder, "sft", base, "T", epochs=1, extra=["--overwrite"])
+        self.assertEqual(saved, os.path.join(folder, "T.pt"))
+        self.assertFalse(os.path.exists(kept))
+
     def test_finetune_help_is_not_written_to_the_log(self):
         """F323 (finetune half): --help prints the usage text and neither creates nor appends to the log; an
         argument error is still logged."""
