@@ -879,17 +879,7 @@ def read_report(path, pdf_limits=None):
     return done
 
 
-def _lower_priority():
-    try:
-        import psutil
-        proc = psutil.Process()
-        if sys.platform == "win32":
-            if proc.nice() != psutil.IDLE_PRIORITY_CLASS:
-                proc.nice(psutil.BELOW_NORMAL_PRIORITY_CLASS)
-        elif proc.nice() < 10:
-            proc.nice(10)
-    except Exception:  # noqa: BLE001 - priority is a courtesy
-        pass
+_lower_priority = dp._lower_priority  # below-normal priority, so the PC stays responsive
 
 
 def todo_rows(rows, done, pdf_limits, have, pdf_seconds):

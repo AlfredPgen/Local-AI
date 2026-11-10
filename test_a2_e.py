@@ -328,6 +328,26 @@ class Audit2Downloaders(unittest.TestCase):
         self.assertEqual(len(ax.DEFAULT_SETS), 21)
         self.assertEqual(ax.parse_args(["--out", self.tmp]).sets, ax.DEFAULT_SETS)
 
+    def test_f112_one_priority_helper_and_the_pdf_time_out_status(self):
+        """F112: download_arxiv lowers its priority with data_prep's helper (one copy, not its own). Guard
+        (passes before and after): a PDF child still running after --pdf-seconds gives the status
+        'pdf_timeout', which a run with a larger limit tries again."""
+        import data_prep
+        self.assertIs(ax._lower_priority, data_prep._lower_priority)
+        with unittest.mock.patch.object(ax, "_PDF_CHILD", "import time; time.sleep(60)"), \
+                unittest.mock.patch.object(ax, "http_get", return_value=PDF):
+            result = ax.convert_paper(dict(ROW), None, self.tmp, 100, "pandoc", pdf_seconds=1)
+        self.assertEqual((result["status"], result["method"]), ("pdf_timeout", "pdf took over 1 s"))
+        report = os.path.join(self.tmp, "report.tsv")
+        with open(report, "w", encoding="utf-8", newline="\n") as f:
+            f.write("\t".join(ax.REPORT_COLUMNS) + "\n")
+            f.write("\t".join(ax._flat(result[c]) for c in ax.REPORT_COLUMNS) + "\n")
+        limits = {}
+        self.assertEqual(ax.read_report(report, limits), {ROW["id"]: "pdf_timeout"})
+        self.assertEqual(limits, {ROW["id"]: 1.0})
+        self.assertEqual(ax.todo_rows([dict(ROW)], {ROW["id"]: "pdf_timeout"}, limits, set(), 1), [])
+        self.assertEqual(ax.todo_rows([dict(ROW)], {ROW["id"]: "pdf_timeout"}, limits, set(), 2), [dict(ROW)])
+
     # ---------------- download_pmc.py ----------------
     QUERY = "OPEN_ACCESS:y AND TEST:y"
 
