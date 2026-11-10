@@ -58,6 +58,8 @@ import tempfile
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)  # the project's own modules, also when started from another folder
+from download_pmc import safe_name  # noqa: E402 - one file-name rule for every downloader
 DEFAULT_OUT = os.path.join(os.path.expanduser("~"), "ai_training_data", "lectures")
 DEFAULT_KEYWORDS = os.path.join(HERE, "keywords.txt")
 # statuses not retried on a rerun ("live" and "upcoming" are: once aired they are ordinary videos)
@@ -256,11 +258,6 @@ def paragraphs(text, max_chars=700):
 def punctuated(text):
     words = len(text.split())
     return words < 60 or len(re.findall(r"[.!?](?:\s|$)", text)) * 40 >= words
-
-
-def safe_name(text, limit=90):
-    name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', " ", text or "untitled")
-    return " ".join(name.split())[:limit].rstrip(" .") or "untitled"
 
 
 # ---------------------------------------------------------------------------
@@ -607,11 +604,8 @@ def main(argv=None):
         pass
     args = parse_args(argv)
     import yt_dlp
-    try:
-        import psutil
-        psutil.Process().nice(psutil.BELOW_NORMAL_PRIORITY_CLASS if sys.platform == "win32" else 10)
-    except Exception:  # noqa: BLE001 - a courtesy only
-        pass
+    import data_prep
+    data_prep._lower_priority()  # a courtesy; a run started at idle priority stays idle
     os.makedirs(args.meta, exist_ok=True)
     # channels.json remembers each channel's exact address (no @handle guessing and search on later runs) and
     # when it was last processed to the end, so channels finished within --recheck-days are not listed again

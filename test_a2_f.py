@@ -157,6 +157,34 @@ class Audit2DocsYoutubeConvert(unittest.TestCase):
         finally:
             sys.path[:] = path
 
+    def test_youtube_priority_keeps_idle(self):
+        """F448: a run started at idle priority is not raised to below-normal (data_prep's rule), and the file-name
+        helper is download_pmc's."""
+        import psutil
+        import download_pmc
+        import youtube_transcripts as yt
+
+        class FakeYdl:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def extract_info(self, url, download=False):
+                return {"channel_id": "UC" + "y" * 22, "channel": "C", "id": "listing",
+                        "entries": [{"id": "v0000000001", "duration": 60}]}
+
+        proc = unittest.mock.Mock()
+        proc.nice.return_value = psutil.IDLE_PRIORITY_CLASS if sys.platform == "win32" else 19
+        with unittest.mock.patch.object(psutil, "Process", return_value=proc), \
+                unittest.mock.patch.object(yt, "ydl", lambda *a, **k: FakeYdl()), \
+                unittest.mock.patch("sys.stdout", new_callable=__import__("io").StringIO):
+            yt.main(["@c", "--list-only", "--keywords", "none", "--out", os.path.join(self.tmp, "f448", "lectures")])
+        self.assertTrue(proc.nice.called)  # the priority was read ...
+        self.assertEqual([c for c in proc.nice.call_args_list if c.args or c.kwargs], [])  # ... and never set
+        self.assertIs(yt.safe_name, download_pmc.safe_name)
+
 
 if __name__ == "__main__":
     unittest.main()
