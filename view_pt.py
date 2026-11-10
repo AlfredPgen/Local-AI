@@ -741,12 +741,12 @@ def heatmap(ax, matrix, rows, cols, cmap, label, vmin=None, vmax=None, annotate=
     cb.ax.tick_params(labelsize=_SIZE["heat"], colors=INK2)
     cb.outline.set_visible(False)
     if annotate and matrix.size <= 120:
-        lo, hi = np.nanmin(matrix), np.nanmax(matrix)
-        mid = (lo + hi) / 2
         for (i, j), v in np.ndenumerate(matrix):
             if np.isfinite(v):
+                pos = float(im.norm(v))  # where the cell's colour lies on the drawn scale (vmin and vmax included)
+                dark = pos > 0.5 if cmap.name.startswith("seq") else abs(pos - 0.5) > 0.3
                 ax.text(j, i, format(v, fmt_spec), ha="center", va="center", fontsize=_SIZE["cell"],
-                        color="#ffffff" if (v > mid if cmap.name.startswith("seq") else abs(v) > 0.6) else INK)
+                        color="#ffffff" if dark else INK)
     return im
 
 

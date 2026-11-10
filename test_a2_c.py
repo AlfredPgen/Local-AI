@@ -636,6 +636,29 @@ class Audit2Viewer(unittest.TestCase):
         self.assertEqual([(h["step"], h["val_loss"]) for h in hist], [(100, 2.1)])
         self.assertIn("1 session(s) of A", label)
 
+    # ---------------- F401 ----------------
+    def test_heatmap_cell_text_follows_the_drawn_colour(self):
+        from matplotlib.colors import LinearSegmentedColormap
+        import view_pt
+        div = LinearSegmentedColormap.from_list("div_blue_red", view_pt.DIVERGING)
+        seq = LinearSegmentedColormap.from_list("seq_blue", view_pt.BLUES)
+
+        def colours(matrix, cmap, **limits):
+            fig, ax = one_axes()
+            view_pt.heatmap(ax, np.array(matrix), ["r0", "r1"], ["c0", "c1"], cmap, "value", **limits)
+            return {t.get_text(): t.get_color() for t in ax.texts}
+
+        got = colours([[-0.05, 0.05], [0.0, 0.04]], div, vmin=-0.05, vmax=0.05)
+        self.assertEqual(got, {"-0.05": "#ffffff", "0.05": "#ffffff", "0": view_pt.INK, "0.04": "#ffffff"},
+                         "the darkest cells of a diverging map with narrow limits get white text")
+        # unchanged: the -1..1 similarity scale (white beyond 0.6) and a sequential map without fixed limits
+        got = colours([[-0.7, 0.7], [0.5, -0.5]], div, vmin=-1, vmax=1)
+        self.assertEqual(got, {"-0.7": "#ffffff", "0.7": "#ffffff", "0.5": view_pt.INK, "-0.5": view_pt.INK})
+        got = colours([[1.0, 2.0], [3.0, 4.0]], seq)
+        self.assertEqual(got, {"1": view_pt.INK, "2": view_pt.INK, "3": "#ffffff", "4": "#ffffff"})
+        got = colours([[0.2, 0.9], [float("nan"), 0.4]], seq, vmin=0, vmax=1)
+        self.assertEqual(got, {"0.2": view_pt.INK, "0.9": "#ffffff", "0.4": view_pt.INK}, "no text on an empty cell")
+
 
 if __name__ == "__main__":
     unittest.main()
