@@ -4,6 +4,7 @@ meter, evaluation, probes, generation). Target class in test_tiny_gpt.py: TestFi
     python -m unittest test_a2_a1
 """
 import dataclasses
+import glob
 import inspect
 import io
 import math
@@ -349,6 +350,19 @@ class Audit2TinyGptA(unittest.TestCase):
                  for s in range(40)]
         self.assertTrue(set(picks) <= {(1, 0), (1, 2), (3, 0), (3, 2)}, "top-k 2 per row")
         self.assertGreater(len(set(picks)), 1)
+
+    def test_schedule_line_without_warmup_or_decay(self):
+        """F322: --warmup-steps 0 and --decay-frac 0 are described in words, not as the ranges 1-0 and 11-10."""
+        flat = tiny_gpt.LRSchedule("wsd", 10, 1e-3, 0, 0, 0.0).describe()
+        self.assertEqual(flat, "WSD: no warmup, stable to 10 at 1.00e-03, no decay")
+        self.assertEqual(tiny_gpt.LRSchedule("cosine", 100, 1e-3, 1e-4, 0).describe(),
+                         "cosine: no warmup, cosine to 1.00e-04 at 100")
+        self.assertEqual(tiny_gpt.LRSchedule("wsd", 100, 1e-3, 1e-4, 10, 0.2, "1-sqrt").describe(),
+                         "WSD: warmup 1-10 (linear), stable to 80 at 1.00e-03, decay 81-100 (1-sqrt) to 1.00e-04")
+        self.assertEqual(tiny_gpt.LRSchedule("cosine", 100, 1e-3, 1e-4, 10).describe(),
+                         "cosine: warmup 1-10, cosine to 1.00e-04 at 100")
+
+
 
 
 if __name__ == "__main__":

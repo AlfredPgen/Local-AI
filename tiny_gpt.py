@@ -1195,9 +1195,12 @@ class LRSchedule:
 
     def describe(self):
         if self.kind == "wsd":
-            return (f"WSD: warmup 1-{self.warmup} (linear), stable to {self.decay_start} at {self.peak:.2e}, "
-                    f"decay {self.decay_start + 1}-{self.total} ({self.shape}) to {self.min_lr:.2e}")
-        return f"cosine: warmup 1-{self.warmup}, cosine to {self.min_lr:.2e} at {self.total}"
+            warmup = "no warmup" if self.warmup == 0 else f"warmup 1-{self.warmup} (linear)"
+            decay = ("no decay" if self.decay_start >= self.total
+                     else f"decay {self.decay_start + 1}-{self.total} ({self.shape}) to {self.min_lr:.2e}")
+            return f"WSD: {warmup}, stable to {self.decay_start} at {self.peak:.2e}, {decay}"
+        warmup = "no warmup" if self.warmup == 0 else f"warmup 1-{self.warmup}"
+        return f"cosine: {warmup}, cosine to {self.min_lr:.2e} at {self.total}"
 
 
 # ---------------------------------------------------------------------------
