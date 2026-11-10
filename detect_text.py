@@ -95,6 +95,8 @@ def main():
     p.add_argument("--watermark-gamma", type=float, default=0.25)
     p.add_argument("--calibrate", action="store_true",
                    help="score 5 samples from the model and 5 validation passages to show typical values")
+    p.add_argument("--dataset", default=None,
+                   help="--calibrate: dataset whose validation passages are scored (default: the checkpoint's)")
     p.add_argument("--device", choices=("cpu", "cuda", "mps", "auto"), default="cpu")
     p.add_argument("--force", action="store_true", help="use the GPU even if another job seems to be using it")
     p.add_argument("--trust-checkpoint", action="store_true")
@@ -107,8 +109,12 @@ def main():
     if device.type != "cpu" and not args.force and tiny_gpt.gpu_busy(HERE):
         raise SystemExit(tiny_gpt.GPU_BUSY_MESSAGE + " (Or use --device cpu, or pass --force.)")
     model, tok, cfg, obj = tiny_gpt.load_for_inference(args.checkpoint, device, args.trust_checkpoint)
-    ds = (obj.get("dataset") or {}).get("path") if isinstance(obj.get("dataset"), dict) else None
-    del obj  # only the dataset path is needed; the raw weights would double the memory used
+    ds = why = None
+    if args.calibrate:  # only --calibrate reads the dataset: scoring a text never fails for a missing one
+        try:
+            ds = tiny_gpt.resolve_dataset(obj, args.dataset)
+        except SystemExit as exc:
+            why = str(exc)
 
     def report(label, text):
         prefix = [tok.bos_id] if tok.bos_id >= 0 else []
@@ -144,7 +150,9 @@ def main():
         for prompt in ("Genetic drift is", "The heritability of", "In statistics,", "Proteins are", "A GWAS"):
             report(f"  sample '{prompt}'", tiny_gpt.generate(model, tok, prompt, 150, device, None, 0.8, 50, 0.95,
                                                              gen, wm))
-        if ds and os.path.isdir(ds):
+        if ds is None:
+            print(f"validation text not scored: {why}")
+        else:
             import compare_models
             print("... and validation text written by people (should score near 0):")
             for source, k, text in compare_models.validation_documents(ds, 3, 3000)[:5]:

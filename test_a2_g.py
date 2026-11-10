@@ -403,6 +403,37 @@ class Audit2FinetuneTools(unittest.TestCase):
             self.assertNotIn("GPU is busy", message or "", extra)
             self.assertIn("no_such_checkpoint.pt", message or "", extra)  # the busy check was passed
 
+    def test_detect_text_calibrate_says_why_validation_text_is_missing(self):
+        """F109: --calibrate on a checkpoint whose dataset is not on this machine says that the validation text
+        was not scored and why; --dataset names the folder to use; scoring a text never needs the dataset."""
+        import compare_models
+        tok = self.sentencepiece()
+        ck = self.save_checkpoint(toy_model(9, ctx=64, vocab=tok.vocab_size), "detect.pt",
+                                  tokenizer={"proto": tok.proto, **tok.meta()},
+                                  dataset={"path": "no_such_dataset_x", "fingerprint": "f0"})
+        out, message = self.detect(["--calibrate", "--checkpoint", ck])
+        self.assertIsNone(message)
+        self.assertIn("sample 'A GWAS'", out)
+        self.assertIn("validation text not scored: ", out)
+        self.assertIn("no_such_dataset_x", out)
+        self.assertNotIn("written by people", out)
+        seen = []
+
+        def documents(folder, per_source, max_chars):
+            seen.append(folder)
+            return [("wiki", 3, "Genetic drift changes allele frequencies by chance. " * 5)]
+        with unittest.mock.patch.object(compare_models, "validation_documents", documents):
+            out, message = self.detect(["--calibrate", "--checkpoint", ck, "--dataset", "some_folder"])
+        self.assertIsNone(message)
+        self.assertEqual(seen, ["some_folder"])
+        self.assertIn("written by people", out)
+        self.assertIn("wiki document 3", out)
+        self.assertNotIn("not scored", out)
+        with unittest.mock.patch.object(tiny_gpt, "resolve_dataset", side_effect=AssertionError("not needed")):
+            out, message = self.detect(["Genetic drift is random.", "--checkpoint", ck])
+        self.assertIsNone(message)
+        self.assertIn("Likelihood test", out)
+
     # ---- posttrain.py -----------------------------------------------------------------------------------
     def posttrain_data(self, tag):
         folder = os.path.join(self.tmp, tag)
