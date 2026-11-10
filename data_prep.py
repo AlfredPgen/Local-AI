@@ -2901,24 +2901,47 @@ def _lock_owner_alive(lock):
     return True
 
 
-def _acquire_lock(lock):
+def _lock_being_written(lock, window=10.0):
+    """True for a lock file that cannot be read as a lock and is under `window`
+    seconds old: another process has just created it and is about to write it
+    (an empty lock left by a crash blocks a restart for those seconds only)."""
+    try:
+        with open(lock, encoding="utf-8") as handle:
+            int(json.load(handle)["pid"])
+        return False
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    try:
+        return time.time() - os.path.getmtime(lock) < window
+    except OSError:
+        return False
+
+
+def _acquire_lock(lock, busy=None):
     """Mark --out as being built by this process (a second run then refuses
-    instead of deleting a build in progress); removed when the build ends."""
+    instead of deleting a build in progress); removed when the build ends.
+    `busy` replaces the message of the SystemExit raised when another process
+    holds the lock (for callers that lock something other than a build)."""
     started = None
     try:
         import psutil
         started = psutil.Process().create_time()
     except Exception:  # noqa: BLE001 - without psutil only the process id is checked
         pass
+    if busy is None:
+        busy = (f"{os.path.dirname(lock)} is being built by another data_prep.py run "
+                f"(see {lock}). Wait for it to finish, or stop it first.")
     for attempt in (1, 2):
         try:
             fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
             break
         except FileExistsError:
-            if attempt == 2 or _lock_owner_alive(lock):
-                raise SystemExit(f"{os.path.dirname(lock)} is being built by another data_prep.py run "
-                                 f"(see {lock}). Wait for it to finish, or stop it first.")
-            os.remove(lock)  # stale: its build ended without removing it
+            if attempt == 2 or _lock_owner_alive(lock) or _lock_being_written(lock):
+                raise SystemExit(busy)
+            try:
+                os.remove(lock)  # stale: its build ended without removing it
+            except OSError:  # held open by another process (Windows): it is not stale after all
+                raise SystemExit(busy)
     with os.fdopen(fd, "w", encoding="utf-8") as handle:
         json.dump({"pid": os.getpid(), "started": started}, handle)
     return lock

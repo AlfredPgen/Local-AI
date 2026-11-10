@@ -361,6 +361,30 @@ class Audit2DataPrep(unittest.TestCase):
         self.assertLessEqual(len(started), 4, "2 scored + at most 2 running; the other 8 were never started")
         self.assertLess(waited, 2.0, "12 files at 0.5 s on 2 threads take 3 s when all are waited for")
 
+    # ---------------- F265: a lock that exists but is not written yet belongs to a live process ----------------
+    def test_lock_created_but_not_yet_written_is_not_stale(self):
+        folder = self.folder("f265")
+        lock = os.path.join(folder, data_prep.LOCK_NAME)
+        fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)  # another start, between creating and writing
+        try:
+            with self.assertRaises(SystemExit) as stop:
+                data_prep._acquire_lock(lock)
+            self.assertIn("is being built by another data_prep.py run", str(stop.exception))
+            with self.assertRaises(SystemExit) as stop:
+                data_prep._acquire_lock(lock, busy="Run 'x' is being trained by another process.")
+            self.assertEqual(str(stop.exception), "Run 'x' is being trained by another process.")
+        finally:
+            os.close(fd)
+        self.assertEqual(os.path.getsize(lock), 0, "the other process's lock was not touched")
+        # the same empty file left by a crash is stale once it is older than ten seconds
+        old = time.time() - 60
+        os.utime(lock, (old, old))
+        self.assertEqual(data_prep._acquire_lock(lock), lock)
+        with open(lock, encoding="utf-8") as f:
+            self.assertEqual(json.load(f)["pid"], os.getpid())
+        data_prep._release_lock(lock)
+        self.assertFalse(os.path.exists(lock))
+
     def test_an_error_in_the_leakage_audit_still_only_skips_it(self):
         out = os.path.join(self.tmp, "f057err")
         real = data_prep._audit_chunk
