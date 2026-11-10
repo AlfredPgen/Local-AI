@@ -379,7 +379,8 @@ def run(args):
     for f in ("sft.jsonl", "dpo.jsonl", "eval_mcq.jsonl"):
         if not os.path.isfile(os.path.join(args.data_dir, f)):
             raise SystemExit(f"{os.path.join(args.data_dir, f)} is missing: run `python posttrain.py data` first.")
-    if args.device != "cpu" and finetune.gpu_busy(args.out_dir):
+    # the device that will be used, not the --device text: `auto` without a usable GPU is a CPU job
+    if tiny_gpt.select_device(args.device).type != "cpu" and finetune.gpu_busy(args.out_dir):
         raise SystemExit(tiny_gpt.GPU_BUSY_MESSAGE)
     # --force: the GPU was checked above; this process's own cached memory from SFT must not count as busy for DPO
     common = ["--out-dir", args.out_dir, "--device", args.device, "--force", "--seed", str(args.seed)] \
@@ -447,7 +448,7 @@ def main(argv=None):
     else:
         import finetune
         import tiny_gpt
-        if args.device != "cpu" and not args.force and finetune.gpu_busy():
+        if tiny_gpt.select_device(args.device).type != "cpu" and not args.force and finetune.gpu_busy():
             raise SystemExit(tiny_gpt.GPU_BUSY_MESSAGE + " (Or use --device cpu, or pass --force.)")
         evaluate(args.checkpoints, args)
 

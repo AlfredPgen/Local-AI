@@ -337,9 +337,9 @@ class Audit2FinetuneTools(unittest.TestCase):
         self.assertIn(os.path.join(empty, "eval_mcq.jsonl"), message)
         self.assertIn("posttrain.py data", message)
 
-    def posttrain_run(self, tag, extra, busy=lambda out_dir=None: False):
-        """posttrain.main(['run', ...]) with finetune.main and evaluate replaced by recorders and the busy check
-        by `busy`. Returns (calls, out_dir, exit message or None)."""
+    def posttrain_run(self, tag, extra, busy=lambda out_dir=None: False, device="cpu"):
+        """posttrain.main(['run', ...]) with finetune.main and evaluate replaced by recorders, the busy check by
+        `busy`, and `device` as the device that is selected. Returns (calls, out_dir, exit message or None)."""
         import finetune
         import posttrain
         data = self.posttrain_data(tag)
@@ -354,6 +354,8 @@ class Audit2FinetuneTools(unittest.TestCase):
         with unittest.mock.patch.object(finetune, "main", fake_main), \
                 unittest.mock.patch.object(finetune, "gpu_busy", busy), \
                 unittest.mock.patch.object(tiny_gpt, "gpu_busy", lambda *dirs: False), \
+                unittest.mock.patch.object(tiny_gpt, "select_device",
+                                           lambda preference="auto": torch.device(device)), \
                 unittest.mock.patch.object(posttrain, "evaluate", lambda checkpoints, args: None), \
                 redirect_stdout(io.StringIO()):
             try:
@@ -371,11 +373,11 @@ class Audit2FinetuneTools(unittest.TestCase):
         def busy(out_dir=None):
             seen.append(out_dir)
             return out_dir is not None and os.path.basename(out_dir) == "out"
-        calls, out_dir, message = self.posttrain_run("busy_out_dir", ["--device", "cuda"], busy)
+        calls, out_dir, message = self.posttrain_run("busy_out_dir", ["--device", "cuda"], busy, device="cuda")
         self.assertEqual(seen, [out_dir])
         self.assertEqual(message, tiny_gpt.GPU_BUSY_MESSAGE)
         self.assertEqual(calls, [], "stopped before SFT")
-        calls, _, message = self.posttrain_run("free_out_dir", ["--device", "cuda"])
+        calls, _, message = self.posttrain_run("free_out_dir", ["--device", "cuda"], device="cuda")
         self.assertIsNone(message)
         self.assertEqual([c[0] for c in calls], ["sft", "dpo"])
 
@@ -395,6 +397,35 @@ class Audit2FinetuneTools(unittest.TestCase):
         with redirect_stderr(io.StringIO()) as err, self.assertRaises(SystemExit):
             posttrain.parse_args(["eval", "x.pt", "--seed", "3"])
         self.assertIn("--seed", err.getvalue())
+
+    def test_posttrain_busy_check_uses_the_selected_device(self):
+        """F184: the busy check looks at the device that was selected, not at the --device text: with no usable
+        GPU the default --device auto runs on the CPU and is not refused as 'GPU is busy'."""
+        import finetune
+        import posttrain
+        data = self.posttrain_data("busy_selected")
+        seen = []
+
+        def evaluate_on(device, argv):
+            with unittest.mock.patch.object(tiny_gpt, "select_device",
+                                            lambda preference="auto": torch.device(device)), \
+                    unittest.mock.patch.object(finetune, "gpu_busy", lambda out_dir=None: True), \
+                    unittest.mock.patch.object(posttrain, "evaluate", lambda checkpoints, args: seen.append(device)):
+                posttrain.main(["eval", "x.pt", "--data-dir", data, *argv])
+        evaluate_on("cpu", [])
+        self.assertEqual(seen, ["cpu"], "--device auto without a usable GPU is a CPU job")
+        with self.assertRaises(SystemExit) as caught:
+            evaluate_on("cuda", [])
+        self.assertIn(tiny_gpt.GPU_BUSY_MESSAGE, str(caught.exception.code))
+        evaluate_on("cuda", ["--force"])
+        self.assertEqual(seen, ["cpu", "cuda"])
+        busy = lambda out_dir=None: True  # noqa: E731
+        calls, _, message = self.posttrain_run("busy_selected_run", [], busy)
+        self.assertIsNone(message)
+        self.assertEqual([c[0] for c in calls], ["sft", "dpo"])
+        calls, _, message = self.posttrain_run("busy_selected_gpu", [], busy, device="cuda")
+        self.assertEqual(message, tiny_gpt.GPU_BUSY_MESSAGE)
+        self.assertEqual(calls, [])
 
     def test_posttrain_reuse_sft(self):
         """F163: posttrain run --reuse-sft skips SFT when <name>_sft.pt is an SFT made from this --base, and DPO
