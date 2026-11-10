@@ -1892,7 +1892,10 @@ def _pass2_doc(source, text):
         text = _squeeze_blank_runs("\n".join(kept_lines)).strip()
     sig = None
     if p["near"] and text and len(text) >= p["min_chars"]:
-        sig = p["minhasher"].signature(p["hasher"].shingles(text, 5))
+        shingles = p["hasher"].shingles(text, 5)
+        if not len(shingles):  # a text without a word: its own hash, so only a copy of it has the same signature
+            shingles = np.asarray([int(normalised_hash(text)[:16], 16)], dtype=np.uint64)
+        sig = p["minhasher"].signature(shingles)
     return text, removed, sig
 
 

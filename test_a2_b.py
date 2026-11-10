@@ -1137,6 +1137,37 @@ class Audit2DataPrep(unittest.TestCase):
         self.assertTrue(data_prep.looks_english(english * 100))
         self.assertTrue(data_prep.looks_english("| a | b |\n|---|---|\n" * 1_000), "tables and code are kept as before")
 
+    # ---------------- F096: two different texts without a word are not near-duplicates ----------------
+    WORDLESS = ("!!! ??? ... " * 40, "--- *** ((( " * 40)
+
+    def test_texts_without_words_get_their_own_signatures(self):
+        data_prep._init_pass2({}, "off", 20, 1, True, 1234)
+        sigs = [data_prep._pass2_doc("md", text)[2] for text in self.WORDLESS]
+        self.assertTrue(all(s is not None and s.shape == sigs[0].shape for s in sigs))
+        self.assertFalse(np.array_equal(sigs[0], sigs[1]), "different texts, different signatures")
+        self.assertTrue(np.array_equal(sigs[0], data_prep._pass2_doc("md", self.WORDLESS[0])[2]), "same text, same one")
+        self.assertTrue(np.array_equal(sigs[0], data_prep._pass2_doc("md", "  !!!   ???  ...   " * 40)[2]),
+                        "blanks do not count, as for the exact duplicates")
+        # a text with words keeps the signature of its shingles
+        text = "Genetic drift changes the frequency of an allele by chance in every generation. " * 5
+        hasher, minhasher = data_prep.ShingleHasher(), data_prep.MinHasher(128, 1234)
+        self.assertTrue(np.array_equal(data_prep._pass2_doc("md", text)[2],
+                                       minhasher.signature(hasher.shingles(text, 5))))
+
+    def test_near_dup_drop_keeps_two_different_texts_without_words(self):
+        folder = self.folder("f096_in")
+        for name, text in zip(("marks.md", "rules.md"), self.WORDLESS):
+            with open(os.path.join(folder, name), "w", encoding="utf-8", newline="\n") as handle:
+                handle.write(text + "\n")
+        out = os.path.join(self.tmp, "f096")
+        with redirect_stdout(io.StringIO()):
+            data_prep.prepare(["--out", out, "--md-dir", f"sym={folder}", "--near-dup", "drop"] + self.base_args())
+        rows = [line.split("\t") for line in read_file(os.path.join(out, "docs.tsv")).splitlines()]
+        status = {row[1]: (row[3], row[4]) for row in rows if row[0] == "sym"}
+        self.assertEqual(len(status), 2, status)
+        self.assertTrue(all(s in ("train", "val") for s, _ in status.values()), status)
+        self.assertNotIn("\tsym\t", read_file(os.path.join(out, "duplicates.tsv")))
+
 
 if __name__ == "__main__":
     unittest.main()
