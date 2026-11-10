@@ -155,6 +155,37 @@ class Audit2Benchmark(unittest.TestCase):
         self.assertTrue([text for text in legend if "floor" in text], legend)
         self.assertIn("green above floor", xlabel)
 
+    def test_progress_plot_draws_one_line_per_model(self):
+        """F004: the progress plot never joins two models into one line: one line per (benchmark, model), a model
+        being a checkpoint name without _best/_final plus its parameter count; the line style tells the models
+        apart, the colour the benchmarks, and from the ninth benchmark on the marker changes too."""
+        import view_pt as vp
+
+        def scored(checkpoint, params, steps, benches):
+            return [{"checkpoint": checkpoint, "params": params, "step": step, "benchmark": bench, "category": "all",
+                     "accuracy": 0.2 + 0.02 * k, "floor": 0.2} for step in steps for k, bench in enumerate(benches)]
+
+        nine = [f"bench{k}" for k in range(9)]
+        small = scored("m/small_best.pt", 1000000, (1000, 2000), nine)
+        # one model (its _best and _final files): one line per benchmark, the bare name in the legend, inside
+        ax = self.plot_figures("f004_one", small + scored("m/small_final.pt", 1000000, (3000,), nine)
+                               )[0]["progress.png"].axes[0]
+        self.assertEqual([line.get_label() for line in ax.lines], nine)
+        self.assertEqual({len(line.get_xdata()) for line in ax.lines}, {3})
+        self.assertEqual({line.get_linestyle() for line in ax.lines}, {"-"})
+        self.assertEqual([line.get_color() for line in ax.lines], vp.SERIES + vp.SERIES[:1])
+        self.assertEqual([line.get_marker() for line in ax.lines], ["o"] * 8 + ["s"])
+        self.assertLess(ax.get_legend().get_bbox_to_anchor().x0, ax.bbox.x1)
+        # two models scored at different steps: two lines per benchmark, the model in the label, legend outside
+        ax = self.plot_figures("f004_two", small + scored("m/big_best.pt", 5000000, (1500, 2500), nine[:2])
+                               )[0]["progress.png"].axes[0]
+        self.assertEqual([(line.get_label(), line.get_linestyle(), list(line.get_xdata())) for line in ax.lines[:4]],
+                         [("bench0: big (5.0M)", "-", [1500.0, 2500.0]), ("bench0: small (1.0M)", "--", [1000.0, 2000.0]),
+                          ("bench1: big (5.0M)", "-", [1500.0, 2500.0]), ("bench1: small (1.0M)", "--", [1000.0, 2000.0])])
+        self.assertEqual(len(ax.lines), 2 * 2 + 7)
+        self.assertEqual(ax.lines[0].get_color(), ax.lines[1].get_color())
+        self.assertGreater(ax.get_legend().get_bbox_to_anchor().x0, ax.bbox.x1)
+
     def test_medcalc_rows_name_the_integer_rule(self):
         """F016: MedCalc rows scored with the official integer rule say so in their notes (earlier rows of
         results/benchmarks.csv used rounding for the 34 'integer' items whose answer is not a whole number)."""

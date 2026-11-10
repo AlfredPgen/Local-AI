@@ -1386,14 +1386,23 @@ def cmd_plot(args):
         steps_known = all(_f(s) is not None for _, s in runs) and len({s for _, s in runs}) == len(runs)
         xpos = {cs: (_f(cs[1]) if steps_known else i) for i, cs in enumerate(runs)}
         benches = sorted({r["benchmark"] for r in overall})
-        for i, b in enumerate(benches):
-            pts = {}
-            for r in overall:
-                if r["benchmark"] == b:
-                    pts[xpos[(r["checkpoint"], r["step"])]] = _f(r["accuracy"])
-            xs = sorted(pts)
-            ax.plot(xs, [pts[x] for x in xs], color=vp.SERIES[i % len(vp.SERIES)], lw=1.8, marker="o", ms=3.5,
-                    label=b)
+
+        def model_of(r):  # a model: its _best and _final files, at one size; two models never share a line
+            stem = os.path.splitext(os.path.basename(r["checkpoint"].replace("\\", "/")))[0]
+            return re.sub(r"_(best|final)$", "", stem), r["params"]
+
+        models = sorted({model_of(r) for r in overall})
+        for i, b in enumerate(benches):  # colour (and from the ninth on the marker): benchmark; line style: model
+            for g, model in enumerate(models):
+                pts = {xpos[(r["checkpoint"], r["step"])]: _f(r["accuracy"]) for r in overall
+                       if r["benchmark"] == b and model_of(r) == model}
+                if not pts:
+                    continue
+                xs = sorted(pts)
+                size = f" ({_f(model[1]) / 1e6:.1f}M)" if _f(model[1]) else ""
+                ax.plot(xs, [pts[x] for x in xs], color=vp.SERIES[i % len(vp.SERIES)], lw=1.8,
+                        ls=("-", "--", ":", "-.")[g % 4], marker="os^"[i // len(vp.SERIES) % 3], ms=3.5,
+                        label=b if len(models) == 1 else f"{b}: {model[0]}{size}")
         if not steps_known:
             ax.set_xticks(range(len(runs)))
             ax.set_xticklabels([f"{os.path.basename(c.replace(chr(92), '/'))}\nstep {s}" for c, s in runs],
@@ -1401,7 +1410,10 @@ def cmd_plot(args):
         ax.set_xlabel("training step" if steps_known else "checkpoint")
         ax.set_ylabel("accuracy (latest run of each checkpoint)")
         ax.set_ylim(0, 1)
-        ax.legend(loc="upper left", ncols=3)
+        if len(models) == 1:
+            ax.legend(loc="upper left", ncols=3)
+        else:  # one entry per benchmark and model: beside the axes, not over the lines
+            ax.legend(loc="upper left", bbox_to_anchor=(1.01, 1.0), ncols=1 + len(ax.lines) // 30)
         ax.set_title("Benchmark progress over checkpoints", loc="left")
         out = os.path.join(args.out_dir, "progress.png")
         fig.savefig(out, dpi=args.dpi, facecolor=vp.SURFACE)
