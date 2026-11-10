@@ -1937,8 +1937,9 @@ class EnergyMeter:
             added = 0.0
             if gpu_w is not None:  # trapezoid between samples
                 previous = self._last_gpu_w if self._last_gpu_w is not None else gpu_w
-                added += (previous + gpu_w) / 2 * hours
-                self.wh["gpu"] += (previous + gpu_w) / 2 * hours
+                gpu_wh = (previous + gpu_w) / 2 * hours
+                added += gpu_wh
+                self.wh["gpu"] += gpu_wh
                 self._last_gpu_w = gpu_w
             self.wh["cpu"] += cpu_w * hours
             self.wh["ram"] += ram_w * hours
