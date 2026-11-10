@@ -2951,6 +2951,11 @@ def plan_run(args, manifest, device, amp_dtype, token_cap=None, fixed_cfg=None, 
         tps = target_tps(cfg)
         amp, opt_kind = amp_dtype is not None, args.optimizer or "adamw"
         if args.batch_size:
+            if fixed_cfg is None and not explicit_shape:
+                # a ladder shape must fit at batch 1 with some memory option whatever --batch-size says: the
+                # SystemExit of this call sends the candidate loop below to the next smaller shape
+                choose_memory_plan(cfg, tps, budget_bytes, amp, opt_kind, args.activation_checkpointing,
+                                   args.loss_chunk_tokens, device=device, doc_mask=doc_mask)
             micro, accum, ck, lc = choose_memory_plan(cfg, tps, budget_bytes, amp, opt_kind,
                                                       args.activation_checkpointing, args.loss_chunk_tokens,
                                                       micro=args.batch_size, device=device, doc_mask=doc_mask)

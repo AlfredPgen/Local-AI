@@ -241,3 +241,37 @@ class Audit2TinyGptB(unittest.TestCase):
         self.assertIn("--steps", argv)
         _, st_ex, lines_ex = self._plan(argv, self.BIG)
         self.assertFalse(any("WARNING" in ln for ln in lines_ex), lines_ex)
+
+    def test_batch_size_keeps_the_memory_fallback_of_the_shape(self):
+        """F337: --batch-size without shape options still lets the planner fall back to a smaller ladder shape
+        when the data-chosen one cannot fit at batch 1 with every memory saving; an explicit shape is kept (with
+        its warning), and a batch that is too large for a shape that fits keeps the warning."""
+        manifest = {"tokenizer": {"vocab_size": 16384}, "sources": {
+            "wiki": {"train": {"tokens": 1_430_000_000}}, "pmc": {"train": {"tokens": 1_105_000_000}},
+            "fineweb": {"train": {"tokens": 810_000_000}}, "pes2o": {"train": {"tokens": 441_000_000}},
+            "arxiv": {"train": {"tokens": 170_000_000}}, "books": {"train": {"tokens": 20_000_000}},
+            "notes": {"train": {"tokens": 24_000_000}}}}
+
+        def plan(argv):
+            args = tiny_gpt.parse_args(["--name", "x", "--optimizer", "muon"] + argv)
+            with budget_of(5.6):
+                return tiny_gpt.plan_run(args, manifest, CPU, torch.bfloat16)
+
+        auto, st_auto, lines_auto = plan([])
+        self.assertEqual(auto.d_model, 1024)
+        self.assertIn("does not fit in memory", "\n".join(lines_auto))
+        for batch in ("1", "2", "64"):
+            cfg, st, lines = plan(["--batch-size", batch])
+            text = "\n".join(lines)
+            self.assertEqual((cfg.d_model, cfg.n_layers, cfg.ctx), (auto.d_model, auto.n_layers, auto.ctx), batch)
+            self.assertEqual(st["micro_batch"], int(batch))
+            self.assertIn("does not fit in memory, so the largest that fits", text)
+            self.assertEqual("WARNING: batch 64 x ctx 1024 may not fit" in text, batch == "64", text)
+        kept, _, lines_kept = plan(["--d-model", "1536", "--batch-size", "2"])
+        self.assertEqual(kept.d_model, 1536)
+        self.assertIn("WARNING: batch 2 x ctx 2048 may not fit", "\n".join(lines_kept))
+        # nothing on the ladder fits at batch 1: an error, as without --batch-size
+        tiny = tiny_gpt.parse_args(["--name", "x", "--batch-size", "2"])
+        with budget_of(0.01), self.assertRaises(SystemExit) as caught:
+            tiny_gpt.plan_run(tiny, manifest, CPU, torch.bfloat16)
+        self.assertIn("does not fit in memory even at batch 1", str(caught.exception))
