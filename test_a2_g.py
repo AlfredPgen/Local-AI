@@ -190,6 +190,44 @@ class Audit2FinetuneTools(unittest.TestCase):
         self.assertEqual(os.path.dirname(cpu), cp.CACHE_DIR)
         self.assertNotEqual(cp.cache_file("org/a", "0123", "cpu", True), cpu)
 
+    def test_calibration_closes_the_files_it_reads(self):
+        """F209 (calibrate_probes half): the probe file, a sharded checkpoint's index and the model's config.json
+        are read in with blocks: no unclosed-file warning."""
+        import gc
+        import types
+        import warnings
+        import calibrate_probes as cp
+        folder = os.path.join(self.tmp, "closed_files")
+        os.makedirs(folder)
+
+        def write(name, text):
+            with open(os.path.join(folder, name), "w", encoding="utf-8", newline="\n") as f:
+                f.write(text)
+            return os.path.join(folder, name)
+        probes = write("probes.tsv", "# toy\ngenetics\tunrated\tGenes are made of\tDNA\tRNA|fat\n")
+        write("model.safetensors.index.json", json.dumps({"weight_map": {"a": "part2", "b": "part1", "c": "part2"}}))
+        config = write("config.json", "{}")
+
+        def hub(repo, name):
+            if name == "model.safetensors":
+                raise OSError("a sharded checkpoint has no single weights file")
+            return os.path.join(folder, name)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            cp.rewrite_difficulties(probes, ["easy"])
+            stub = types.SimpleNamespace(hf_hub_download=hub)
+            with unittest.mock.patch.dict(sys.modules, {"huggingface_hub": stub}):
+                files = cp.download("org/a")
+            found = {"config.json": config, "tokenizer.json": "t", "weights": []}
+            with unittest.mock.patch.object(cp, "download", lambda repo: found), \
+                    unittest.mock.patch.object(cp, "tinygpt_from_llama", lambda *a: ("model", "cfg")), \
+                    unittest.mock.patch.object(cp, "HFTokenizer", lambda path: "tok"):
+                self.assertEqual(cp.load_llama("org/a"), ("model", "tok", "cfg"))
+            gc.collect()
+        self.assertEqual(files["weights"], [os.path.join(folder, "part1"), os.path.join(folder, "part2")])
+        self.assertEqual(tiny_gpt.read_probes(probes)[0]["difficulty"], "easy")
+        self.assertEqual([str(w.message) for w in caught if issubclass(w.category, ResourceWarning)], [])
+
     # ---- finetune.py ------------------------------------------------------------------------------------
     def finetune(self, folder, mode, base, name, epochs=2, extra=()):
         import finetune

@@ -65,7 +65,8 @@ def download(repo):
     try:
         files["weights"] = [hf_hub_download(repo, "model.safetensors")]
     except Exception:  # noqa: BLE001 - sharded checkpoints list their parts in an index
-        index = json.load(open(hf_hub_download(repo, "model.safetensors.index.json"), encoding="utf-8"))
+        with open(hf_hub_download(repo, "model.safetensors.index.json"), encoding="utf-8") as handle:
+            index = json.load(handle)
         files["weights"] = [hf_hub_download(repo, part) for part in sorted(set(index["weight_map"].values()))]
     return files
 
@@ -103,7 +104,8 @@ def interleave_rope_rows(w, n_heads):
 
 def load_llama(repo, ctx=512):
     files = download(repo)
-    config = json.load(open(files["config.json"], encoding="utf-8"))
+    with open(files["config.json"], encoding="utf-8") as handle:
+        config = json.load(handle)
     raw = {}
     for part in files["weights"]:
         raw.update(mmap_safetensors(part))
@@ -252,7 +254,8 @@ def rewrite_difficulties(path, labels):
     """Replace the difficulty column of each item line, keeping comments and order.
     Old three-column lines (prompt, answer, distractors) become five-column lines
     (category 'general'), the same items read_probes sees."""
-    lines = open(path, encoding="utf-8-sig").read().splitlines()
+    with open(path, encoding="utf-8-sig") as handle:
+        lines = handle.read().splitlines()
     out, k = [], 0
     for line in lines:
         parts = line.split("\t")
