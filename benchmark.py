@@ -1220,9 +1220,9 @@ def cmd_run(args):
     tiny_gpt.record_experiment(os.path.dirname(path), {
         "event": "benchmark suite", "name": os.path.basename(path), "step": step, "params": params,
         "d_model": cfg.d_model, "layers": cfg.n_layers, "ctx": cfg.ctx, "vocab": cfg.vocab_size,
-        "device": tiny_gpt.device_label(device), "checkpoint": path,
-        "notes": "; ".join(notes) + f"; limit {args.limit or 'none'}; items in benchmarks\\runs\\"
-                                    f"{os.path.basename(run_dir)}"})
+        "device": device.type, "checkpoint": path,
+        "notes": "; ".join([tiny_gpt.device_label(device)] + notes)
+                 + f"; limit {args.limit or 'none'}; items in benchmarks\\runs\\{os.path.basename(run_dir)}"})
     return 0
 
 

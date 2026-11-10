@@ -89,6 +89,23 @@ class Audit2Benchmark(unittest.TestCase):
                 "category": "python", "kind": "code", "style": "humaneval", "test": "def check(c): pass",
                 "entry_point": "f", **extra}
 
+    def mcq_items(self):
+        options = ["alpha", "beta", "gamma"]
+        return [self.b.mcq_item(f"t{i}", f"Which gene number {i}?", options, options[i % 3],
+                                "genes" if i % 2 else "cells", ["biology"] if i < 3 else None) for i in range(6)]
+
+    def test_experiments_row_has_the_device_type(self):
+        """F008: the experiments.csv row of a benchmark run has the device type in `device`, as training rows
+        do; the hardware label opens the notes."""
+        import torch
+        import tiny_gpt
+        code, _, _, _, experiments = self.suite_run("f008", {"medqa": self.mcq_items()}, extra=["--no-floor"])
+        self.assertEqual((code, len(experiments)), (0, 1))
+        row = experiments[0]
+        self.assertEqual((row["event"], row["device"]), ("benchmark suite", "cpu"))
+        self.assertTrue(row["notes"].startswith(tiny_gpt.device_label(torch.device("cpu")) + "; medqa "),
+                        row["notes"])
+
     def test_medcalc_rows_name_the_integer_rule(self):
         """F016: MedCalc rows scored with the official integer rule say so in their notes (earlier rows of
         results/benchmarks.csv used rounding for the 34 'integer' items whose answer is not a whole number)."""
