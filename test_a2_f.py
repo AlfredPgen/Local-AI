@@ -214,6 +214,72 @@ class Audit2DocsYoutubeConvert(unittest.TestCase):
         self.assertEqual([e["title"] for e in entries], ["a", "b", "c", "d", "e"])
         self.assertEqual(channel["name"], "C")
 
+    # ---- convert_to_markdown.py -------------------------------------------------------------------------
+    def test_gwas_readers_agree_and_take_the_median_first(self):
+        """F027: the fast and the slow GWAS reader give the same counts, hits and lambda GC, and chi2.isf is
+        called on the one or two middle values only, not on every variant."""
+        import numpy as np
+        import scipy.stats
+        import convert_to_markdown as conv
+        header = ["SNP", "CHR", "BP", "A1", "BETA", "P"]
+        cols = conv.gwas_columns(header)
+        folder = os.path.join(self.tmp, "f027")
+        os.makedirs(folder)
+        real_isf, sizes = scipy.stats.chi2.isf, []
+
+        def isf(q, *a, **k):
+            sizes.append(np.size(q))
+            return real_isf(q, *a, **k)
+
+        for count in (40, 41):  # an even and an odd number of valid rows
+            rows, valid = [], []
+            for k in range(count):
+                p = (k + 0.5) / count
+                rows.append([f"rs{k}", ("chr" if k % 3 == 0 else "") + str(1 + k % 5), 1000 + 7 * k, "A",
+                             f"{0.01 * k:.2f}", f"{p:.6g}"])
+                valid.append(float(f"{p:.6g}"))
+            rows[3][1], rows[4][1] = "chrX", ""  # a named and an empty chromosome
+            rows[5][5], valid[5] = "3e-9", 3e-9
+            rows[6][5], valid[6] = "1e-320", 1e-300  # capped at 300 for lambda
+            rows[7][5], valid[7] = "0", 1e-300
+            rows += [["rsNA", "2", 5, "C", "0.5", "NA"], ["rsNoPos", "2", "", "C", "0.5", "0.5"]]  # both left out
+            path = os.path.join(folder, f"gwas{count}.tsv")
+            with open(path, "w", encoding="utf-8", newline="\n") as handle:
+                handle.write("\n".join("\t".join(map(str, r)) for r in [header] + rows) + "\n")
+            del sizes[:]
+            with unittest.mock.patch.object(scipy.stats.chi2, "isf", isf):
+                fast = conv._gwas_fast(path, header, "\t", cols, False)
+                slow = conv._gwas_slow(path, "\t", cols, False)
+            self.assertEqual(len(sizes), 2, sizes)
+            self.assertLessEqual(max(sizes), 2, sizes)
+            want = float(np.median(real_isf(np.array(valid), 1)) / 0.4549)
+            for name, (n, top, per_chr, lam) in (("fast", fast), ("slow", slow)):
+                with self.subTest(reader=name, rows=count):
+                    self.assertEqual(n, count)
+                    self.assertAlmostEqual(lam, want, delta=1e-6)
+                    self.assertEqual(per_chr["X"], 1)
+                    self.assertEqual(per_chr[""], 1)
+                    self.assertEqual(sum(per_chr.values()), count)
+            self.assertEqual(fast[0], slow[0])
+            self.assertEqual(dict(fast[2]), dict(slow[2]))
+            self.assertEqual({type(c) for c in fast[2]}, {str})
+            self.assertAlmostEqual(fast[3], slow[3], delta=1e-6)
+
+            def plain(top):
+                return sorted((round(nl, 9), chrom, pos, snp, float(beta), allele)
+                              for nl, chrom, pos, snp, beta, allele in top)
+
+            self.assertEqual(plain(fast[1]), plain(slow[1]))
+            self.assertEqual([t[3] for t in sorted(fast[1], key=lambda t: t[2])], ["rs5", "rs6", "rs7"])
+            self.assertEqual({type(t[1]) for t in fast[1]} | {type(t[2]) for t in fast[1]}, {str, int})
+        empty = os.path.join(folder, "none.tsv")  # no valid row: lambda is nan in both readers
+        with open(empty, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write("\t".join(header) + "\nrs1\t1\t5\tA\t0.1\tNA\n")
+        for n, top, per_chr, lam in (conv._gwas_fast(empty, header, "\t", cols, False),
+                                     conv._gwas_slow(empty, "\t", cols, False)):
+            self.assertEqual((n, top, per_chr), (0, [], {}))
+            self.assertTrue(np.isnan(lam))
+
 
 if __name__ == "__main__":
     unittest.main()

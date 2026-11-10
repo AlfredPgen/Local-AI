@@ -871,14 +871,28 @@ def _fmt_p(neglog):
     return f"{mantissa:.2f}e{exponent:+03d}"
 
 
+def _lambda_gc(neglogs):
+    """Genomic inflation factor from -log10 p values (capped at 300): the median
+    chi-square (1 df) / 0.4549. chi2.isf is monotone, so the median is taken
+    first and only the one or two middle values are converted (converting every
+    variant took about 95 % of the time of a GWAS summary)."""
+    import numpy as np
+    from scipy.stats import chi2 as chi2_dist
+    count = len(neglogs)
+    if not count:
+        return float("nan")
+    middle = [(count - 1) // 2, count // 2]  # the same index twice for an odd count
+    mids = np.partition(neglogs, middle)[middle]
+    return float(np.mean(chi2_dist.isf(np.power(10.0, -mids), 1)) / 0.4549)
+
+
 def _gwas_fast(path, header, delim, cols, neglog):
     """pyarrow's multi-threaded C++ CSV reader (gzip/bgzip handled natively) plus
-    vectorised statistics: a few seconds for a 500 MB compressed file."""
+    vectorised statistics: about a second per million variants."""
     import numpy as np
     import pyarrow as pa
     import pyarrow.compute as pc
     import pyarrow.csv as pacsv
-    from scipy.stats import chi2 as chi2_dist
     names = {k: header[i].strip() for k, i in cols.items()}
     strings = {names[k]: pa.string() for k in ("chr", "snp", "allele") if k in names}
     reader = pacsv.open_csv(
@@ -887,39 +901,35 @@ def _gwas_fast(path, header, delim, cols, neglog):
         convert_options=pacsv.ConvertOptions(
             include_columns=list(dict.fromkeys(names.values())), null_values=["NA", "nan", "NaN", "", ".", "-"],
             column_types={**strings, names["p"]: pa.float64(), names["pos"]: pa.float64()}))
-    n, chisq, top, per_chr = 0, [], [], {}
+    n, capped, top, per_chr = 0, [], [], {}
     for batch in reader:
         pv = batch.column(names["p"]).to_numpy(zero_copy_only=False).astype(float)
         with np.errstate(divide="ignore", invalid="ignore"):
             nl = pv if neglog else np.where(pv > 0, -np.log10(pv), np.where(pv == 0, np.inf, np.nan))
-        chrom = pc.fill_null(pc.replace_substring(batch.column(names["chr"]), "chr", ""), "?").to_numpy(
-            zero_copy_only=False)
+        chrom = pc.fill_null(pc.replace_substring(batch.column(names["chr"]), "chr", ""), "?")  # before the filter
         pos = batch.column(names["pos"]).to_numpy(zero_copy_only=False)
         ok = ~np.isnan(nl) & (nl >= 0) & np.isfinite(pos)
         n += int(ok.sum())
-        p = np.power(10.0, -np.minimum(nl[ok], 300.0))
-        chisq.append(chi2_dist.isf(p, 1).astype(np.float32))
-        values, counts = np.unique(chrom[ok], return_counts=True)
-        for v, c in zip(values, counts):
-            per_chr[v] = per_chr.get(v, 0) + int(c)
+        capped.append(np.minimum(nl[ok], 300.0))
+        for found in pc.value_counts(chrom.filter(pa.array(ok))).to_pylist():
+            per_chr[found["values"]] = per_chr.get(found["values"], 0) + found["counts"]
         sig = np.flatnonzero(ok & (nl > -math.log10(5e-8)))
-        if len(sig):
-            snps = batch.column(names["snp"]).to_pylist() if "snp" in names else None
-            betas = batch.column(names["beta"]).to_pylist() if "beta" in names else None
-            alleles = batch.column(names["allele"]).to_pylist() if "allele" in names else None
-            for i in sig:
-                top.append((float(nl[i]), chrom[i], int(pos[i]), snps[i] if snps else f"{chrom[i]}:{int(pos[i])}",
-                            betas[i] if betas else "?", alleles[i] if alleles else None))
-    all_chi = np.concatenate(chisq) if chisq else np.zeros(0)
-    lam = float(np.median(all_chi) / 0.4549) if len(all_chi) else float("nan")
-    return n, top, per_chr, lam
+        if len(sig):  # only the significant rows become Python objects, not the whole 64 MB block
+            rows = pa.array(sig)
+            chroms = chrom.take(rows).to_pylist()
+            snps = batch.column(names["snp"]).take(rows).to_pylist() if "snp" in names else None
+            betas = batch.column(names["beta"]).take(rows).to_pylist() if "beta" in names else None
+            alleles = batch.column(names["allele"]).take(rows).to_pylist() if "allele" in names else None
+            for k, i in enumerate(sig):
+                top.append((float(nl[i]), chroms[k], int(pos[i]), snps[k] if snps else f"{chroms[k]}:{int(pos[i])}",
+                            betas[k] if betas else "?", alleles[k] if alleles else None))
+    return n, top, per_chr, _lambda_gc(np.concatenate(capped) if capped else np.zeros(0))
 
 
 def _gwas_slow(path, delim, cols, neglog):
     """Forgiving line-by-line reader: ragged rows, odd missing-value codes, runs of spaces."""
     import array
     import numpy as np
-    from scipy.stats import chi2 as chi2_dist
     n, top, per_chr, neglogs = 0, [], {}, array.array("d")
     decimal_comma = delim == ";"  # EU-locale CSV: '0,5' means 0.5
     with open_text(path) as handle:
@@ -953,9 +963,7 @@ def _gwas_slow(path, delim, cols, neglog):
                 beta = field("beta") if "beta" in cols and cols["beta"] < len(row) else "?"
                 allele = field("allele") if "allele" in cols and cols["allele"] < len(row) else None
                 top.append((nl, chrom, pos, snp, beta, allele))
-    values = np.frombuffer(neglogs, dtype=np.float64)
-    lam = float(np.median(chi2_dist.isf(np.power(10.0, -values), 1)) / 0.4549) if len(values) else float("nan")
-    return n, top, per_chr, lam
+    return n, top, per_chr, _lambda_gc(np.frombuffer(neglogs, dtype=np.float64))
 
 
 def convert_gwas(path, args, header, delim, cols):
