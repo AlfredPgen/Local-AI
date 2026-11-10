@@ -528,9 +528,9 @@ def download_one(spec, man, force=False):
     for f in spec["files"]:
         hf_hub_download(spec["repo"], f, repo_type="dataset", revision=info.sha, local_dir=raw_dir,
                         force_download=force)
-    items = spec["normalise"](raw_paths)
-    bad = [(it["id"], why) for it in items if (why := valid_item(it))]
-    items = [it for it in items if not valid_item(it)]
+    checked = [(it, valid_item(it)) for it in spec["normalise"](raw_paths)]
+    bad = [(it["id"], why) for it, why in checked if why]
+    items = [it for it, why in checked if not why]
     items_path = os.path.join(folder, "items.jsonl")
     write_items(items_path, items)
     entry = {"title": spec["title"], "group": spec["group"], "kind": spec["kind"], "grading": spec["grading"],
