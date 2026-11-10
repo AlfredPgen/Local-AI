@@ -1441,17 +1441,29 @@ def _rate(v):
     return f"{v:.4f}" if abs(v) >= 1e-4 else f"{v:.1e}"
 
 
+def improvement_width(points, window=1000):
+    """Steps in each of the two groups of evaluations that improvement_points compares: `window`, or the usual
+    distance between evaluations when that is larger (--eval-every above 1,000: one evaluation a group)."""
+    gaps = np.diff(sorted({s for s, _ in points}))
+    return max(window, int(np.median(gaps))) if len(gaps) else window
+
+
 def improvement_points(points, start=0, window=1000):
-    """(step s, fall of the loss per `window` steps) at the evaluations with s >= start + 2 x window: the mean
-    over the evaluations in (s - 2 x window, s - window] minus the mean over those in (s - window, s]."""
+    """(step s, fall of the loss per `window` steps) at the evaluations with s >= start + 2 x width, width from
+    improvement_width: the mean over the evaluations in (s - 2 x width, s - width] minus the mean over those
+    in (s - width, s], over the distance between the two groups' mean steps (`window` steps when the
+    evaluations divide it evenly; any other --eval-every would give the fall over more steps than it says)."""
+    width = improvement_width(points, window)
     out = []
     for s, _ in points:
-        if s < start + 2 * window:
+        if s < start + 2 * width:
             continue
-        before = [v for t, v in points if s - 2 * window < t <= s - window]
-        recent = [v for t, v in points if s - window < t <= s]
+        before = [(t, v) for t, v in points if s - 2 * width < t <= s - width]
+        recent = [(t, v) for t, v in points if s - width < t <= s]
         if before and recent:
-            out.append((s, float(np.mean(before) - np.mean(recent))))
+            apart = np.mean([t for t, _ in recent]) - np.mean([t for t, _ in before])
+            fall = np.mean([v for _, v in before]) - np.mean([v for _, v in recent])
+            out.append((s, float(fall * (window / apart))))
     return out
 
 
@@ -1473,14 +1485,16 @@ def panel_improvement(ax, history, ck):
             ax.annotate(_rate(rate[-1][1]), rate[-1], xytext=(5, 0), textcoords="offset points", va="center",
                         fontsize=_SIZE["note"], color=INK2)
         drew += 1
+    width = improvement_width(_series(history, "val_loss"))  # 1,000, or more when the evaluations are further apart
     if not drew:
-        return message(ax, f"Drawn once four evaluations lie at or after step {2000 + warm:,}:\nthe fall of the "
-                           "validation loss from one 1,000 steps to the next.", title)
+        return message(ax, f"Drawn once four evaluations lie at or after step {2 * width + warm:,}:\nthe fall of "
+                           f"the validation loss from one {width:,} steps to the next.", title)
     _log_y(ax)
     ax.set_xlabel("optimizer step")
     ax.set_ylabel("nats per 1,000 steps (log)")
     place_legend(ax)
-    titled(ax, title, _history_sub(ck, "mean validation loss of the 1,000 steps before, minus that of the last 1,000"
+    titled(ax, title, _history_sub(ck, f"mean validation loss of the {width:,} steps before, minus that of the last "
+                                       f"{width:,}" + (", per 1,000 steps" if width != 1000 else "")
                                        + (f"; {hidden} value{'s' if hidden != 1 else ''} at or below 0 not drawn"
                                           if hidden else "")))
 
@@ -1563,11 +1577,12 @@ def plan_lines(history, ck):
                     + (f" (best {float(best):.3f} @{best_step:,})" if _finite(best) and _finite(best_step) else ""),
                     " | ".join(([f"at the training mix {mix:.3f}"] if mix is not None else [])
                                + ([f"training {last['train_loss']:.3f}"] if _finite(last.get("train_loss")) else []))))
-    rate = improvement_points(_series(history, "val_loss"), int(tc.get("warmup_steps") or 0))
+    scores = _series(history, "val_loss")
+    rate = improvement_points(scores, int(tc.get("warmup_steps") or 0))
     if rate:
         gain, detail = rate[-1][1], ""
         timed = [(h["step"], h["train_seconds"]) for h in history
-                 if _finite(h.get("train_seconds")) and _finite(step) and h["step"] >= step - 1000]
+                 if _finite(h.get("train_seconds")) and _finite(step) and h["step"] >= step - improvement_width(scores)]
         if len(timed) > 1 and timed[-1][1] > timed[0][1]:
             per_day = gain / 1000 * (timed[-1][0] - timed[0][0]) / (timed[-1][1] - timed[0][1]) * 86400
             detail = f"{per_day:.3f} per 24 h of training"

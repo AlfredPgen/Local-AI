@@ -364,6 +364,28 @@ class Audit2Viewer(unittest.TestCase):
         self.assertEqual(sorted(got), [2500, 3000, 3500, 4000], "from 2,000 steps after the warm-up")
         self.assertAlmostEqual(got[3000], 1.0, places=12)
         self.assertEqual(view_pt.improvement_points(pts[:3]), [])
+        # per 1,000 steps whatever --eval-every was: a loss that falls 1.0 per 1,000 steps gives 1.0
+        for every in (200, 600, 800, 1000, 1500, 2000, 5000):
+            line = [(s, 100.0 - s / 1000) for s in range(0, 60_001, every)]
+            got = view_pt.improvement_points(line, start=400)
+            self.assertGreaterEqual(len(got), 8, every)
+            for s, v in got:
+                self.assertAlmostEqual(v, 1.0, places=9, msg=(every, s))
+        self.assertEqual(view_pt.improvement_width(pts), 1000)
+        self.assertEqual(view_pt.improvement_width(line), 5000, "evaluations further apart than 1,000 steps")
+        sparse = [dict(h, step=10 * h["step"], val_loss=100.0 - h["step"] / 100, val_mix=None, val_per_source=None)
+                  for h in full]  # 2,000 steps apart, 1.0 down per 1,000 steps
+        fig, ax = one_axes()
+        view_pt.panel_improvement(ax, sparse, ck)
+        self.assertNotIn("Drawn once", said(ax))
+        self.assertIn("of the 2,000 steps before, minus that of the last 2,000, per 1,000 steps", said(ax))
+        self.assertEqual(len(ax.get_lines()), 1)
+        fig, ax = one_axes()
+        view_pt.panel_improvement(ax, sparse[:5], ck)
+        self.assertIn("at or after step 4,400", said(ax), "two 2,000-step windows after the warm-up of 400")
+        plan = dict(view_pt.plan_lines(sparse, ck))
+        self.assertIn("improving 1.0000 per 1,000 steps", plan)
+        self.assertRegex(plan["improving 1.0000 per 1,000 steps"], r"^\d+\.\d{3} per 24 h of training$")
         # by source: the last row's bits per byte, one bar each, the share in the label
         fig, ax = one_axes()
         view_pt.panel_sources(ax, full, ck)
