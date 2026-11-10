@@ -39,6 +39,35 @@ class Audit2FinetuneTools(unittest.TestCase):
     def tearDownClass(cls):
         shutil.rmtree(cls.tmp, ignore_errors=True)
 
+    @classmethod
+    def sentencepiece(cls):
+        """A small SentencePiece tokenizer trained on the fine-tuning examples (made once per class)."""
+        if getattr(cls, "_tok", None) is None:
+            import data_prep
+            import sentencepiece as spm
+            corpus = os.path.join(cls.tmp, "spm_corpus.txt")
+            with open(corpus, "w", encoding="utf-8", newline="\n") as out:
+                for name in ("sft_examples.jsonl", "dpo_examples.jsonl"):
+                    with open(os.path.join(HERE, "finetune_examples", name), encoding="utf-8") as f:
+                        for line in f:
+                            row = json.loads(line)
+                            out.write("\n".join(v for v in row.values() if isinstance(v, str)) + "\n")
+                out.write("### Question:\n### Answer:\n" * 20)
+            prefix = os.path.join(cls.tmp, "spm")
+            spm.SentencePieceTrainer.train(
+                input=corpus, model_prefix=prefix, model_type="bpe", vocab_size=600, character_coverage=1.0,
+                byte_fallback=True, unk_id=0, bos_id=1, eos_id=2, pad_id=-1, user_defined_symbols=["\n", "\t"],
+                remove_extra_whitespaces=False, normalization_rule_name="identity", hard_vocab_limit=False,
+                num_threads=1, minloglevel=2)
+            cls._tok = data_prep.Tokenizer.from_file(prefix + ".model", "lines")
+        return cls._tok
+
+    def finetune_base(self, name):
+        """A tiny pre-trained checkpoint with a real tokenizer, as finetune.py needs one."""
+        tok = self.sentencepiece()
+        return self.save_checkpoint(toy_model(5, ctx=64, vocab=tok.vocab_size), name,
+                                    tokenizer={"proto": tok.proto, **tok.meta()})
+
     def save_checkpoint(self, model, name, **extra):
         path = os.path.join(self.tmp, name)
         torch.save({"format": tiny_gpt.CHECKPOINT_FORMAT, "format_version": tiny_gpt.FORMAT_VERSION,
@@ -160,6 +189,118 @@ class Audit2FinetuneTools(unittest.TestCase):
         self.assertNotEqual(cpu, cuda)
         self.assertEqual(os.path.dirname(cpu), cp.CACHE_DIR)
         self.assertNotEqual(cp.cache_file("org/a", "0123", "cpu", True), cpu)
+
+    # ---- finetune.py ------------------------------------------------------------------------------------
+    def finetune(self, folder, mode, base, name, epochs=2, extra=()):
+        import finetune
+        data = os.path.join(HERE, "finetune_examples", f"{mode}_examples.jsonl")
+        torch.manual_seed(0)
+        with redirect_stdout(io.StringIO()) as out, redirect_stderr(io.StringIO()):
+            saved = finetune.main([mode, "--base", base, "--data", data, "--name", name, "--out-dir", folder,
+                                   "--epochs", str(epochs), "--batch", "4", "--device", "cpu", "--max-new-tokens",
+                                   "4", "--log-file", os.path.join(folder, "log.txt"), *extra])
+        return saved, out.getvalue()
+
+    def test_finetune_keeps_each_finished_epoch(self):
+        """F163: an interrupted fine-tune leaves <name>_partial.pt with the finished epochs (the final name is
+        never written unfinished); the same command then runs again without --overwrite, and a finished run
+        leaves no partial file."""
+        import finetune
+        folder = os.path.join(self.tmp, "partial_ft")
+        os.makedirs(folder)
+        base = self.finetune_base("ft_base.pt")
+        real = finetune.length_grouped_batches
+        calls = []
+
+        def interrupt_in_epoch_2(*a, **k):
+            calls.append(1)
+            if len(calls) == 2:
+                raise KeyboardInterrupt
+            return real(*a, **k)
+        with unittest.mock.patch.object(finetune, "length_grouped_batches", interrupt_in_epoch_2), \
+                self.assertRaises(KeyboardInterrupt):
+            self.finetune(folder, "sft", base, "X")
+        partial = os.path.join(folder, "X_partial.pt")
+        self.assertFalse(os.path.exists(os.path.join(folder, "X.pt")))
+        self.assertTrue(os.path.isfile(partial), "the finished epoch must be on disk")
+        _, _, _, obj = tiny_gpt.load_for_inference(partial, "cpu")
+        self.assertEqual(obj["finetune"]["epochs_done"], 1)
+        self.assertEqual(obj["finetune"]["epochs"], 2)
+        self.assertEqual(len(obj["finetune"]["history"]), 1)
+        saved, out = self.finetune(folder, "sft", base, "X")
+        self.assertEqual(saved, os.path.join(folder, "X.pt"))
+        self.assertIn("epoch 1 of 2", out)
+        self.assertFalse(os.path.exists(partial), "a finished run removes its partial file")
+        ck = torch.load(saved, map_location="cpu", weights_only=True)
+        self.assertNotIn("epochs_done", ck["finetune"])
+        self.assertEqual(len(ck["finetune"]["history"]), 2)
+
+    def test_finetune_epoch_saves_do_not_move_training(self):
+        """F163 (guard): the per-epoch save changes nothing in training: the final weights equal those of a run
+        whose partial saves are skipped (the code before the change)."""
+        import finetune
+        base = self.finetune_base("ft_base_guard.pt")
+        finals = []
+        for skip in (False, True):
+            folder = os.path.join(self.tmp, f"guard_ft_{int(skip)}")
+            os.makedirs(folder)
+            real = finetune.save
+
+            def save(model, tok, cfg, base_obj, path, info, history):
+                if skip and path.endswith("_partial.pt"):
+                    return path
+                return real(model, tok, cfg, base_obj, path, info, history)
+            with unittest.mock.patch.object(finetune, "save", save):
+                saved, _ = self.finetune(folder, "sft", base, "G")
+            finals.append(torch.load(saved, map_location="cpu", weights_only=True)["model"])
+        self.assertEqual(finals[0].keys(), finals[1].keys())
+        for key in finals[0]:
+            self.assertTrue(torch.equal(finals[0][key], finals[1][key]), key)
+
+    # ---- posttrain.py -----------------------------------------------------------------------------------
+    def posttrain_data(self, tag):
+        folder = os.path.join(self.tmp, tag)
+        os.makedirs(folder)
+        for f in ("sft.jsonl", "dpo.jsonl", "eval_mcq.jsonl"):
+            with open(os.path.join(folder, f), "w", encoding="utf-8") as handle:
+                handle.write("{}\n")
+        return folder
+
+    def test_posttrain_reuse_sft(self):
+        """F163: posttrain run --reuse-sft skips SFT when <name>_sft.pt is an SFT made from this --base, and DPO
+        starts from it; with another --base it exits; without the flag SFT runs as before."""
+        import posttrain
+        data = self.posttrain_data("reuse_sft")
+        out_dir = os.path.join(data, "out")
+        os.makedirs(out_dir)
+        base = self.save_checkpoint(toy_model(6), "pt_base.pt")
+        other = self.save_checkpoint(toy_model(7), "pt_other.pt")
+        sft = self.save_checkpoint(toy_model(8), os.path.join("reuse_sft", "out", "R_sft.pt"),
+                                   finetune={"method": "sft", "base": os.path.abspath(base), "data": "sft.jsonl",
+                                             "examples": 20, "epochs": 2}, created="2026-11-10T10:00:00+00:00")
+        calls = []
+
+        def fake_main(argv):
+            calls.append(list(argv))
+            return os.path.join(out_dir, argv[argv.index("--name") + 1] + ".pt")
+        def fake_evaluate(checkpoints, args):
+            calls.append(checkpoints)
+        common = ["run", "--name", "R", "--out-dir", out_dir, "--data-dir", data, "--device", "cpu"]
+        with unittest.mock.patch("finetune.main", fake_main), \
+                unittest.mock.patch.object(posttrain, "evaluate", fake_evaluate), \
+                redirect_stdout(io.StringIO()) as out:
+            posttrain.main(common + ["--base", base, "--reuse-sft"])
+            self.assertEqual([c[0] for c in calls[:-1]], ["dpo"], "SFT is not run again")
+            self.assertEqual(calls[0][calls[0].index("--base") + 1], sft)
+            self.assertEqual(calls[-1], [base, sft, os.path.join(out_dir, "R_dpo.pt")])
+            self.assertIn("examples", out.getvalue())
+            calls.clear()
+            with self.assertRaises(SystemExit) as caught:
+                posttrain.main(common + ["--base", other, "--reuse-sft"])
+            self.assertIn("R_sft.pt", str(caught.exception.code))
+            self.assertEqual(calls, [])
+            posttrain.main(common + ["--base", base])
+            self.assertEqual([c[0] for c in calls[:-1]], ["sft", "dpo"], "without --reuse-sft: as before")
 
 
 if __name__ == "__main__":

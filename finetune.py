@@ -372,6 +372,12 @@ def train(args):
         pairs = len(items)
         return total / max(units, 1), {k: v / max(pairs, 1) for k, v in extra.items()}
 
+    info = {"method": args.mode, "base": os.path.abspath(args.base), "data": os.path.abspath(args.data),
+            "examples": len(rows), "epochs": args.epochs, "lr": args.lr, "template": TEMPLATE,
+            **({"beta": args.beta} if args.mode == "dpo" else {})}
+    # each finished epoch but the last is kept in <name>_partial.pt, so an interruption loses at most one epoch;
+    # <name>.pt is written only by a finished run
+    partial_path = os.path.join(args.out_dir, args.name + "_partial.pt")
     history, step, t0 = [], 0, time.time()
     val_loss, val_info = evaluate_items(val_items)
     print(f"epoch 0 | held-out loss {val_loss:.4f}" + "".join(f" | {k} {v:.3f}" for k, v in val_info.items()))
@@ -412,14 +418,18 @@ def train(args):
                         "val_loss": val_loss, **val_info})
         print(f"epoch {epoch} | train loss {history[-1]['train_loss']:.4f} | held-out loss {val_loss:.4f}"
               + "".join(f" | {k} {v:.3f}" for k, v in val_info.items()) + f" | {time.time() - t0:,.0f} s")
+        if epoch < args.epochs:
+            kept = save(model, tok, cfg, base_obj, partial_path, {**info, "epochs_done": epoch}, history)
+            print(f"saved {kept} (epoch {epoch} of {args.epochs}; a rerun starts again from the base)")
     prompt = val_rows[0]["prompt"]
     answer = answer_question(model, tok, prompt, device, amp_dtype, args.max_new_tokens)
     print(f"held-out question: {prompt}\nanswer: {answer}")
-    info = {"method": args.mode, "base": os.path.abspath(args.base), "data": os.path.abspath(args.data),
-            "examples": len(rows), "epochs": args.epochs, "lr": args.lr, "template": TEMPLATE,
-            **({"beta": args.beta} if args.mode == "dpo" else {})}
     saved = save(model, tok, cfg, base_obj, out_path, info, history)
     print(f"saved {saved}")
+    try:
+        os.remove(partial_path)
+    except OSError:
+        pass
     tiny_gpt.record_experiment(args.out_dir, {
         "event": f"fine-tune ({args.mode})", "name": args.name, "status": "completed", "checkpoint": saved,
         "notes": f"base {os.path.basename(args.base)}; {len(rows)} examples; held-out loss {val_loss:.4f}"

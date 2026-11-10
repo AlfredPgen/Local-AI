@@ -18,7 +18,8 @@ finetune.py one after the other, and measures what each step changed.
            UltraFeedback (MIT)        rated answer pairs that match the keyword list (DPO)
            MMLU (MIT), PubMedQA expert-labelled set: evaluation only
   run    SFT from a pre-trained checkpoint, DPO from the SFT model, then `eval` of
-         all three (base, SFT, DPO).
+         all three (base, SFT, DPO). --reuse-sft: keep an existing <name>_sft.pt made
+         from this --base (after a failed DPO) and start at DPO.
   eval   for any checkpoints: multiple-choice accuracy on the held-out questions
          against its shuffled-question floor (as in the fact benchmark), the fact
          benchmark itself, and answers to fixed example questions; written to
@@ -369,6 +370,26 @@ def _busy_message(extra=""):
         return "The GPU is busy (another training run?); wait for the other job or stop it first." + extra
 
 
+def reusable_sft(args):
+    """<out-dir>/<name>_sft.pt for --reuse-sft: only an SFT checkpoint made from this --base (by its path);
+    anything else ends the run with a message."""
+    import tiny_gpt
+    path = os.path.join(args.out_dir, args.name + "_sft.pt")
+    if not os.path.isfile(path):
+        raise SystemExit(f"--reuse-sft: {path} does not exist; run without --reuse-sft.")
+    obj = tiny_gpt.safe_load(path, args.trust_checkpoint, mmap=True)
+    info = obj.get("finetune") if isinstance(obj, dict) else None
+    info = info if isinstance(info, dict) else {}
+    same_base = os.path.normcase(str(info.get("base", ""))) == os.path.normcase(os.path.abspath(args.base))
+    if info.get("method") != "sft" or not same_base:
+        raise SystemExit(f"--reuse-sft: {path} is not an SFT checkpoint made from {args.base} (method "
+                         f"{info.get('method')}, base {info.get('base')}); run without --reuse-sft, or with "
+                         "--overwrite to replace it.")
+    print(f"reusing {path}: SFT of {info.get('base')} on {info.get('data')} ({info.get('examples')} examples, "
+          f"{info.get('epochs')} epochs, created {obj.get('created')})")
+    return path
+
+
 def run(args):
     import finetune
     for f in ("sft.jsonl", "dpo.jsonl", "eval_mcq.jsonl"):
@@ -381,9 +402,12 @@ def run(args):
         + (["--overwrite"] if args.overwrite else []) + (["--trust-checkpoint"] if args.trust_checkpoint else [])
     # finetune returns the file it wrote: a locked target is saved under another name, and DPO and the
     # evaluation must use that new file, not the old one
-    sft_path = finetune.main(["sft", "--base", args.base, "--data", os.path.join(args.data_dir, "sft.jsonl"),
-                              "--name", args.name + "_sft", "--epochs", str(args.sft_epochs), "--batch",
-                              str(args.batch), "--val-fraction", "0.02"] + common)
+    if args.reuse_sft:
+        sft_path = reusable_sft(args)
+    else:
+        sft_path = finetune.main(["sft", "--base", args.base, "--data", os.path.join(args.data_dir, "sft.jsonl"),
+                                  "--name", args.name + "_sft", "--epochs", str(args.sft_epochs), "--batch",
+                                  str(args.batch), "--val-fraction", "0.02"] + common)
     dpo_path = finetune.main(["dpo", "--base", sft_path, "--data", os.path.join(args.data_dir, "dpo.jsonl"),
                               "--name", args.name + "_dpo", "--epochs", str(args.dpo_epochs), "--batch",
                               str(args.batch), "--val-fraction", "0.02"] + common)
@@ -408,6 +432,8 @@ def parse_args(argv=None):
     r.add_argument("--dpo-epochs", type=int, default=1)
     r.add_argument("--batch", type=int, default=16)
     r.add_argument("--overwrite", action="store_true")
+    r.add_argument("--reuse-sft", action="store_true",
+                   help="use an existing <name>_sft.pt made from this --base and start at DPO")
     e = sub.add_parser("eval", help="evaluate checkpoints")
     e.add_argument("checkpoints", nargs="+")
     e.add_argument("--force", action="store_true", help="use the GPU even if another job seems to be using it")
