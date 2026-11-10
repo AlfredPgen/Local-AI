@@ -37,6 +37,7 @@ import argparse
 import dataclasses
 import glob
 import gzip
+import heapq
 import math
 import os
 import random
@@ -85,32 +86,32 @@ class Tally:
         self.kept = 0
         self.kept_chars = 0
         self.reasons = {}
-        self.texts, self.text_chars = [], 0
-        self.capacity, self.rng = None, random.Random(f"{seed}/{name}")  # of the store of texts (keep)
+        self.store, self.text_chars = [], 0  # a heap of (-random number, kept number, text): see keep
+        self.rng = random.Random(f"{seed}/{name}")
         self.max_docs, self.select = 0, "first"
         self.sample_fraction = 1.0  # data_prep --sample-fraction: the share of a web source's records a build reads
         self.ranked = []          # (keyword score, characters) of kept sample documents, for 'top' selection
 
     def keep(self, text):
         """Count a kept document and store its text for the tokenizer. The store
-        is a reservoir sample of all kept documents: the first TEXT_BUDGET
-        characters fill it, and from then on the n-th kept document replaces a
-        random stored one with probability stored / n. (Storing only the first
-        ones took a web source's texts from the start of its first file.) The
-        reservoir is counted in documents, sized by the average length so far,
-        so its characters stay near the budget."""
+        is a random sample of all kept documents that holds TEXT_BUDGET
+        characters: every document draws a random number, and the store keeps
+        the documents with the smallest numbers, as many as it takes to reach
+        the budget (the start of a random order of all kept documents).
+        (Storing only the first ones took a web source's texts from the start of
+        its first file. A store of a fixed number of documents ends far from the
+        budget when the later documents are shorter or longer than the first.)"""
         self.kept += 1
         self.kept_chars += len(text)
-        if self.capacity is None:
-            self.texts.append(text)
-            self.text_chars += len(text)
-            if self.text_chars >= TEXT_BUDGET:
-                self.capacity = len(self.texts)
-        else:
-            slot = self.rng.randrange(self.kept)
-            if slot < self.capacity:
-                self.text_chars += len(text) - len(self.texts[slot])
-                self.texts[slot] = text
+        heapq.heappush(self.store, (-self.rng.random(), self.kept, text))
+        self.text_chars += len(text)
+        while self.text_chars - len(self.store[0][2]) >= TEXT_BUDGET:  # the largest number is not needed any more
+            self.text_chars -= len(heapq.heappop(self.store)[2])
+
+    @property
+    def texts(self):
+        """The stored texts, in the order they were kept."""
+        return [text for _, _, text in sorted(self.store, key=lambda entry: entry[1])]
 
     def skip(self, reason):
         self.reasons[reason] = self.reasons.get(reason, 0) + 1

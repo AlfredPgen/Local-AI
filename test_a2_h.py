@@ -282,11 +282,13 @@ class Audit2PipelineTools(unittest.TestCase):
         self.assertEqual((tally.total, tally.sampled, examined.call_count), (2, 1, 1))
 
     def test_estimate_stores_a_random_sample_of_texts_and_measures_on_held_out_ones(self):
-        """F153: the texts kept for the tokenizer are a reservoir sample of all kept documents (they were the
-        first 6M characters, the start of the first files), and characters per token of a tokenizer trained
-        here are measured on texts it was not trained on."""
+        """F153: the texts kept for the tokenizer are a random sample of all kept documents (they were the
+        first 6M characters, the start of the first files) that holds the budget of characters whatever the
+        order of long and short documents, and characters per token of a tokenizer trained here are measured
+        on texts it was not trained on."""
         import data_prep as dp
         import estimate_dataset
+        budget = estimate_dataset.TEXT_BUDGET
 
         def fill(name, seed=0):
             tally = estimate_dataset.Tally(name, "parquet", seed)
@@ -296,12 +298,22 @@ class Audit2PipelineTools(unittest.TestCase):
 
         t = fill("web")
         ids = [int(text[:3]) for text in t.texts]
-        self.assertEqual((t.kept, len(ids), len(set(ids))), (200, 60, 60), "6M characters of 100k-character texts")
-        self.assertTrue(20 <= sum(i >= 100 for i in ids) <= 40, ids)  # about half; the old store had none
+        self.assertEqual((t.kept, len(set(ids)), ids), (200, len(ids), sorted(ids)), "in the order they were kept")
+        later = sum(i >= 100 for i in ids)
+        self.assertTrue(0.3 * len(ids) <= later <= 0.7 * len(ids), ids)  # about half; the old store had none
         self.assertEqual(t.text_chars, sum(len(text) for text in t.texts))
+        self.assertTrue(budget <= t.text_chars < budget + 200_004, t.text_chars)
         self.assertEqual(t.kept_chars, 100 * 100_004 + 100 * 200_004)
         self.assertEqual(ids, [int(text[:3]) for text in fill("web").texts], "the same sample every time")
         self.assertNotEqual(ids, [int(text[:3]) for text in fill("web", seed=1).texts])
+        # long texts first and short ones later (Wikipedia: the first kept articles are 4 times the average):
+        # a store with the number of documents that first filled the budget would end with a tenth of it
+        t = estimate_dataset.Tally("wiki", "hf_arrow")
+        for i in range(2040):
+            t.keep(f"{i:04d} " + "long article text.. " * (10000 if i < 40 else 250))
+        self.assertTrue(budget <= t.text_chars < budget + 200_005, t.text_chars)
+        self.assertEqual(t.text_chars, sum(len(text) for text in t.texts))
+        self.assertGreater(len(t.texts), 600, "mostly the short texts, which are 98 % of the documents")
         small = estimate_dataset.Tally("md", "markdown")
         for i in range(7):
             small.keep(f"text {i}")
