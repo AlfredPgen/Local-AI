@@ -481,7 +481,7 @@ def read_terms(value):
     lines = []
     for item in items:
         if os.path.isfile(item):
-            with open(item, encoding="utf-8") as handle:
+            with open(item, encoding="utf-8-sig") as handle:  # -sig: a byte-order mark is not part of the first line
                 lines.extend(handle.read().splitlines())
         elif os.path.splitext(item)[1].lower() in (".txt", ".tsv", ".csv", ".lst"):
             raise SystemExit(f"Keyword file not found: {item}")
@@ -1327,7 +1327,7 @@ def _jsonl_python(path, text_key, title_key, id_key, max_docs, stats, kw, batch,
     file only: it is counted as bad_gzip, the records read before the damage are
     kept and stats["warnings"] gets a line for the report."""
     opener = gzip.open if path.lower().endswith(".gz") else open
-    with opener(path, "rt", encoding="utf-8", errors="replace") as handle:
+    with opener(path, "rt", encoding="utf-8-sig", errors="replace") as handle:  # -sig: no BOM in the first record
         pending, seen = [], 0
         lines = iter(handle)
         while True:

@@ -310,6 +310,26 @@ class Audit2DataPrep(unittest.TestCase):
                 data_prep.prepare(["--out", out, "--resume", "--threads", "2", "--workers", "1"])
         self.assertEqual(data_prep.read_manifest(out)["command"], "data_prep.py --out f061_old --resume (resumed)")
 
+    # ---------------- F104: a UTF-8 byte-order mark at the start of a keyword or JSONL file ----------------
+    def test_byte_order_mark_is_not_part_of_the_first_line(self):
+        folder = self.folder("f104")
+        keywords = os.path.join(folder, "keywords.txt")
+        with open(keywords, "wb") as f:
+            f.write(b"\xef\xbb\xbf# biology terms\ngenome\n")
+        self.assertEqual(data_prep.read_terms(keywords), ["genome"])
+        records = "".join(json.dumps({"id": f"r{i}", "title": "", "text": f"Record {i} about alleles."}) + "\n"
+                          for i in range(3))
+        plain, packed = os.path.join(folder, "bom.jsonl"), os.path.join(folder, "bom.jsonl.gz")
+        with open(plain, "wb") as f:
+            f.write(b"\xef\xbb\xbf" + records.encode())
+        with gzip.open(packed, "wb") as f:
+            f.write(b"\xef\xbb\xbf" + records.encode())
+        for path in (plain, packed):
+            stats = data_prep._new_stats()
+            docs = list(data_prep._jsonl_python(path, "text", "title", "id", 0, stats, None, 5000, 0, lambda: None))
+            self.assertEqual([d[0] for d in docs], ["r0", "r1", "r2"], path)
+            self.assertEqual(sum(stats["skipped"].values()), 0)
+
     def test_an_error_in_the_leakage_audit_still_only_skips_it(self):
         out = os.path.join(self.tmp, "f057err")
         real = data_prep._audit_chunk
