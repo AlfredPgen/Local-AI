@@ -70,6 +70,8 @@ DIVERGING = ["#104281", "#3987e5", "#b7d3f6", "#f0efec", "#f3b4b0", "#e34948", "
 TOKEN_CLASSES = ["word start", "word piece", "number", "punctuation", "symbol/math", "non-Latin letters",
                  "byte fallback", "special/whitespace"]
 MARKERS = ["o", "s", "^", "D", "v", "P", "X", "*"]
+# File types matplotlib's savefig writes without another program (the extensions --plot --out accepts).
+PICTURE_TYPES = ("png", "pdf", "svg", "svgz", "jpg", "jpeg", "webp", "tif", "tiff", "eps", "ps", "raw", "rgba")
 
 
 def parse_args():
@@ -124,6 +126,13 @@ def parse_args():
         value = getattr(args, name)
         if value and not os.path.exists(value):
             p.error(f"--{name.replace('_', '-')} not found: {value}")
+    if args.out:  # checked here, not when the finished picture is saved
+        folder = os.path.dirname(os.path.abspath(args.out))
+        if not os.path.isdir(folder):
+            p.error(f"--out: the folder does not exist: {folder}")
+        ext = os.path.splitext(args.out)[1].lstrip(".").lower()  # none means PNG; --html and --plot-tokens use the stem
+        if args.plot and ext and ext not in PICTURE_TYPES:
+            p.error(f"--out: cannot write a .{ext} picture (use one of: {', '.join(PICTURE_TYPES)})")
     return args
 
 

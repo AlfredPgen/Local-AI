@@ -659,6 +659,35 @@ class Audit2Viewer(unittest.TestCase):
         got = colours([[0.2, 0.9], [float("nan"), 0.4]], seq, vmin=0, vmax=1)
         self.assertEqual(got, {"0.2": view_pt.INK, "0.9": "#ffffff", "0.4": view_pt.INK}, "no text on an empty cell")
 
+    # ---------------- F434 ----------------
+    def test_out_is_checked_before_anything_is_loaded(self):
+        path = toy_file(self.tmp, "O.pt", history_rows(3))
+
+        def refused(*flags):
+            with redirect_stdout(io.StringIO()), unittest.mock.patch.object(sys, "stderr", io.StringIO()) as err:
+                with self.assertRaises(SystemExit, msg=flags) as stop:
+                    viewer_args(path, *flags)
+            self.assertEqual(stop.exception.code, 2, "an argument error, not a traceback")
+            return err.getvalue()
+
+        missing = os.path.join(self.tmp, "nodir")
+        for flags in (("--plot",), ("--plot-tokens",), ("--html",)):
+            said_ = refused(*flags, "--out", os.path.join(missing, "x.png"))
+            self.assertIn("--out", said_)
+            self.assertIn("does not exist", said_)
+        self.assertFalse(os.path.exists(missing))
+        self.assertIn(".bmp", refused("--plot", "--out", os.path.join(self.tmp, "x.bmp")))
+        refused("--plot", "--html", "--out", os.path.join(self.tmp, "x.html"))
+        # still accepted: no extension (a PNG), upper case, a bare name in the current folder, and the names the
+        # other outputs only take their stem from
+        for flags in (("--plot", "--out", os.path.join(self.tmp, "x")),
+                      ("--plot", "--out", os.path.join(self.tmp, "x.PNG")),
+                      ("--plot", "--out", os.path.join(self.tmp, "x.pdf")),
+                      ("--plot", "--out", "x.png"),
+                      ("--html", "--out", os.path.join(self.tmp, "x.html")),
+                      ("--plot-tokens", "--out", os.path.join(self.tmp, "x.html"))):
+            self.assertEqual(viewer_args(path, *flags).out, flags[-1])
+
 
 if __name__ == "__main__":
     unittest.main()
