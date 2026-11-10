@@ -3146,9 +3146,11 @@ def _load_state(path):
 
 def _resume_args(args):
     """The arguments of the build being resumed (from its state.pkl), with this
-    command's machine settings (--threads, --workers, --keep-work) on top."""
+    command's machine settings (--threads, --workers, --keep-work) on top. The
+    saved value wins for every option the stopped build recorded; an option
+    added to this script since then takes its default."""
     saved = _load_state(os.path.join(os.path.abspath(args.out), "_work", STATE_NAME))["args"]
-    merged = argparse.Namespace(**saved)
+    merged = argparse.Namespace(**{**vars(args), **saved})
     for name in ("threads", "workers", "keep_work", "worker_warmup"):
         setattr(merged, name, getattr(args, name))
     merged.out, merged.resume, merged.overwrite = args.out, True, False
