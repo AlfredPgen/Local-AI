@@ -1392,6 +1392,67 @@ class Audit2DataPrep(unittest.TestCase):
         for name in ("md", "notes"):
             self.assertEqual(manifest["sources"][name]["cleaning"], plain["sources"][name]["cleaning"])
 
+    # ---------------- F056: exact duplicates are found with a set of hashes; same rows as before ----------------
+    def exact_duplicate_fixture(self, root):
+        """Two text folders under root with exact duplicates inside one source (a2, a3 of a1), across the two
+        sources (two/b1 of one/a1) and of a first copy that boilerplate removal empties (only_boiler: three
+        lines that six documents of `one` share). Returns (options, the expected first copy of every
+        duplicate, a folder that looks like an earlier dataset in which two/b1.md was validation)."""
+        c = self.corpus()
+        topic = {i: read_file(os.path.join(c.md, f"topic_{i:02d}.md")) for i in (0, 1, 2, 3, 4, 19, 20, 21, 22, 23)}
+        shared = "\n\n".join((
+            "This page is part of the course notes of the population genetics group and may be shared freely.",
+            "Every chapter was checked twice by a second reader before it was put in this collection of notes.",
+            "Questions about any of the pages can be sent to the people who keep this collection up to date."))
+        files = {"one": {"a1.md": topic[20], "a2.md": topic[20], "a3.md": topic[20] + "\n\n\n",
+                         "only_boiler.md": shared + "\n", "only_boiler_copy.md": shared + "\n"},
+                 "two": {"b1.md": topic[20], "b2.md": topic[21], "b3.md": shared + "\n", "b4.md": topic[22],
+                         "b5.md": topic[23], "b6.md": topic[19]}}
+        for i in range(5):
+            files["one"][f"d{i}.md"] = shared + "\n\n" + topic[i]
+        for source, texts in files.items():
+            os.makedirs(os.path.join(root, source))
+            for name, text in texts.items():
+                with open(os.path.join(root, source, name), "w", encoding="utf-8", newline="\n") as handle:
+                    handle.write(text)
+        earlier = os.path.join(root, "earlier")
+        os.makedirs(earlier)
+        with open(os.path.join(earlier, "manifest.json"), "w", encoding="utf-8") as handle:
+            handle.write("{}")
+        with open(os.path.join(earlier, "docs.tsv"), "w", encoding="utf-8", newline="\n") as handle:
+            handle.write("source\tdoc_id\ttitle\tstatus\ntwo\tb1.md\tTopic\tval\n")
+        argv = ["--md-dir", f"one={os.path.join(root, 'one')}", "--md-dir", f"two={os.path.join(root, 'two')}",
+                "--boilerplate-min-docs", "3", "--vocab-size", "600", "--val-fraction", "0.2", "--threads", "2",
+                "--workers", "1"]
+        first = {("one", "a2.md"): ("one", "a1.md"), ("one", "a3.md"): ("one", "a1.md"),
+                 ("one", "only_boiler_copy.md"): ("one", "only_boiler.md"), ("two", "b1.md"): ("one", "a1.md"),
+                 ("two", "b3.md"): ("one", "only_boiler.md")}
+        return argv, first, earlier
+
+    def test_exact_duplicate_rows_name_the_first_copy(self):
+        """Guard (it passes before and after): duplicates.tsv names source, id and title of the first copy,
+        also of one that pass 2 then removes, and --keep-split-from follows a duplicate's earlier split."""
+        argv, first, earlier = self.exact_duplicate_fixture(self.folder("f056_in"))
+        for label, extra in (("f056", []), ("f056_keep", ["--keep-split-from", earlier])):
+            out = os.path.join(self.tmp, label)
+            with redirect_stdout(io.StringIO()):
+                data_prep.prepare(["--out", out] + argv + extra)
+            lines = read_file(os.path.join(out, "docs.tsv")).splitlines()
+            head = lines[0].split("\t")
+            docs = {(r["source"], r["doc_id"]): r for r in (dict(zip(head, ln.split("\t"))) for ln in lines[1:])}
+            self.assertEqual(docs[("one", "only_boiler.md")]["reason"], "too_short_after_boilerplate")
+            rows = [ln.split("\t") for ln in read_file(os.path.join(out, "duplicates.tsv")).splitlines()[1:]]
+            exact = {(r[1], r[2]): tuple(r[4:7]) for r in rows if r[0] == "exact"}
+            self.assertEqual(exact, {dup: kept + (docs[kept]["title"],) for dup, kept in first.items()})
+            self.assertTrue(all(docs[kept]["title"] for kept in first.values()))
+            for dup in first:
+                self.assertEqual((docs[dup]["status"], docs[dup]["reason"]), ("skipped", "exact_duplicate"))
+            report = read_file(os.path.join(out, "report.md"))
+            self.assertIn("Exact duplicates (skip): 5.", report)
+            if extra:  # one/a1.md is the kept copy of two/b1.md, which was validation in the earlier dataset
+                self.assertEqual(docs[("one", "a1.md")]["status"], "val")
+                self.assertIn("0 documents stay in training and 1 in validation as before", report)
+
 
 if __name__ == "__main__":
     unittest.main()

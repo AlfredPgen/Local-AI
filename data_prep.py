@@ -2443,7 +2443,8 @@ def _prepare(args, state=None):
         # ------------------------------------------------------------------
         sources = {}
         ledger = []
-        exact_seen = {}
+        exact_seen = set()  # the content hash of every kept document, as an int
+        first_copy = {}  # content hash of a text with exact duplicates -> (source, id, title) of its kept copy
         duplicates = []
         line_counts = collections.defaultdict(collections.Counter)
         boiler = {}  # source -> {line key: documents with the line}, for the lines in enough documents
@@ -2529,12 +2530,14 @@ def _prepare(args, state=None):
                         stats["cleaning"]["decode_errors_docs"] += 1
                         stats["cleaning"]["decode_errors_chars"] += meta["bad_unicode"]
                     if not reason and args.exact_dedup == "skip":
-                        first = exact_seen.get(key)
-                        if first is not None:
+                        if int(key, 16) in exact_seen:
                             reason = "exact_duplicate"
-                            duplicates.append(("exact", name, doc_id, title, first[0], first[1], first[2], 1.0))
+                            # the kept copy is named after pass 2, which reads every kept document again:
+                            # until then the row holds the content hash in its place
+                            duplicates.append(("exact", name, doc_id, title, key, None, None, 1.0))
+                            first_copy[key] = None
                         else:
-                            exact_seen[key] = (name, doc_id, title)
+                            exact_seen.add(int(key, 16))
                     if reason:
                         checked[reason] += 1
                         if kind == "markdown" or stats["ledger_rows"] < 2000:
@@ -2609,7 +2612,11 @@ def _prepare(args, state=None):
             for _name, path in spool1_files:
                 with _open_spool(path, "r") as src:
                     for line in src:
-                        yield json.loads(line)
+                        rec = json.loads(line)
+                        # here, not in the loop below: the kept copy may be a document that loop then removes
+                        if first_copy and rec.get("k") in first_copy:
+                            first_copy[rec["k"]] = (rec["s"], rec["id"], rec["t"])
+                        yield rec
                 if not args.keep_work:
                     _remove_work_file(path)
 
@@ -2634,6 +2641,15 @@ def _prepare(args, state=None):
                 dst.write("\n")
         pass2.close()
         del boiler
+        # the exact-duplicate rows get their kept copy (source, id, title) before anything reads them: the split
+        # of --keep-split-from, the saved state and the report
+        if first_copy:
+            missing = [k for k, kept in first_copy.items() if kept is None]
+            if missing:
+                raise RuntimeError(f"{len(missing):,} exact duplicates have no kept copy in the pass-1 spool "
+                                   f"(first content hash {missing[0]}): a defect in data_prep.py, please report it")
+            duplicates[:] = [d[:4] + first_copy[d[4]] + d[7:] if d[0] == "exact" else d for d in duplicates]
+        del first_copy
         n = len(docs)
         print(f"Pass 2 done ({time.time() - t0:,.0f} s)", flush=True)
 
