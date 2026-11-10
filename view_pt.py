@@ -1148,7 +1148,9 @@ def panel_finetune_loss(ax, ck):
            f"{len(rows)} epochs from {path_name(ft.get('base'))}; the other history panels show its pre-training")
 
 
-LOSS_TOP = 4.0  # upper limit of the loss axis once five evaluations lie below it (the first ones start near 10)
+# upper limit of the loss axis once five evaluations lie below it (the first ones start near 10) and while the
+# newest one does
+LOSS_TOP = 4.0
 
 
 def panel_loss(ax, history, ck):
@@ -1191,7 +1193,11 @@ def panel_loss(ax, history, ck):
                     fontsize=_SIZE["note"], color=INK2)
         notes.append(f"validation now {va[-1][1]:.3f} (perplexity {math.exp(min(va[-1][1], 50)):,.1f})")
     left = min(x for x, _ in drawn)
-    if len([v for _, v in va if v <= LOSS_TOP]) >= 5 and max(v for _, v in drawn) > LOSS_TOP:
+    # the cut is for the first descent: a run whose newest evaluation is above it again (unstable, diverging) is
+    # drawn whole, so every curve's last point is always inside the axes
+    newest = max(series[-1][1] for series in (tr, vm, va) if series)
+    if (len([v for _, v in va if v <= LOSS_TOP]) >= 5 and max(v for _, v in drawn) > LOSS_TOP
+            and newest <= LOSS_TOP):
         low = min(v for _, v in drawn if v <= LOSS_TOP)
         ax.set_ylim(low - 0.04 * (LOSS_TOP - low), LOSS_TOP)
         left = min(x for x, v in drawn if v <= LOSS_TOP)  # the axis starts at the first point it can show

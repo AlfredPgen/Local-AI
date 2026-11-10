@@ -264,6 +264,38 @@ class Audit2Viewer(unittest.TestCase):
         self.assertEqual(ax.get_xscale(), "log")
         self.assertNotIn("planned end", said(ax))
 
+    # ---------------- F421: the cut at 4.0 never hides where the run is now ----------------
+    def test_loss_panel_shows_a_run_that_is_back_above_the_cut(self):
+        import view_pt
+
+        def drawn(rows):
+            ck = open_ck(toy_file(self.tmp, "D.pt", rows))
+            fig, ax = one_axes()
+            view_pt.panel_loss(ax, ck.history, ck)
+            return ax
+
+        def back_up(rows):
+            for h in rows:
+                h.update(train_loss=6.0, val_loss=6.0, val_mix=6.0)
+            return rows
+
+        # the loss comes down to 2.9, then jumps to 6.0 and stays there: the whole curve, as before the cut existed
+        rows = history_rows(80)
+        ax = drawn(rows[:30] + back_up(rows[30:]))
+        (x0, x1), (y0, y1) = ax.get_xlim(), ax.get_ylim()
+        self.assertGreater(y1, 6.0)
+        self.assertEqual(len(ax.get_lines()), 3)
+        for line in ax.get_lines():
+            x, y = line.get_xydata()[-1]
+            self.assertTrue(x0 <= x <= x1 and y0 <= y <= y1, (line.get_label(), x, y, ax.get_xlim(), ax.get_ylim()))
+        self.assertNotIn("not shown", said(ax))
+        self.assertIn("validation now 6.000", said(ax))
+        # ten evaluations above the cut and back under it: the cut stays, and the subtitle counts them
+        rows = history_rows(80)
+        ax = drawn(rows[:30] + back_up(rows[30:40]) + rows[40:])
+        self.assertLessEqual(ax.get_ylim()[1], 4.0)
+        self.assertIn("17 evaluations above 4 not shown", said(ax), "7 of the first descent and the 10 later ones")
+
     # ---------------- F395, F411, F424, F367 ----------------
     def test_history_panels_draw_what_exists_and_say_what_is_missing(self):
         import view_pt
