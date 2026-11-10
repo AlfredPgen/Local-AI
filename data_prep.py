@@ -703,10 +703,12 @@ def cached_prefilter_patterns(terms, cache_path=None):
 class _Affixes:
     """Wildcard terms ('genom*' = prefix, '*mab' = suffix) grouped by length. A
     word is looked up only if its first (or last) three letters begin (or end)
-    some term, which settles most words with one set lookup."""
+    some term, which settles most words with one lookup, and then only at the
+    lengths of the terms with those three letters (by_head). With a term of
+    fewer than three letters there is no such table and every length is tried."""
 
     def __init__(self, suffix):
-        self.suffix, self.by_length, self.heads = suffix, collections.defaultdict(dict), None
+        self.suffix, self.by_length, self.heads, self.by_head = suffix, collections.defaultdict(dict), None, None
 
     def add(self, text, term):
         self.by_length[len(text)][text] = term
@@ -715,15 +717,20 @@ class _Affixes:
         self.lengths = sorted(self.by_length)
         if self.lengths and self.lengths[0] >= 3:
             self.heads = {t[-3:] if self.suffix else t[:3] for table in self.by_length.values() for t in table}
+            self.by_head = {head: [] for head in self.heads}
+            for length in self.lengths:
+                for head in {t[-3:] if self.suffix else t[:3] for t in self.by_length[length]}:
+                    self.by_head[head].append(length)
         return self
 
     def count(self, freq, counter, weight):
-        heads, suffix = self.heads, self.suffix
+        by_head, suffix = self.by_head, self.suffix
         for w, c in freq.items():
-            if heads is not None and (w[-3:] if suffix else w[:3]) not in heads:
+            lengths = self.lengths if by_head is None else by_head.get(w[-3:] if suffix else w[:3])
+            if lengths is None:
                 continue
             size = len(w)
-            for length in self.lengths:
+            for length in lengths:
                 if length > size:
                     break
                 term = self.by_length[length].get(w[-length:] if suffix else w[:length])

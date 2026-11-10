@@ -600,6 +600,42 @@ class Audit2DataPrep(unittest.TestCase):
             self.assertEqual(data_prep.cached_prefilter_patterns(terms, cache), ["(?:sentinel)"])
             built.assert_called_once_with(terms)  # the rewritten cache is a hit for the new version
 
+    # ---------------- F041: wildcard terms are looked up by the lengths their three-letter head has ----------------
+    def test_affix_lookup_by_head_counts_what_the_length_loop_counted(self):
+        import random
+        rng = random.Random(41)
+
+        def word(lo, hi):
+            return "".join(rng.choice("abcd") for _ in range(rng.randint(lo, hi)))
+
+        freq = collections.Counter(word(1, 9) for _ in range(4000))
+        for suffix in (False, True):
+            for shortest in (3, 2, 1):  # with a term under three letters there is no head table: the old loop runs
+                texts = sorted({word(shortest, 7) for _ in range(60)} | {word(shortest, shortest)})
+                affixes = data_prep._Affixes(suffix)
+                for text in texts:
+                    affixes.add(text, ("*" + text) if suffix else (text + "*"))
+                affixes.finish()
+                if shortest >= 3:
+                    self.assertEqual({h: list(v) for h, v in affixes.by_head.items()},
+                                     {h: sorted({len(t) for t in texts if (t[-3:] if suffix else t[:3]) == h})
+                                      for h in affixes.heads})
+                else:
+                    self.assertIsNone(affixes.by_head)
+                expected = collections.Counter()
+                for w, c in freq.items():
+                    for text in texts:
+                        if w.endswith(text) if suffix else w.startswith(text):
+                            expected[("*" + text) if suffix else (text + "*")] += c * 3
+                counted = collections.Counter()
+                affixes.count(freq, counted, 3)
+                self.assertEqual(counted, expected, (suffix, shortest))
+                self.assertGreater(len(expected), 20)
+        # through the matcher: prefix, suffix and a two-letter term together
+        kw = data_prep.KeywordFilter(["genom*", "gen*", "*mab", "*ab", "io*"], [], min_hits=1, min_distinct=1)
+        terms = kw.evaluate("", "Genomes, genes and ions: rituximab in the lab. Genomics again.")[3]
+        self.assertEqual(dict(terms), {"genom*": 2, "gen*": 3, "*mab": 1, "*ab": 2, "io*": 1})
+
 
 if __name__ == "__main__":
     unittest.main()
