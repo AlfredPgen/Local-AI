@@ -748,7 +748,9 @@ def check_pdf_route():
 def _script(mark):
     def sub(m):
         inner = " ".join(re.sub(r"<[^>]*>", "", m.group(1)).split())
-        return f"{mark}{inner}" if len(inner) <= 1 else f"{mark}{{{inner}}}" if inner else ""
+        if not inner:
+            return ""
+        return f"{mark}{inner}" if len(inner) == 1 else f"{mark}{{{inner}}}"
     return sub
 
 

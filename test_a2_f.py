@@ -47,6 +47,12 @@ class Audit2DocsYoutubeConvert(unittest.TestCase):
             self.assertTrue(http.allowed("https://a.org/docs/x.html"))
         self.assertTrue(http.robots["https://a.org"].allow_all)
 
+    def test_docs_pdf_tags_empty_script(self):
+        """F129: an empty <sup></sup> or <sub> </sub> leaves no stray ^ or _."""
+        import download_docs as d
+        self.assertEqual(d.pdf_tags("x<sup></sup>y and a<sub> </sub>b"), "xy and ab")
+        self.assertEqual(d.pdf_tags("x<sup>2</sup> a<sub>ij</sub>"), "x^2 a_{ij}")  # unchanged
+
 
 if __name__ == "__main__":
     unittest.main()
