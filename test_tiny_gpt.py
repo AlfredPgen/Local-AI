@@ -2515,7 +2515,8 @@ class TestFixes(unittest.TestCase):
                     "a\tunavailable\tRequested format is not available\n"
                     "b\tunavailable\tPrivate video\n"
                     "c\tunavailable\tPremieres in 2 days\n")
-        self.assertEqual(yt.read_status(report), {"a": "error", "b": "unavailable", "c": "error"})
+        # the status column is read as written (the one-off reclassification of old reports is gone)
+        self.assertEqual(yt.read_status(report), {"a": "unavailable", "b": "unavailable", "c": "unavailable"})
 
     def test_arxiv_cache_and_main_file(self):
         import gzip

@@ -529,12 +529,7 @@ def read_status(path):
             head = handle.readline().rstrip("\n").split("\t")
             for line in handle:
                 row = dict(zip(head, line.rstrip("\n").split("\t")))
-                found = row.get("status")
-                # rows written before rate limits, format failures and premieres were told apart from
-                # unavailable videos: the error text (source column) shows which to try again
-                if found == "unavailable" and error_status(row.get("source") or "") != "unavailable":
-                    found = "error"
-                status[row.get("video_id")] = found
+                status[row.get("video_id")] = row.get("status")
     return status
 
 
@@ -649,9 +644,6 @@ def main(argv=None):
                 print(f"[{channel['name']}] {len(entries):,} videos, {hours:,.0f} hours", flush=True)
                 continue
             tsv = os.path.join(args.meta, f"{channel['key']}_report.tsv")
-            old_name = os.path.join(args.meta, f"{channel['key']}.tsv")  # name used until 30 September 2026
-            if os.path.isfile(old_name) and not os.path.exists(tsv):
-                os.replace(old_name, tsv)
             status = read_status(tsv)
             final = FINAL if args.whisper else FINAL | {"queued_whisper"}
             if args.recheck_off_topic:
