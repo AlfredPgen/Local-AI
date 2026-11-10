@@ -237,16 +237,29 @@ def harvest(server, cache_dir, update=False, start=None):
             return state["records"]
 
 
+# how a cache line starts (harvest writes the DOI first, then the version); a DOI with a quote or a backslash in it
+# is written with escapes and does not match
+_LINE_START_RE = re.compile(r'\{"doi": "([^"\\]*)", "version": ([0-9]+),')
+
+
 def read_cache(cache_path):
     """Records of the cache, one per DOI: its latest version (the last copy of
-    it if the same version was harvested twice). Two passes keep memory small."""
+    it if the same version was harvested twice). Two passes keep memory small.
+    The first needs only the DOI and the version: they are read from the start
+    of the line, without parsing the record. Only a complete line (it ends with
+    "}", like ax._line_id asks) is trusted that way; any other is parsed, which
+    rejects a line cut short by a crash as before."""
     best = {}  # doi -> (version, line number)
     for number, line in ax._cache_lines(cache_path):
-        try:
-            rec = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        doi, version = rec.get("doi"), rec.get("version", 1)
+        m = _LINE_START_RE.match(line) if line.endswith("}\n") else None
+        if m:
+            doi, version = m.group(1), int(m.group(2))
+        else:
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            doi, version = rec.get("doi"), rec.get("version", 1)
         if doi and (doi not in best or version >= best[doi][0]):
             best[doi] = (version, number)
     keep = {number for _, number in best.values()}

@@ -683,6 +683,55 @@ class Audit2Downloaders(unittest.TestCase):
         self.assertEqual(run()[:2], (0, grown))
         self.assertFalse([name for name in os.listdir(os.path.join(self.tmp, "metadata")) if name.endswith(".part")])
 
+    # ---------------- download_rxiv.py ----------------
+    def test_f145_rxiv_cache_first_pass_reads_doi_and_version_without_parsing(self):
+        """F145: the first pass over the bioRxiv/medRxiv cache takes the DOI and version from the start
+        of each complete line instead of parsing the whole record; a line cut short, and a line that does
+        not start the usual way, are handled as before, so the records returned are the same."""
+        import download_rxiv as rx
+
+        def rec(doi, version, title="t"):
+            return {"doi": doi, "version": version, "date": "2025-01-15", "title": title, "abstract": "a {b}",
+                    "category": "genetics", "license": "cc_by", "jatsxml": "", "published": "NA", "type": "new"}
+
+        def line(record):
+            return json.dumps(record, ensure_ascii=False) + "\n"
+
+        cut = line(rec("10.1101/A", 2))[:60]  # starts like a record, has no closing brace
+        self.assertRegex(cut, r'^\{"doi": "10.1101/A", "version": 2, ')
+        other_order = {"version": 2, "doi": "10.1101/C", "date": "2025-01-15", "title": "C2", "abstract": "a"}
+        lines = [line(rec("10.1101/A", 1, "A1")), cut + "\n", line(rec("10.1101/B", 1, "B1")),
+                 line(rec("10.1101/B", 2, "B2 first copy")), line(rec('10.1101/we"ird\\x', 1, "W1")),
+                 line(rec('10.1101/we"ird\\x', 3, "W3")), line(other_order), line(rec("10.1101/B", 2, "B2")),
+                 line(rec("10.1101/D", 10, "D10")), line(rec("10.1101/D", 9, "D9")),
+                 line(rec("10.1101/E", 1, "E1")).rstrip("\n")]  # complete, but the file ends without a line end
+        path = os.path.join(self.tmp, "biorxiv.jsonl.gz")
+        with gzip.open(path, "wt", encoding="utf-8", newline="\n") as f:
+            f.write("".join(lines[:4]))
+        with gzip.open(path, "at", encoding="utf-8", newline="\n") as f:  # a second page: a second gzip member
+            f.write("".join(lines[4:]))
+        parsed = []
+        real = json.loads
+
+        def loads(text, *args, **kwargs):
+            parsed.append(text)
+            return real(text, *args, **kwargs)
+
+        with unittest.mock.patch.object(rx.json, "loads", loads), redirect_stdout(io.StringIO()):
+            got = list(rx.read_cache(path))
+        self.assertEqual([(r["doi"], r["version"], r["title"]) for r in got],
+                         [("10.1101/A", 1, "A1"), ('10.1101/we"ird\\x', 3, "W3"), ("10.1101/C", 2, "C2"),
+                          ("10.1101/B", 2, "B2"), ("10.1101/D", 10, "D10"), ("10.1101/E", 1, "E1")])
+        # an ordinary line that is not the one kept for its DOI is never parsed
+        for skipped in (lines[2], lines[3], lines[9]):
+            self.assertNotIn(skipped, parsed)
+        # the cut line as the last line of the cache: the earlier version of its DOI is still returned
+        with gzip.open(path, "wt", encoding="utf-8", newline="\n") as f:
+            f.write(lines[0] + lines[2] + line(rec("10.1101/B", 2, "B2")) + cut)
+        with redirect_stdout(io.StringIO()):
+            got = list(rx.read_cache(path))
+        self.assertEqual([(r["doi"], r["version"]) for r in got], [("10.1101/A", 1), ("10.1101/B", 2)])
+
 
 if __name__ == "__main__":
     unittest.main()
