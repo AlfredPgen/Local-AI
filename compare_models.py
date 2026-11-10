@@ -341,18 +341,17 @@ def main():
         raise SystemExit("No documents could be scored.")
     sources = sorted({r[0] for r in rows})
     print(f"\n{'documents':<14} {'n':>5} {'BPB A':>8} {'BPB B':>8} {'A - B':>9} {'95% interval':>21} {'p':>7}  A better on")
+    results = {}
     for label, sel in [("all", rows)] + [(s, [r for r in rows if r[0] == s]) for s in sources]:
         na, nbb = np.array([r[3] for r in sel]), np.array([r[4] for r in sel])
         ba, bb = np.array([r[5] for r in sel], dtype=float), np.array([r[6] for r in sel], dtype=float)
-        point, low, high, pval = bootstrap(na, nbb, ba, bb, args.reps, args.seed)
+        point, low, high, pval = results[label] = bootstrap(na, nbb, ba, bb, args.reps, args.seed)
         bpb_a, bpb_b = na.sum() / (math.log(2) * ba.sum()), nbb.sum() / (math.log(2) * bb.sum())
         wins = int(((na / ba) < (nbb / bb)).sum())
         print(f"{label:<14} {len(sel):>5} {bpb_a:>8.4f} {bpb_b:>8.4f} {point:>+9.4f} [{low:>+9.4f}, {high:>+9.4f}] "
               f"{fmt_p(pval, args.reps):>7}  {wins}/{len(sel)} docs" + ("  (too few for a verdict)"
                                                                           if len(sel) < MIN_DOCS else ""))
-    point, low, high, pval = bootstrap(np.array([r[3] for r in rows]), np.array([r[4] for r in rows]),
-                                       np.array([r[5] for r in rows], dtype=float),
-                                       np.array([r[6] for r in rows], dtype=float), args.reps, args.seed)
+    point, low, high, pval = results["all"]
     if len(rows) < MIN_DOCS:
         verdict = f"too few documents ({len(rows)}) for a verdict; use at least {MIN_DOCS}"
     elif unchecked and not args.allow_different_datasets:
