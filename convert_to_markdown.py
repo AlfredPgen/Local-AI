@@ -45,6 +45,7 @@ that process costs about 1.6 s per PDF (loading pymupdf4llm), about 1.2 hours ov
 
 import argparse
 import bisect
+import collections
 import csv
 import functools
 import gzip
@@ -323,25 +324,24 @@ def _split_page_number(s):
     return s.strip(" |·•-"), None
 
 
-def _stepping(pairs, pages):
+def _offset_counts(pairs):
+    """{number - page index: how many of the (page index, number) pairs have it}."""
+    return collections.Counter(number - page for page, number in pairs)
+
+
+def _stepping(pairs):
     """True if the numbers step with the page index like page numbers: one
     (number - page index) offset accounts for most occurrences."""
     if len(pairs) < 3:
         return False
-    offsets = {}
-    for page, number in pairs:
-        offsets[number - page] = offsets.get(number - page, 0) + 1
-    return max(offsets.values()) >= max(3, 0.6 * len(pairs))
+    return max(_offset_counts(pairs).values()) >= max(3, 0.6 * len(pairs))
 
 
 def _step_offsets(pairs, n_pages=3):
     """{number - page index} offsets shared by 3 or more (page, number) pairs (every
     page of a shorter document): the numbering a run of page labels follows ('ii',
     'iii', 'iv' or '3 of 9', '4 of 9')."""
-    offsets = {}
-    for page, number in pairs:
-        offsets[number - page] = offsets.get(number - page, 0) + 1
-    return {k for k, n in offsets.items() if n >= min(3, max(n_pages, 2))}
+    return {k for k, n in _offset_counts(pairs).items() if n >= min(3, max(n_pages, 2))}
 
 
 def _page_label(plain):
@@ -390,10 +390,8 @@ def strip_page_furniture(pages, edge=4):
             text, number = _split_page_number(_normal(raw))
             if number is not None:
                 numbered.setdefault(text, []).append((page, number))
-    stepping_text = {t for t, pairs in numbered.items() if _stepping(pairs, len(pages))}
-    bare_offsets = {}
-    for page, number in bare:
-        bare_offsets[number - page] = bare_offsets.get(number - page, 0) + 1
+    stepping_text = {t for t, pairs in numbered.items() if _stepping(pairs)}
+    bare_offsets = _offset_counts(bare)
     page_offsets = set()
     if bare_offsets:
         best = max(bare_offsets, key=bare_offsets.get)
