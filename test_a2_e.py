@@ -263,6 +263,43 @@ class Audit2Downloaders(unittest.TestCase):
         self.assertEqual(state()["records"], 7)
         self.assertEqual(self.pmc_ids(records), list(range(1, 1002)))
 
+    def test_f141_pmc_http_get_honours_retry_after(self):
+        """F141: on 429/503 the PMC http_get waits as long as the server's Retry-After asks (at least
+        its own backoff); without the header, and for other errors, the backoff is unchanged."""
+        import email.message
+        import urllib.error
+
+        class Response:
+            headers = {}
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def read(self, n=-1):
+                return b"body"
+
+        def answers(code, retry_after):
+            headers = email.message.Message()
+            if retry_after is not None:
+                headers["Retry-After"] = retry_after
+            return [urllib.error.HTTPError("https://example.org/x", code, "slow down", headers, None), Response()]
+
+        def longest_sleep(code, retry_after):
+            with unittest.mock.patch.object(pmc.urllib.request, "urlopen", side_effect=answers(code, retry_after)), \
+                    unittest.mock.patch.object(pmc.time, "sleep") as sleep:
+                self.assertEqual(pmc.http_get("https://example.org/x"), b"body")
+            return max(call.args[0] for call in sleep.call_args_list)
+
+        self.assertGreaterEqual(longest_sleep(429, "30"), 30)
+        self.assertGreaterEqual(longest_sleep(503, "30"), 30)
+        self.assertLess(longest_sleep(429, "1"), 4.01)  # shorter than the backoff: the backoff (3-4 s) stands
+        self.assertLess(longest_sleep(429, None), 4.01)
+        self.assertLess(longest_sleep(500, "30"), 4.01)  # Retry-After is honoured for 429 and 503 only
+        self.assertLessEqual(longest_sleep(429, "999999"), 3600)
+
 
 if __name__ == "__main__":
     unittest.main()

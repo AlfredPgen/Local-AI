@@ -85,10 +85,13 @@ def _wait_turn():
 
 def http_get(url, data=None, timeout=300, tries=6):
     """Bytes of url (POST when data is given), None on 404. Rate limits, server
-    errors and network failures are retried with exponential backoff."""
+    errors and network failures are retried with exponential backoff; after
+    "too many requests" (429) or "busy" (503) the wait is at least as long as
+    the server's Retry-After asks (at most an hour)."""
     delay = 3.0
     for attempt in range(tries):
         _wait_turn()
+        asked = 0.0
         try:
             request = urllib.request.Request(url, data=data, headers={"User-Agent": USER_AGENT,
                                                                       "Accept-Encoding": "gzip"})
@@ -104,10 +107,16 @@ def http_get(url, data=None, timeout=300, tries=6):
                 return None
             if exc.code not in (429, 500, 502, 503, 504) or attempt == tries - 1:
                 raise
+            if exc.code in (429, 503):
+                # imported here, not at the top: download_arxiv imports this module
+                if "download_arxiv" not in sys.modules:
+                    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+                from download_arxiv import _retry_after
+                asked = min(_retry_after(exc.headers) or 0.0, 3600.0)
         except (urllib.error.URLError, TimeoutError, ConnectionError, http.client.HTTPException, OSError):
             if attempt == tries - 1:
                 raise
-        time.sleep(delay + random.random())
+        time.sleep(max(delay + random.random(), asked))
         delay = min(delay * 2, 120)
     return None
 
