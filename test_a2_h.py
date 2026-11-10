@@ -5,6 +5,7 @@ are merged.
     python -m unittest test_a2_h
 """
 import io
+import json
 import os
 import shutil
 import sys
@@ -16,6 +17,7 @@ from contextlib import redirect_stdout
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(HERE, "tools"))
+import test_tiny_gpt as T  # noqa: E402
 
 
 def fake_popen(scripts, started, killed):
@@ -104,6 +106,87 @@ class Audit2PipelineTools(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertEqual([c[1] for c in started], ["data_prep.py"], "no training after an interrupted build")
         self.assertEqual(killed, [])
+
+    def test_estimate_step_uses_the_built_datasets_tokenizer(self):
+        """F191: `run_pipeline.py estimate` passes the built dataset as --tokenizer (the tokenizer that exists,
+        not a new one at today's automatic vocabulary size); without a dataset it passes none."""
+        import run_pipeline
+        here = os.path.join(self.tmp, "f191")
+        dataset = os.path.join(here, "datasets", "bio_all")
+        os.makedirs(dataset, exist_ok=True)
+        os.makedirs(os.path.join(here, "data"), exist_ok=True)
+        calls = []
+
+        def estimate():
+            with unittest.mock.patch.multiple(run_pipeline, HERE=here, DATASET=dataset,
+                                              DATA=os.path.join(here, "data")), \
+                    unittest.mock.patch.object(run_pipeline, "run", side_effect=lambda cmd: calls.append(cmd) or 0), \
+                    unittest.mock.patch.object(sys, "argv", ["run_pipeline.py", "estimate"]):
+                self.assertEqual(run_pipeline.main(), 0)
+            return calls[-1]
+
+        self.assertNotIn("--tokenizer", estimate(), "no dataset yet: the estimate trains its own tokenizer")
+        with open(os.path.join(dataset, "manifest.json"), "w", encoding="utf-8") as f:
+            json.dump({"prep_args": {"superbpe": True}, "tokenizer": {"vocab_size": 16384}}, f)
+        cmd = estimate()
+        self.assertEqual(cmd[1:4], ["estimate_dataset.py", "--tokenizer", dataset])
+        with unittest.mock.patch.multiple(run_pipeline, HERE=here, DATASET=dataset, DATA=os.path.join(here, "data")):
+            self.assertEqual(cmd[4:], run_pipeline.build_command()[4:])
+            self.assertNotIn("--tokenizer", run_pipeline.build_command(), "the build command itself is unchanged")
+
+    # ---------------- estimate_dataset ----------------
+    def text_folder(self, name, n=8):
+        folder = os.path.join(self.tmp, name)
+        os.makedirs(folder, exist_ok=True)
+        for i in range(n):
+            with open(os.path.join(folder, f"doc_{i}.md"), "w", encoding="utf-8", newline="\n") as f:
+                f.write(f"# Lecture note {i}\n\n" + T.paragraphs(900 + i, 30))
+        return folder
+
+    def run_estimate(self, argv):
+        """estimate_dataset.main in this process; data_prep's worker globals and the process priority (which
+        _init_worker lowers) are left as they were."""
+        import data_prep as dp
+        import estimate_dataset
+        with unittest.mock.patch.multiple(dp, _W_KW=dp._W_KW, _W_CFG=dp._W_CFG, _lower_priority=lambda: None), \
+                redirect_stdout(io.StringIO()) as out:
+            estimate_dataset.main(argv)
+        return out.getvalue()
+
+    def test_estimate_with_a_tokenizer_sizes_models_for_its_vocabulary(self):
+        """F191: with --tokenizer the model-size table is built for that tokenizer's vocabulary and one line
+        names the vocabulary a rebuild would train; a tokenizer that cannot be read falls back to training."""
+        import sentencepiece as spm
+        import tiny_gpt
+        folder = self.text_folder("f191_text")
+        work = os.path.join(self.tmp, "f191_tok")
+        os.makedirs(work, exist_ok=True)
+        corpus = os.path.join(work, "corpus.txt")
+        with open(corpus, "w", encoding="utf-8", newline="\n") as f:
+            f.write(T.paragraphs(1, 60).replace("\n\n", "\n"))
+        spm.SentencePieceTrainer.train(input=corpus, model_prefix=os.path.join(work, "tok"), model_type="bpe",
+                                       vocab_size=120, hard_vocab_limit=False, user_defined_symbols=["\n", "\t"],
+                                       unk_id=0, bos_id=1, eos_id=2, pad_id=-1, minloglevel=2)
+        model = os.path.join(work, "tok.model")
+        size = spm.SentencePieceProcessor(model_file=model).get_piece_size()
+        self.assertNotEqual(size, 4096)
+        argv = ["--md-dir", folder, "--tflops", "1", "--hours", "1"]
+        with unittest.mock.patch.object(tiny_gpt, "shape_ladder", wraps=tiny_gpt.shape_ladder) as ladder:
+            out = self.run_estimate(["--tokenizer", model] + argv)
+        ladder.assert_called_once_with(size)
+        self.assertIn("a rebuild from scratch would train a 4,096-piece tokenizer", out)
+        self.assertNotIn("training a", out)
+        # a dataset folder whose manifest names no readable tokenizer: not an exit, a trained tokenizer
+        broken = os.path.join(self.tmp, "f191_broken")
+        os.makedirs(broken, exist_ok=True)
+        with open(os.path.join(broken, "manifest.json"), "w", encoding="utf-8") as f:
+            json.dump({"prep_args": {}}, f)
+        with unittest.mock.patch.object(tiny_gpt, "shape_ladder", wraps=tiny_gpt.shape_ladder) as ladder:
+            out = self.run_estimate(["--tokenizer", broken] + argv)
+        ladder.assert_called_once_with(4096)
+        self.assertIn("cannot be read", out)
+        self.assertIn("training a 4,096-piece SentencePiece tokenizer on the kept sample", out)
+        self.assertNotIn("a rebuild from scratch", out)
 
 
 if __name__ == "__main__":

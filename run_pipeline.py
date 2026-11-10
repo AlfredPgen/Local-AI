@@ -64,8 +64,10 @@ def manifest_prep_args(dataset=None):
 def build_command():
     """The data_prep command that builds DATASET. Where DATASET already has a
     manifest, its recorded superbpe, tokenizer_weights, wiki_max_docs and
-    near_dup_max_docs are used instead of the constants above (estimate then
-    counts the tokens of the tokenizer that exists: SuperBPE gives ~13 % fewer)."""
+    near_dup_max_docs are used instead of the constants above. The command
+    names no tokenizer: a build trains a new one at data_prep's automatic
+    vocabulary size, `continue` adds --tokenizer-from, and `estimate` adds
+    --tokenizer DATASET to count the tokens of the tokenizer that exists."""
     prep = manifest_prep_args()
     superbpe = bool(prep.get("superbpe", SUPERBPE))
     wiki_max = int(prep.get("wiki_max_docs", WIKI_MAX_DOCS) or 0)
@@ -243,8 +245,10 @@ def main():
     if args.step == "posttrain":
         return step_posttrain(args.name)
     if args.step == "estimate":
-        # the same data settings as 'build' (everything after data_prep.py --out <folder>)
-        return run([sys.executable, "estimate_dataset.py"] + build_command()[4:])
+        # the same data settings as 'build' (everything after data_prep.py --out <folder>), counted with the built
+        # dataset's own tokenizer where there is one (a rebuild would train a new one: estimate_dataset says so)
+        return run([sys.executable, "estimate_dataset.py"] + (["--tokenizer", DATASET] if dataset_ready() else [])
+                   + build_command()[4:])
     if args.step == "build":
         return step_build()
     if args.step == "plan":

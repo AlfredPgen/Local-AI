@@ -356,10 +356,21 @@ def main(argv=None):
     estimates = {t.name: t.estimate() for t in tallies}
     train_chars = sum(c for _, c in estimates.values())
     vocab = args.vocab_size or dp.auto_vocab_size(train_chars)
-    with tempfile.TemporaryDirectory() as work:
-        if opts.tokenizer:
+    tok = rebuild = None
+    if opts.tokenizer:
+        try:
             tok = dp.load_tokenizer_from_any(opts.tokenizer)
+        except (SystemExit, Exception) as exc:  # noqa: BLE001 - e.g. a dataset folder whose tokenizer file is gone
+            print(f"--tokenizer {opts.tokenizer} cannot be read ({type(exc).__name__}: {exc}); a tokenizer is trained "
+                  "on the kept sample instead", flush=True)
+    with tempfile.TemporaryDirectory() as work:
+        if tok is not None:
             how = f"tokenizer {opts.tokenizer}"
+            if tok.vocab_size != vocab:
+                rebuild = (f"a rebuild from scratch would train a {vocab:,}-piece tokenizer"
+                           + (" (about 10 % fewer tokens)" if vocab > tok.vocab_size else "")
+                           + ": python estimate_dataset.py for that")
+            vocab = tok.vocab_size  # the model sizes below are for the tokenizer that was measured
         else:
             kind = "SuperBPE" if args.superbpe else "SentencePiece"
             print(f"training a {vocab:,}-piece {kind} tokenizer on the kept sample ...", flush=True)
@@ -386,6 +397,8 @@ def main(argv=None):
               f"{train / 1e6:>14,.0f}M  {reasons}{cap}")
     print(f"{'total':<21}{'':>12}{'':>12}{'':>13}{'':>10}{total_tokens / 1e6:>14,.0f}M  "
           f"(+ {total_val / 1e6:,.0f}M validation tokens)")
+    if rebuild:
+        print(f"These are tokens of the {vocab:,}-piece tokenizer given with --tokenizer; {rebuild}")
 
     # ---------------- model sizes ----------------
     import tiny_gpt
