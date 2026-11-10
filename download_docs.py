@@ -372,7 +372,8 @@ class Http:
     def allowed(self, url):
         """True if robots.txt lets this script fetch url (fetched once per host:
         401/403 forbid everything and other 4xx allow everything, as
-        urllib.robotparser does; Crawl-delay is honoured, up to 60 s)."""
+        urllib.robotparser does, except 429, which is raised like a 5xx and not
+        remembered; Crawl-delay is honoured, up to 60 s)."""
         parts = urllib.parse.urlsplit(url)
         key = f"{parts.scheme}://{parts.netloc}"
         rp = self.robots.get(key)
@@ -384,7 +385,7 @@ class Http:
                 if exc.code in (401, 403):
                     rp.disallow_all = True
                     rp.refused = exc.code
-                elif exc.code < 500:
+                elif exc.code < 500 and exc.code != 429:
                     rp.allow_all = True
                 else:
                     raise
