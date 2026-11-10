@@ -39,7 +39,7 @@ records which input made each output, so a rerun keeps every name, never takes
 an earlier output for a new input and never converts its own outputs. Each PDF
 is converted in its own process, so a PDF that crashes MuPDF or hangs (--timeout)
 costs only that file; the report and manifest are saved as the batch goes. Starting
-that process costs about 1.6 s per PDF (loading pymupdf4llm), about 1.2 hours over
+that process costs about 1.8 s per PDF (loading pymupdf4llm), about 1.4 hours over
 2,760 PDFs; --workers N spreads it over N processes. The timings here are for
 --pdf-layout model (the default): pymupdf4llm's layout model uses about 3 cores per
 process, so --workers above a third of the cores only adds contention. --pdf-layout
