@@ -2099,6 +2099,8 @@ def evaluate(model, evalset, device, amp_dtype, batch_windows, bins=10, byte_tab
     acc_sum = torch.zeros(bins, dtype=torch.float64)
     count = torch.zeros(bins, dtype=torch.float64)
     bpb_source = {}
+    # MPS has no float64: there the tensors go to the CPU first
+    to64 = (lambda t: t.cpu().double()) if device.type == "mps" else (lambda t: t.double())  # noqa: E731
     for name, windows in evalset.windows.items():
         nll_total, tokens, n_bytes = 0.0, 0, 0
         for start in range(0, windows.shape[0], batch_windows):
@@ -2111,18 +2113,20 @@ def evaluate(model, evalset, device, amp_dtype, batch_windows, bins=10, byte_tab
             probs = logp.exp()
             entropy = -(probs * logp).sum(-1)
             conf, pred = probs.max(-1)
-            correct = (pred == y).double()
-            nll_total += nll.double().sum().item()
+            correct = to64(pred == y)
+            nll_total += to64(nll).sum().item()
             tokens += y.numel()
             if byte_tables is not None:
                 size, marked, line_break = byte_tables
                 yc, xc = y.cpu(), x.cpu()
                 n_bytes += int(size[yc].sum()) - int((marked[yc] & line_break[xc]).sum())
-            sums["entropy"] += entropy.double().sum().item()
-            sums["confidence"] += conf.double().sum().item()
+            sums["entropy"] += to64(entropy).sum().item()
+            c = to64(conf)
+            sums["confidence"] += c.sum().item()
             sums["top1"] += correct.sum().item()
-            which = (conf.double().clamp(0, 1 - 1e-9) * bins).long().flatten().cpu()
-            conf_sum += torch.bincount(which, conf.double().flatten().cpu(), bins)
+            # a non-finite logit (NaN confidence) lands in bin 0: the loss then reads nan instead of bincount raising
+            which = (c.nan_to_num(0.0).clamp(0, 1 - 1e-9) * bins).long().clamp(0, bins - 1).flatten().cpu()
+            conf_sum += torch.bincount(which, c.flatten().cpu(), bins)
             acc_sum += torch.bincount(which, correct.flatten().cpu(), bins)
             count += torch.bincount(which, minlength=bins).double()
         per_source[name] = nll_total / max(tokens, 1)
