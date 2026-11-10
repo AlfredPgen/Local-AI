@@ -86,10 +86,6 @@ _PDF_CHILD = (
     "t = c.convert_pdf(sys.argv[1], types.SimpleNamespace(extract_images=False, out=None)); "
     "open(sys.argv[2], 'w', encoding='utf-8').write(t)")
 # subject areas (OAI-PMH sets) and their priority groups
-DEFAULT_SETS = ["q-bio", "physics:physics:bio-ph", "physics:physics:med-ph", "stat", "econ:econ:EM",
-                "physics:physics:data-an", "cs:cs:AI", "cs:cs:LG", "cs:cs:CL", "cs:cs:CV", "cs:cs:NE", "cs:cs:MA",
-                "cs:cs:IR", "cs:cs:CE", "cs:cs:DS", "cs:cs:DC", "cs:cs:MS", "cs:cs:CR", "cs:cs:CY", "eess:eess:IV",
-                "math"]
 # a paper joins the highest-ranked group among its categories (paper_group); medical physics counts as biology, econometrics
 # (instrumental variables, causal inference) and physics data analysis as statistics, image processing as AI
 GROUPS = [("biology", ("q-bio", "physics.bio-ph", "physics.med-ph")),
@@ -97,6 +93,8 @@ GROUPS = [("biology", ("q-bio", "physics.bio-ph", "physics.med-ph")),
           ("AI", ("cs.AI", "cs.LG", "cs.CL", "cs.CV", "cs.NE", "cs.MA", "cs.IR", "cs.CE", "cs.DS", "cs.DC", "cs.MS",
                   "cs.CR", "cs.CY", "eess.IV")),
           ("mathematics", ("math",))]
+# the OAI-PMH sets harvested by default: every category above, in that order ("cs.AI" is the set "cs:cs:AI")
+DEFAULT_SETS = [p if "." not in p else "{0}:{0}:{1}".format(*p.split(".", 1)) for _, ps in GROUPS for p in ps]
 GROUP_RANK = {"biology": 0, "statistics": 1, "AI": 2, "mathematics": 2}  # AI and mathematics share a rank
 FINAL = {"ok", "too_short", "no_text"}  # statuses not retried on a rerun
 FETCH_FAILED = "fetch_failed"  # passed to convert_paper in place of the e-print when its download failed

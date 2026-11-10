@@ -317,6 +317,17 @@ class Audit2Downloaders(unittest.TestCase):
         self.assertIn("  [q-bio] cached: 5 records; adding papers new or changed since 2025-12-29", text)
         self.assertNotIn("sets cached", text)
 
+    def test_f123_default_sets_follow_the_group_table(self):
+        """F123 (guard): the default OAI-PMH sets are the categories of GROUPS, in this order (read_cache
+        keeps a paper's first copy, so the order matters)."""
+        self.assertEqual(ax.DEFAULT_SETS, [
+            "q-bio", "physics:physics:bio-ph", "physics:physics:med-ph", "stat", "econ:econ:EM",
+            "physics:physics:data-an", "cs:cs:AI", "cs:cs:LG", "cs:cs:CL", "cs:cs:CV", "cs:cs:NE", "cs:cs:MA",
+            "cs:cs:IR", "cs:cs:CE", "cs:cs:DS", "cs:cs:DC", "cs:cs:MS", "cs:cs:CR", "cs:cs:CY", "eess:eess:IV",
+            "math"])
+        self.assertEqual(len(ax.DEFAULT_SETS), 21)
+        self.assertEqual(ax.parse_args(["--out", self.tmp]).sets, ax.DEFAULT_SETS)
+
     # ---------------- download_pmc.py ----------------
     QUERY = "OPEN_ACCESS:y AND TEST:y"
 
