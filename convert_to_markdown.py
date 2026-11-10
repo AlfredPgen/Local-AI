@@ -1210,6 +1210,27 @@ def pdf_pages(path):
         return 0
 
 
+def _sniffed_type(path):
+    """True for the inputs whose --by-type folder depends on their first line: a
+    .txt, and a .gz of anything but .csv/.tsv/.tab."""
+    return os.path.splitext(path)[1].lower() in (".txt", ".gz") and inner_ext(path) not in (".csv", ".tsv", ".tab")
+
+
+def _gwas_header(path, args):
+    """True if the first line of a text file is a header of GWAS summary statistics
+    (the test convert_table_or_text applies), read without converting the file."""
+    if getattr(args, "no_gwas", False):
+        return False
+    try:
+        with open_text(path) as handle:
+            first = handle.readline(1 << 20)
+        delim = sniff_delimiter(first)
+        header = next(csv.reader([first], delimiter=delim)) if delim else first.split()
+    except Exception:  # noqa: BLE001 - unreadable here: the conversion reports why
+        return False
+    return bool(gwas_columns(header)) and bool(delim or len(header) >= 3)
+
+
 def plan_target(path, args, n_files):
     """Output path decided before converting, so existing outputs are skipped cheaply."""
     base = os.path.basename(path)
@@ -1226,8 +1247,10 @@ def plan_target(path, args, n_files):
             kind = ext[1:]
         elif ext in (".html", ".htm"):
             kind = "html"
-        elif inner_ext(path) in (".csv", ".tsv", ".tab") or ext == ".gz":
+        elif inner_ext(path) in (".csv", ".tsv", ".tab"):
             kind = "table"
+        elif _sniffed_type(path):  # summary statistics as .txt or .gz go with the tables, prose with the articles
+            kind = "table" if _gwas_header(path, args) else "text"
         else:
             kind = "text"
         folder = os.path.join(args.out, TYPE_FOLDER.get(kind, "articles"))
@@ -1317,6 +1340,18 @@ def legacy_outputs(files, args):
     return owners
 
 
+def _kept_type_folder(path, mine, candidates, args):
+    """True if the output an earlier run recorded for a .txt/.gz input is one of its
+    candidate names in the other folder --by-type can give it (articles or tables).
+    It stays there: a file sorted before its header was looked at is not converted
+    a second time into the other folder."""
+    if not (args.by_type and args.out and _sniffed_type(path)):
+        return False
+    folders = {_norm(os.path.join(args.out, TYPE_FOLDER[kind])) for kind in ("table", "text")}
+    names = {os.path.normcase(os.path.basename(c)) for c in candidates}
+    return _norm(os.path.dirname(mine)) in folders and os.path.normcase(os.path.basename(mine)) in names
+
+
 def plan_targets(files, args, owners=None):
     """[(path, target)] in input order, where no two inputs share an output and no
     output is another input. An input keeps the output an earlier run recorded for
@@ -1336,7 +1371,8 @@ def plan_targets(files, args, owners=None):
             chosen[path] = candidates[0]  # reported as "would overwrite the input"
             continue
         mine = recorded.get(_norm(path))
-        if mine and _norm(mine) in {_norm(c) for c in candidates[:22]} and _norm(mine) not in inputs:
+        if mine and _norm(mine) not in inputs and (_norm(mine) in {_norm(c) for c in candidates[:22]}
+                                                   or _kept_type_folder(path, mine, candidates[:22], args)):
             target = mine  # the name an earlier run gave it (same folder and options)
         else:
             target = next((c for c in candidates if _norm(c) not in claimed and _norm(c) not in inputs),

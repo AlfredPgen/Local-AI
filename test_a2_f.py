@@ -280,6 +280,52 @@ class Audit2DocsYoutubeConvert(unittest.TestCase):
             self.assertEqual((n, top, per_chr), (0, [], {}))
             self.assertTrue(np.isnan(lam))
 
+    def test_by_type_sorts_txt_and_gz_by_their_header(self):
+        """F039: with --by-type a GWAS .txt goes to tables and a prose .txt.gz to articles; an input an earlier
+        run recorded in the other folder stays there (it is not converted a second time)."""
+        import gzip
+        import json
+        import subprocess
+        src, out = os.path.join(self.tmp, "f039", "src"), os.path.join(self.tmp, "f039", "out")
+        os.makedirs(src)
+        rows = ["CHROM\tGENPOS\tID\tALLELE0\tALLELE1\tBETA\tSE\tLOG10P"]
+        rows += [f"{1 + k % 3}\t{1000 + k}\trs{k}\tA\tG\t0.01\t0.02\t{0.3 + (k % 7) / 10:.1f}" for k in range(30)]
+        for name in ("a.txt", "old.txt"):
+            with open(os.path.join(src, name), "w", encoding="utf-8", newline="\n") as handle:
+                handle.write("\n".join(rows) + "\n")
+        prose = "Genetic drift changes allele frequencies by chance. It is stronger in small populations.\n" * 5
+        with gzip.open(os.path.join(src, "prose.txt.gz"), "wt", encoding="utf-8") as handle:
+            handle.write(prose)
+        with gzip.open(os.path.join(src, "sumstats.tsv.gz"), "wt", encoding="utf-8", newline="\n") as handle:
+            handle.write("\n".join(rows) + "\n")
+        with open(os.path.join(src, "notes.txt"), "w", encoding="utf-8") as handle:
+            handle.write(prose)
+        os.makedirs(os.path.join(out, "articles"))  # old.txt was converted before, into articles
+        with open(os.path.join(out, "articles", "old.md"), "w", encoding="utf-8") as handle:
+            handle.write("# GWAS summary statistics: old\n")
+        with open(os.path.join(out, "conversion_manifest.json"), "w", encoding="utf-8") as handle:
+            json.dump({"outputs": {"articles/old.md": os.path.join(src, "old.txt")}}, handle)
+        done = subprocess.run([sys.executable, os.path.join(HERE, "convert_to_markdown.py"), src, "--out", out,
+                               "--by-type"], capture_output=True, text=True, encoding="utf-8", errors="replace",
+                              timeout=600, env=dict(os.environ, PYTHONIOENCODING="utf-8"))
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        found = sorted(os.path.relpath(os.path.join(folder, name), out).replace(os.sep, "/")
+                       for folder, _, names in os.walk(out) for name in names if name.endswith(".md"))
+        self.assertEqual(found, ["articles/notes.md", "articles/old.md", "articles/prose.md", "tables/a.md",
+                                 "tables/sumstats.md"], done.stdout + done.stderr)
+        with open(os.path.join(out, "tables", "a.md"), encoding="utf-8") as handle:
+            self.assertIn("30 genetic variants", handle.read())
+        # --no-gwas: the same .txt is a plain file again and goes with the articles
+        import convert_to_markdown as conv
+        import argparse
+        args = argparse.Namespace(out=out, by_type=True, name_prefix="", book_pages=150, no_gwas=True,
+                                  output_name=None)
+        self.assertEqual(os.path.basename(os.path.dirname(conv.plan_target(os.path.join(src, "a.txt"), args, 5))),
+                         "articles")
+        args.no_gwas = False
+        self.assertEqual(os.path.basename(os.path.dirname(conv.plan_target(os.path.join(src, "a.txt"), args, 5))),
+                         "tables")
+
 
 if __name__ == "__main__":
     unittest.main()
