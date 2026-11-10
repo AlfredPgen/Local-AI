@@ -1038,8 +1038,8 @@ class TinyGPT(nn.Module):
         embed = self.token_embedding.weight.numel()
         if not self.cfg.tie_embeddings:
             embed += self.lm_head.weight.numel()
-        cfg = self.cfg
-        idle = cfg.n_moe_blocks * 3 * cfg.d_model * cfg.expert_hidden * (cfg.n_experts - cfg.experts_per_token)
+        counted = count_params(self.cfg)
+        idle = counted[0] - counted[2]  # the experts a token does not use (0 for a dense model)
         return total, total - embed, total - idle, total - idle - embed
 
 
@@ -1140,9 +1140,9 @@ def count_params(cfg):
     d, h = cfg.d_model, cfg.ffn_hidden
     kv = cfg.n_kv_heads * cfg.head_dim
     per_layer = d * d * 2 + d * kv * 2 + 2 * d  # attention and the two norms
-    if getattr(cfg, "qk_norm", False):
+    if cfg.qk_norm:
         per_layer += 2 * cfg.head_dim  # the query and key norm gains, shared across heads
-    n_moe = getattr(cfg, "n_moe_blocks", 0)
+    n_moe = cfg.n_moe_blocks
     e, k, h_e, shared = cfg.n_experts, cfg.experts_per_token, cfg.expert_hidden, cfg.shared_hidden
     moe_ffn = e * 3 * d * h_e + e * d + 3 * d * shared if n_moe else 0  # experts, router, shared SwiGLU
     body = per_layer * cfg.n_layers + 3 * d * h * (cfg.n_layers - n_moe) + moe_ffn * n_moe + d
