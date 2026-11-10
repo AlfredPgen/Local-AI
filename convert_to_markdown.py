@@ -40,7 +40,11 @@ an earlier output for a new input and never converts its own outputs. Each PDF
 is converted in its own process, so a PDF that crashes MuPDF or hangs (--timeout)
 costs only that file; the report and manifest are saved as the batch goes. Starting
 that process costs about 1.6 s per PDF (loading pymupdf4llm), about 1.2 hours over
-2,760 PDFs; --workers N spreads it over N processes.
+2,760 PDFs; --workers N spreads it over N processes. The timings here are for
+--pdf-layout model (the default): pymupdf4llm's layout model uses about 3 cores per
+process, so --workers above a third of the cores only adds contention. --pdf-layout
+fast reads the pages without the model (about a quarter of the CPU time; headings,
+tables and figure text come out differently, so do not mix the two in one corpus).
 """
 
 import argparse
@@ -184,8 +188,9 @@ def inner_ext(path):
 # PDF
 # ---------------------------------------------------------------------------
 # pymupdf4llm's layout analysis slows down with the number of vector shapes on a page
-# (about 30-40 s for a plot of a few hundred to thousands of paths). Such pages are read as
-# plain text; get_cdrawings() also sees shapes inside embedded figures (Form XObjects).
+# (about 30-40 s for a plot of a few hundred to thousands of paths, with --pdf-layout model).
+# Such pages are read as plain text; get_cdrawings() also sees shapes inside embedded figures
+# (Form XObjects).
 HEAVY_PDF_PAGE_DRAWINGS = 500
 HEAVY_PDF_PAGE_BYTES = 200_000
 
@@ -202,7 +207,9 @@ def _heavy_page(page):
 SCAN_CHARS_PER_PAGE = 200   # a page of text has 2,000-4,000 characters; a page with fewer may be a scan
 SCAN_IMAGE_COVER = 0.8      # ... when images cover at least this share of it (a scan fills the page)
 OCR_SECONDS_PER_PAGE = 15   # --ocr: a child process gets at least this long per page before it is stopped
-PDF_SECONDS_PER_PAGE = 5    # without --ocr (layout analysis of a page takes well under a second on a CPU)
+# without --ocr (layout analysis of a page takes well under a second on a CPU with --pdf-layout model, on about
+# 3 cores; --pdf-layout fast needs about a quarter of that CPU time)
+PDF_SECONDS_PER_PAGE = 5
 _PICTURE_TEXT = re.compile(r"(?:<!--|-----) Start of picture text (?:-->|-----).*?(?:<!--|-----) End of picture "
                            r"text (?:-->|-----)\n?", re.S)
 # pymupdf4llm writes each image link on a line of its own ('\n![](path)\n'): matching the whole line lets
@@ -252,7 +259,11 @@ def convert_pdf(path, args, image_dir=None, info=None):
         import pymupdf4llm
     except ImportError:
         raise RuntimeError("PDF conversion needs pymupdf4llm: python -m pip install pymupdf4llm")
-    kwargs = {"use_ocr": False}  # OCR only when --ocr asks for it (else it runs whenever Tesseract is on PATH)
+    if getattr(args, "pdf_layout", "model") == "fast":
+        pymupdf4llm.use_layout(False)  # for the rest of this process (every PDF is converted in a process of its own)
+        kwargs = {}  # no use_ocr: without the layout model there is no OCR, and the argument is refused with a warning
+    else:
+        kwargs = {"use_ocr": False}  # OCR only when --ocr asks for it (else it runs whenever Tesseract is on PATH)
     if getattr(args, "extract_images", False):
         if image_dir is None:
             folder = getattr(args, "out", None) or os.path.dirname(os.path.abspath(path))
@@ -1174,6 +1185,10 @@ def parse_args():
                    help=".csv/.tsv/.xlsx: table columns kept (a wide matrix would be megabytes of numbers)")
     p.add_argument("--no-gwas", action="store_true", help="treat summary-statistics files as plain tables")
     p.add_argument("--extract-images", action="store_true", help="PDF only: also save embedded images")
+    p.add_argument("--pdf-layout", choices=("model", "fast"), default="model",
+                   help="PDF only: model (default) reads pages with pymupdf4llm's layout model, about 3 cores per "
+                        "process; fast reads them without it (about a quarter of the CPU time; headings, tables "
+                        "and figure text differ, so keep one mode per corpus)")
     p.add_argument("--ocr", action="store_true",
                    help="scanned PDF pages (no text layer, page covered by an image): read them with Tesseract OCR "
                         "(slow: seconds per page); other pages keep their text layer")
@@ -1487,7 +1502,8 @@ def convert_to_file(path, target, args):
     with open(tmp, "w", encoding="utf-8", newline="\n") as handle:
         handle.write(text + "\n")
     os.replace(tmp, target)
-    return f"converted ({kind})", f"{target} ({len(text) + 1:,} characters){ocr_note}"
+    layout_note = " (fast layout)" if kind == "pdf" and getattr(args, "pdf_layout", "model") == "fast" else ""
+    return f"converted ({kind})", f"{target} ({len(text) + 1:,} characters){ocr_note}{layout_note}"
 
 
 def _reason(exc):
@@ -1651,6 +1667,8 @@ def main():
             cmd.append("--overwrite")
         if args.extract_images:
             cmd.append("--extract-images")
+        if getattr(args, "pdf_layout", "model") == "fast":
+            cmd += ["--pdf-layout", "fast"]
         timeout = args.timeout
         if path.lower().endswith(".pdf"):  # a long book needs longer (OCR takes seconds per page)
             timeout = max(timeout, max(page_count(path), 1) * (OCR_SECONDS_PER_PAGE if getattr(args, "ocr", False)

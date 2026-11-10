@@ -409,6 +409,47 @@ class Audit2DocsYoutubeConvert(unittest.TestCase):
         self.assertEqual(sorted(os.path.basename(t) for t, _ in legacy.values()), ["x__20.md", "x__sub.md"])
         self.assertTrue(inspect.isgenerator(conv._name_candidates(files[0], args, len(files))))
 
+    def test_pdf_layout_fast_reaches_the_child_process(self):
+        """F031: --pdf-layout fast converts without pymupdf4llm's layout model, also in the child process every
+        PDF runs in, and says so in the report; without the option nothing changes."""
+        import argparse
+        import subprocess
+        import pymupdf
+        import pymupdf4llm
+        import convert_to_markdown as conv
+        src = os.path.join(self.tmp, "f031", "src")
+        os.makedirs(src)
+        path = os.path.join(src, "paper.pdf")
+        pdf = pymupdf.open()
+        page = pdf.new_page()
+        page.insert_text((72, 80), "Genetic drift in small populations", fontsize=20)
+        for k in range(8):
+            page.insert_text((72, 120 + 16 * k), f"Sentence {k + 1}: allele frequencies change by chance alone.",
+                             fontsize=11)
+        pdf.save(path)
+        pdf.close()
+        with open(os.path.join(src, "notes.txt"), "w", encoding="utf-8") as handle:  # two inputs: a report is written
+            handle.write("Selection changes allele frequencies in one direction.\n")
+        before = pymupdf4llm._use_layout
+        try:
+            want = {"model": conv.convert_pdf(path, argparse.Namespace())}
+            want["fast"] = conv.convert_pdf(path, argparse.Namespace(pdf_layout="fast"))
+            self.assertFalse(pymupdf4llm._use_layout)
+        finally:
+            pymupdf4llm.use_layout(before)  # the switch is per process: give the other tests their mode back
+        for mode, extra in (("fast", ["--pdf-layout", "fast"]), ("model", [])):
+            out = os.path.join(self.tmp, "f031", mode)
+            done = subprocess.run([sys.executable, os.path.join(HERE, "convert_to_markdown.py"), src, "--out", out,
+                                   "--workers", "2"] + extra, capture_output=True, text=True, encoding="utf-8",
+                                  errors="replace", timeout=900, env=dict(os.environ, PYTHONIOENCODING="utf-8"))
+            self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+            with open(os.path.join(out, "paper.md"), encoding="utf-8", newline="") as handle:
+                self.assertEqual(handle.read(), want[mode].replace("\r\n", "\n").strip() + "\n", mode)
+            with open(os.path.join(out, "conversion_report.tsv"), encoding="utf-8") as handle:
+                report = handle.read()
+            self.assertEqual(report.count("(fast layout)"), 1 if mode == "fast" else 0, report)  # the PDF's row only
+        self.assertIn("Genetic drift in small populations", want["fast"])
+
 
 if __name__ == "__main__":
     unittest.main()
