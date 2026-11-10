@@ -29,9 +29,10 @@ What each kind fetches:
   site    a documentation site, crawled breadth-first from the URL: same host, under the URL's
           path prefix only (give the folder that holds the manual, e.g.
           https://www.cog-genomics.org/plink/2.0/), robots.txt obeyed, at most --max-pages
-          pages. Linked PDFs inside the prefix are converted too and plain-text pages kept as
-          .txt; other files are skipped. A start page that redirects to a folder above its own
-          (a removed manual sent to the home page) is an error, not a crawl of the whole site.
+          pages. Linked PDFs inside the prefix are converted too; the start page and
+          extensionless plain-text pages are kept as .txt; other files (linked .txt and .md
+          files too) are skipped. A start page that redirects to a folder above its own (a
+          removed manual sent to the home page) is an error, not a crawl of the whole site.
   rtd     a Read the Docs project (https://PROJECT.readthedocs.io/en/latest/): the project's HTML
           zip (/_/downloads/<lang>/<version>/htmlzip/), at most --max-pages pages of it; if the
           project offers none, the site is crawled as above.
