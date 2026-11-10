@@ -1191,15 +1191,7 @@ def parse_args():
     p.add_argument("--ocr", action="store_true",
                    help="scanned PDF pages (no text layer, page covered by an image): read them with Tesseract OCR "
                         "(slow: seconds per page); other pages keep their text layer")
-    # options of the old pdf_to_markdown.py
-    p.add_argument("--input-folder", "-i", help=argparse.SUPPRESS)
-    p.add_argument("--input-name", "-n", help=argparse.SUPPRESS)
-    p.add_argument("--output-folder", "-o", help=argparse.SUPPRESS)
-    p.add_argument("--output-name", "-O", help=argparse.SUPPRESS)
     args = p.parse_args()
-    if args.input_name:
-        args.input = os.path.join(args.input_folder or ".", args.input_name)
-        args.out = args.out or args.output_folder
     if not args.input:
         p.error("give a file or folder to convert")
     if not os.path.exists(args.input):
@@ -1271,8 +1263,7 @@ def plan_target(path, args, n_files):
         else:
             kind = "text"
         folder = os.path.join(args.out, TYPE_FOLDER.get(kind, "articles"))
-    name = args.output_name if (n_files == 1 and args.output_name) else base + ".md"
-    return os.path.join(folder, name)
+    return os.path.join(folder, base + ".md")
 
 
 def _norm(path):

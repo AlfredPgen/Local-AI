@@ -318,8 +318,7 @@ class Audit2DocsYoutubeConvert(unittest.TestCase):
         # --no-gwas: the same .txt is a plain file again and goes with the articles
         import convert_to_markdown as conv
         import argparse
-        args = argparse.Namespace(out=out, by_type=True, name_prefix="", book_pages=150, no_gwas=True,
-                                  output_name=None)
+        args = argparse.Namespace(out=out, by_type=True, name_prefix="", book_pages=150, no_gwas=True)
         self.assertEqual(os.path.basename(os.path.dirname(conv.plan_target(os.path.join(src, "a.txt"), args, 5))),
                          "articles")
         args.no_gwas = False
@@ -354,7 +353,7 @@ class Audit2DocsYoutubeConvert(unittest.TestCase):
             self.assertEqual([conv.page_count(broken) for _ in range(3)], [0, 0, 0])
             self.assertEqual(max(conv.page_count(broken), 1), 1)  # the time limit counts at least one page
             args = argparse.Namespace(out=os.path.join(folder, "out"), by_type=True, name_prefix="", book_pages=2,
-                                      no_gwas=False, output_name=None)
+                                      no_gwas=False)
             kinds = [os.path.basename(os.path.dirname(conv.plan_target(p, args, 2))) for p in (two, broken)]
             args.book_pages = 3
             kinds.append(os.path.basename(os.path.dirname(conv.plan_target(two, args, 2))))
@@ -377,8 +376,7 @@ class Audit2DocsYoutubeConvert(unittest.TestCase):
             files.append(os.path.join(folder, "x.txt" if k else "x.md"))
             with open(files[-1], "w", encoding="utf-8") as handle:
                 handle.write("Genetic drift.\n")
-        args = argparse.Namespace(out=out, by_type=False, name_prefix="", book_pages=150, no_gwas=False,
-                                  output_name=None)
+        args = argparse.Namespace(out=out, by_type=False, name_prefix="", book_pages=150, no_gwas=False)
 
         def reference(path):  # the list this function built before the change
             target = conv.plan_target(path, args, len(files))
