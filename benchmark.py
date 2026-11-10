@@ -620,6 +620,11 @@ def wsl_distros():
             if d.strip() and not d.strip().lower().startswith("docker-desktop")]
 
 
+def wsl_candidates(distro=None):
+    """The WSL distributions to try: the named one, else every installed one, Ubuntu first."""
+    return [distro] if distro else sorted(wsl_distros(), key=lambda d: (not d.lower().startswith("ubuntu"), d))
+
+
 WSL_PROBE = r"""
 command -v python3 >/dev/null || { echo NO_PYTHON; exit 3; }
 command -v timeout >/dev/null || { echo NO_TIMEOUT; exit 3; }
@@ -752,8 +757,7 @@ def select_sandbox(prefer="auto", unsafe=False, distro=None, docker_image="pytho
             return DockerSandbox(docker_image)
         log("Docker: daemon not running (or docker not installed).")
     if prefer in ("auto", "wsl"):
-        candidates = [distro] if distro else sorted(wsl_distros(),
-                                                    key=lambda d: (not d.lower().startswith("ubuntu"), d))
+        candidates = wsl_candidates(distro)
         for d in candidates:
             probe = wsl_probe(d)
             if probe:
@@ -1440,9 +1444,7 @@ def cmd_plot(args):
 # sandbox setup
 # ---------------------------------------------------------------------------
 def cmd_sandbox_setup(args):
-    distros = [args.wsl_distro] if args.wsl_distro else sorted(
-        wsl_distros(), key=lambda d: (not d.lower().startswith("ubuntu"), d))
-    distro = next((d for d in distros if wsl_probe(d)), None)
+    distro = next((d for d in wsl_candidates(args.wsl_distro) if wsl_probe(d)), None)
     if not distro:
         raise SystemExit("No usable WSL distribution (python3 + bubblewrap/unshare). For Docker, build an image "
                          "FROM python:3.12-slim with `pip install numpy` and pass --docker-image.")
