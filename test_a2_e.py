@@ -272,6 +272,21 @@ class Audit2Downloaders(unittest.TestCase):
         self.assertRegex(state["harvested_until"], r"^\d{4}-\d{2}-\d{2}$")
         self.assertEqual([r["id"] for r in ax.read_cache(cache, ["q-bio"])], ["2101.00009"])
 
+    def test_f115_progress_line_counts_checked_papers(self):
+        """F115: build_list prints its progress every 200,000 papers checked, whether or not that paper
+        is kept."""
+        records = ({"id": str(i), "created": "2021-01-01", "title": "t", "abstract": "a", "categories": "hep-th",
+                    "license": ""} for i in range(400_000))  # no paper belongs to a group: none is kept
+        keywords = os.path.join(self.tmp, "kw.txt")
+        with open(keywords, "w", encoding="utf-8") as f:
+            f.write(self.KEYWORDS)
+        with unittest.mock.patch.object(ax, "read_cache", return_value=records), \
+                redirect_stdout(io.StringIO()) as buf:
+            rows = ax.build_list(self.tmp, ["q-bio"], keywords, 3, 3, os.path.join(self.tmp, "list.tsv"))
+        self.assertEqual(rows, [])
+        checked = [line for line in buf.getvalue().splitlines() if line.startswith("  checked ")]
+        self.assertEqual([line.split(" papers")[0] for line in checked], ["  checked 200,000", "  checked 400,000"])
+
     # ---------------- download_pmc.py ----------------
     QUERY = "OPEN_ACCESS:y AND TEST:y"
 

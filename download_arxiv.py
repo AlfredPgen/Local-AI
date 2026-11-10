@@ -439,6 +439,8 @@ def build_list(cache_dir, sets, keyword_path, min_hits, min_distinct, path):
     t0 = time.time()
     for rec in read_cache(cache_dir, sets):
         counts["records"] += 1
+        if counts["records"] % 200_000 == 0:
+            print(f"  checked {counts['records']:,} papers ({time.time() - t0:,.0f} s)", flush=True)
         group = paper_group(rec["categories"])
         if group is None:
             counts["no_group"] += 1
@@ -451,8 +453,6 @@ def build_list(cache_dir, sets, keyword_path, min_hits, min_distinct, path):
         score = hits / math.sqrt(max(words, 50))
         rows.append((GROUP_RANK[group], -score, rec["id"], group, rec["created"][:4], rec["categories"],
                      rec["license"], rec["title"], rec["abstract"]))
-        if counts["records"] % 200_000 == 0:
-            print(f"  checked {counts['records']:,} papers ({time.time() - t0:,.0f} s)", flush=True)
     rows.sort()
     with open(path + ".part", "w", encoding="utf-8", newline="\n") as handle:
         handle.write("\t".join(LIST_COLUMNS) + "\n")
