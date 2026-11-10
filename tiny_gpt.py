@@ -2854,10 +2854,13 @@ def split_batch(target, largest, smallest=1):
     return best
 
 
-def plan_run(args, manifest, device, amp_dtype, token_cap=None, fixed_cfg=None):
+def plan_run(args, manifest, device, amp_dtype, token_cap=None, fixed_cfg=None, verbose=True):
     """Fill every unset hyper-parameter from the dataset and device.
 
     token_cap limits the training-token budget (used by --time-budget-hours).
+    verbose=False: the explanation lines for a run header, without what the
+    header prints itself (the per-source token list, the batch, the weights and
+    source shares that are all equal); warnings and notes are always kept.
     fixed_cfg: an architecture that is not up for planning (--init-from: the
     checkpoint's ModelConfig, experts included); memory, batch, steps and the
     learning rate are then sized for exactly it. The compute rules (tokens per
@@ -3031,18 +3034,21 @@ def plan_run(args, manifest, device, amp_dtype, token_cap=None, fixed_cfg=None):
                     f"token" + (f" in every {cfg.moe_every}. block" if cfg.moe_every > 1 else "")
                     + (f", shared SwiGLU {cfg.shared_hidden}" if cfg.shared_hidden else "")
                     + f", {cfg.router} router, balance {cfg.balance}")
-    lines += [
-        f"unique training tokens U = {unique:,} ({', '.join(f'{k} {v:,}' for k, v in train_by_source.items())}); "
-        f"vocabulary {vocab:,}; {budget_text}",
+    ctx_why = ("--ctx" if args.ctx else "from the checkpoint" if fixed_cfg is not None
+               else f"default for d_model {cfg.d_model}")
+    attention = f"attention {attention_flop_share(cfg):.0%} of the training FLOPs per token"
+    block = [
+        f"unique training tokens U = {unique:,}"
+        + (f" ({', '.join(f'{k} {v:,}' for k, v in train_by_source.items())})" if verbose else "")
+        + f"; vocabulary {vocab:,}; {budget_text}",
         f"token budget D = {planned:,} ({why}); shape: {shape_why}",
         f"model: d_model {cfg.d_model}, layers {cfg.n_layers}, heads {cfg.n_heads}/{cfg.n_kv_heads} kv "
-        f"(head {cfg.head_dim}), SwiGLU {cfg.ffn_hidden}{', QK-norm' if cfg.qk_norm else ''}{moe_text}, ctx {cfg.ctx}, "
-        f"RoPE base {cfg.rope_base:,.0f}"
+        f"(head {cfg.head_dim}), SwiGLU {cfg.ffn_hidden}{', QK-norm' if cfg.qk_norm else ''}{moe_text}, ctx {cfg.ctx}"
+        f"{'' if verbose else f' ({ctx_why}; {attention})'}, RoPE base {cfg.rope_base:,.0f}"
         f"{'' if args.rope_base or fixed_cfg is not None else ' (default for this ctx)'}; parameters {n_total:,} total, "
         + (f"{n_active:,} active per token, " if cfg.n_experts else "")
         + f"{n_nonembed:,} excluding the ({'tied' if cfg.tie_embeddings else 'untied'}) embedding",
-        f"ctx {cfg.ctx} ({'--ctx' if args.ctx else 'from the checkpoint' if fixed_cfg is not None else f'default for d_model {cfg.d_model}'}): attention "
-        f"{attention_flop_share(cfg):.0%} of the training FLOPs per token",
+        f"ctx {cfg.ctx} ({ctx_why}): {attention}",
         f"batch: {micro} x {cfg.ctx} tokens x {accum} accumulation = {tokens_per_step:,} tokens/step; "
         f"{steps:,} steps = {train_tokens:,} training tokens",
         f"ratios: {train_tokens / n_active:,.1f} training tokens per {'active ' if cfg.n_experts else ''}parameter "
@@ -3079,6 +3085,14 @@ def plan_run(args, manifest, device, amp_dtype, token_cap=None, fixed_cfg=None):
         + ("; document mask on: attention stays within each document of a window (B x T x T bytes of mask)"
            if doc_mask else ""),
     ]
+    if not verbose:
+        # the run header has the batch and the weights; the ratios of a dense model follow from its budget line, and
+        # source shares are news only when the sources are not all read the same number of times
+        hidden = ("ctx ", "batch:", "weights:") + (() if cfg.n_experts else ("ratios:",))
+        if len({f"{e:.2f}" for e in source_epochs.values()}) <= 1:
+            hidden += ("sources:",)
+        block = [line for line in block if not line.startswith(hidden)]
+    lines += block
     if args.steps and train_tokens > max_epochs * unique:
         lines.append(f"note: --steps {args.steps:,} trains {epochs:.2f} epochs, more than --max-epochs {max_epochs:g}.")
     floor = float(getattr(args, "tokens_per_total_param", 0) or 0)
@@ -3247,15 +3261,16 @@ def have_triton():
         return False
 
 
-def plan_with_time_budget(args, manifest, device, amp_dtype, fixed_cfg=None):
+def plan_with_time_budget(args, manifest, device, amp_dtype, fixed_cfg=None, verbose=True):
     """plan_run, then (with --time-budget-hours) choose the largest ladder shape
     whose parameter count N still satisfies tokens >= r * N when tokens are
     limited by BOTH the data cap and what fits in the time budget at the speed
     measured on this device. Binary search over the ladder (bigger = slower, so
     the condition is monotone); evaluation/sampling/checkpoint overhead 8%.
     fixed_cfg (--init-from): the architecture is given, so only its tokens are
-    capped by the budget (N is its active parameter count)."""
-    cfg, settings, lines = plan_run(args, manifest, device, amp_dtype, fixed_cfg=fixed_cfg)
+    capped by the budget (N is its active parameter count). verbose: as in
+    plan_run, for the lines that are returned."""
+    cfg, settings, lines = plan_run(args, manifest, device, amp_dtype, fixed_cfg=fixed_cfg, verbose=verbose)
     hours = getattr(args, "time_budget_hours", None)
     if not hours:
         return cfg, settings, lines
@@ -3382,10 +3397,13 @@ def plan_with_time_budget(args, manifest, device, amp_dtype, fixed_cfg=None):
                 notes.append("time budget: even the smallest shape cannot reach the tokens-per-parameter target "
                              "in time; it trains on what fits")
         _, tokens, peak, chosen_args = results[best]  # with the memory options the retries settled on
-    cfg, settings, lines = plan_run(chosen_args, manifest, device, amp_dtype, token_cap=tokens, fixed_cfg=fixed_cfg)
-    lines[1] = lines[1].replace("command-line values, ladder defaults for the rest",
-                                "largest ladder shape that satisfies the data AND the time budget"
-                                if not explicit else "command-line values, tokens capped by the time budget")
+    cfg, settings, lines = plan_run(chosen_args, manifest, device, amp_dtype, token_cap=tokens, fixed_cfg=fixed_cfg,
+                                    verbose=verbose)
+    # the shape note sits in the 'token budget D' line, which a warning or note printed before it can shift
+    shape_note = ("largest ladder shape that satisfies the data AND the time budget" if not explicit
+                  else "command-line values, tokens capped by the time budget")
+    lines = [line.replace("command-line values, ladder defaults for the rest", shape_note)
+             if line.startswith("token budget D") else line for line in lines]
     if peak > budget_bytes:
         # the estimate was too low for this shape: step to the next memory option now, instead of leaving the
         # first step to run out of memory and find it

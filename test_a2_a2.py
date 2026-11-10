@@ -87,3 +87,99 @@ class Audit2TinyGptB(unittest.TestCase):
                 contextlib.redirect_stdout(io.StringIO()):
             tiny_gpt.cmd_plan(args)
         self.assertIn("muon", list(seen["args"]) + list(seen["kwargs"].values()))
+
+    # ---------------- compact plan lines for the run header ----------------
+    BIG = {"tokenizer": {"vocab_size": 16384}, "sources": {
+        "wiki": {"train": {"tokens": 1_430_000_000}, "doc_tokens_percentiles": {"50": 600}},
+        "pmc": {"train": {"tokens": 1_105_000_000}, "doc_tokens_percentiles": {"50": 10_072}},
+        "books": {"train": {"tokens": 20_000_000}, "doc_tokens_percentiles": {"50": 206_767}}}}
+
+    def _plan(self, argv, manifest=None, gib=64, **kw):
+        args = tiny_gpt.parse_args(["--name", "x"] + argv)
+        with budget_of(gib):
+            return tiny_gpt.plan_run(args, manifest or self.BIG, CPU, None, **kw)
+
+    @staticmethod
+    def _fake_measure(cfg, micro, accum, device, amp_dtype, attn_pref="auto", warmup=2, timed=3, checkpointing=False,
+                      loss_chunk=0, settings=None):
+        """A speed test that needs tokens/step x N x 1e-13 seconds per step and 1 GiB."""
+        return micro * accum * cfg.ctx * tiny_gpt.count_params(cfg)[0] * 1e-13, GIB
+
+    def _time_plan(self, argv, manifest, measure=None, gib=64, speed=(None, "no table (test)"), **kw):
+        args = tiny_gpt.parse_args(["--name", "x", "--compile", "off"] + argv)
+        with budget_of(gib), \
+                unittest.mock.patch.object(tiny_gpt, "measure_seconds_per_step",
+                                           side_effect=measure or self._fake_measure), \
+                unittest.mock.patch.object(tiny_gpt, "sustained_speed", return_value=speed), \
+                unittest.mock.patch.object(tiny_gpt, "have_triton", return_value=False):
+            return tiny_gpt.plan_with_time_budget(args, manifest, CPU, None, **kw)
+
+    def test_plan_lines_for_the_run_header_are_compact(self):
+        """F336: plan_run(..., verbose=False) and plan_with_time_budget(..., verbose=False) leave out what the run
+        header prints itself (per-source tokens, batch, weights, equal source shares) and fold the context line into
+        the model line; the default (verbose=True, what --plan prints) is unchanged."""
+        shape = ["--d-model", "1024", "--layers", "18", "--optimizer", "muon"]
+        _, st, full = self._plan(shape)
+        _, st_v, explicit = self._plan(shape, verbose=True)
+        self.assertEqual(full, explicit)
+        _, st_c, lines = self._plan(shape, verbose=False)
+        self.assertEqual(st, st_c, "the settings do not depend on how the plan is worded")
+        for prefix in ("batch:", "ratios:", "weights:", "ctx ", "sources:"):
+            self.assertTrue(any(ln.startswith(prefix) for ln in full), prefix)
+            self.assertFalse(any(ln.startswith(prefix) for ln in lines), (prefix, lines))
+        self.assertTrue(lines[0].startswith("unique training tokens U = 2,555,000,000; vocabulary 16,384; "), lines[0])
+        self.assertNotIn("wiki", lines[0])
+        self.assertTrue(lines[1].startswith("token budget D = "), lines[1])
+        model = [ln for ln in lines if ln.startswith("model: ")]
+        self.assertEqual(len(model), 1)
+        self.assertIn("ctx 1024 (default for d_model 1024; attention 15% of the training FLOPs per token), RoPE base",
+                      model[0])
+        for prefix in ("learning rate ", "decay timescale ", "memory: "):  # kept, word for word
+            self.assertEqual([ln for ln in lines if ln.startswith(prefix)],
+                             [ln for ln in full if ln.startswith(prefix)], prefix)
+        self.assertEqual([ln for ln in lines if ln.startswith("note:")], [ln for ln in full if ln.startswith("note:")])
+        self.assertTrue(any(ln.startswith("note: ctx 1024 is shorter than the median document of pmc") for ln in lines))
+        # unequal source shares are news: the line stays, and so does every warning
+        _, _, alpha_full = self._plan(["--mix-alpha", "0.8"])
+        _, _, alpha = self._plan(["--mix-alpha", "0.8"], verbose=False)
+        self.assertEqual([ln for ln in alpha if ln.startswith("sources: ")],
+                         [ln for ln in alpha_full if ln.startswith("sources: ")])
+        self.assertEqual(len([ln for ln in alpha if ln.startswith("sources: ")]), 1)
+        self.assertEqual([ln for ln in alpha if ln.startswith("WARNING")],
+                         [ln for ln in alpha_full if ln.startswith("WARNING")])
+        self.assertTrue(any("books would be seen" in ln for ln in alpha))
+        # a line appended before the main block (the --batch-size warning) is kept as well
+        _, _, tight = self._plan(["--d-model", "1024", "--batch-size", "64"], gib=5.6, verbose=False)
+        self.assertTrue(tight[0].startswith("WARNING: batch 64 x ctx 1024 may not fit"), tight[0])
+        # a mixture of experts keeps its ratios line (per active and per total parameter: the header has neither)
+        _, _, moe = self._plan(["--experts", "8"], verbose=False)
+        self.assertEqual(len([ln for ln in moe if ln.startswith("ratios: ")]), 1)
+        self.assertIn("per total parameter", [ln for ln in moe if ln.startswith("ratios: ")][0])
+        # through the time budget: both returns carry the flag
+        one = {"tokenizer": {"vocab_size": 16384},
+               "sources": {"md": {"train": {"tokens": 1_000_000_000}, "doc_tokens_percentiles": {"90": 1000}}}}
+        _, _, no_budget = self._time_plan([], one, verbose=False)
+        self.assertFalse(any(ln.startswith(("batch:", "weights:", "ctx ")) for ln in no_budget), no_budget)
+        _, st_t, timed = self._time_plan(["--time-budget-hours", "1"], one, verbose=False)
+        _, st_tf, timed_full = self._time_plan(["--time-budget-hours", "1"], one)
+        self.assertEqual(st_t, st_tf)
+        self.assertFalse(any(ln.startswith(("batch:", "weights:", "ctx ")) for ln in timed), timed)
+        self.assertTrue(any(ln.startswith("batch:") for ln in timed_full))
+        budget_line = [ln for ln in timed if ln.startswith("token budget D")]
+        self.assertEqual(len(budget_line), 1)
+        self.assertIn("largest ladder shape that satisfies the data AND the time budget", budget_line[0])
+        self.assertEqual([ln for ln in timed if ln.startswith("time budget")],
+                         [ln for ln in timed_full if ln.startswith("time budget")])
+
+    def test_time_budget_shape_note_survives_a_line_before_it(self):
+        """F345: the shape note of a time-budget plan is rewritten in the 'token budget D' line wherever it stands
+        (a note or warning printed before the main block used to shift it away from index 1)."""
+        one = {"tokenizer": {"vocab_size": 16384},
+               "sources": {"md": {"train": {"tokens": 1_000_000_000}, "doc_tokens_percentiles": {"90": 1000}}}}
+        _, _, lines = self._time_plan(["--time-budget-hours", "1", "--lr", "1e-3", "--lr-scale", "2"], one)
+        self.assertTrue(lines[0].startswith("--lr-scale 2 has no effect"), lines[0])
+        self.assertTrue(any("satisfies the data AND the time budget" in ln for ln in lines), lines)
+        self.assertFalse(any("ladder defaults for the rest" in ln for ln in lines), lines)
+        _, _, fixed = self._time_plan(["--time-budget-hours", "1", "--d-model", "512", "--lr", "1e-3", "--lr-scale",
+                                       "2"], one)
+        self.assertTrue(any("command-line values, tokens capped by the time budget" in ln for ln in fixed), fixed)
