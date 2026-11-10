@@ -189,6 +189,37 @@ class Audit2DataPrep(unittest.TestCase):
         self.assertEqual(manifest["tokenizer"]["vocab_size"], 600, "the saved build's vocabulary, not 900")
         self.assertEqual(manifest["fingerprint"], data_prep.read_manifest(self.plain())["fingerprint"])
 
+    # ---------------- F079: numeric options are checked before anything is read ----------------
+    def test_numeric_options_are_checked_at_the_start(self):
+        folder = self.folder("f079")
+        base = ["--out", os.path.join(folder, "out"), "--md-dir", folder]
+        with redirect_stderr(io.StringIO()):
+            data_prep.parse_args(base)  # the defaults pass
+            for good in (["--near-dup-max-docs", "0"], ["--keyword-min-hits", "0"], ["--keyword-min-distinct", "0"],
+                         ["--title-weight", "0"], ["--max-val-group-share", "1"], ["--boilerplate-min-docs", "2"],
+                         ["--boilerplate-min-len", "1"]):
+                data_prep.parse_args(base + good)
+        for bad in (["--tokenizer-sample-chars", "0"], ["--val-max-chars", "-5"], ["--max-val-group-share", "-1"],
+                    ["--near-dup-max-docs", "-3"], ["--boilerplate-min-len", "-1"], ["--boilerplate-min-len", "0"],
+                    ["--max-val-group-share", "1.5"], ["--max-val-group-share", "0"], ["--boilerplate-min-docs", "1"],
+                    ["--keyword-min-hits", "-1"], ["--keyword-min-distinct", "-1"], ["--title-weight", "-1"]):
+            with self.subTest(bad=bad):
+                with redirect_stderr(io.StringIO()) as err, self.assertRaises(SystemExit):
+                    data_prep.parse_args(base + bad)
+                self.assertIn(bad[0], err.getvalue())
+        # --resume: the machine settings of the new command are checked too
+        stopped = os.path.join(folder, "stopped")
+        os.makedirs(os.path.join(stopped, "_work"))
+        open(os.path.join(stopped, "_work", data_prep.STATE_NAME), "wb").close()
+        with redirect_stdout(io.StringIO()):
+            data_prep.parse_args(["--out", stopped, "--resume", "--threads", "1", "--workers", "1"])
+        for bad in (["--threads", "0"], ["--workers", "0"]):
+            with self.subTest(bad=bad):
+                with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()) as err, \
+                        self.assertRaises(SystemExit):
+                    data_prep.parse_args(["--out", stopped, "--resume"] + bad)
+                self.assertIn(bad[0], err.getvalue())
+
     def test_an_error_in_the_leakage_audit_still_only_skips_it(self):
         out = os.path.join(self.tmp, "f057err")
         real = data_prep._audit_chunk

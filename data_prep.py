@@ -2010,6 +2010,9 @@ def _validate(args, parser):
             parser.error(f"--resume: no {state}; only a build that failed after pass 2 can be resumed")
         if args.overwrite:
             parser.error("--resume continues the build in --out; --overwrite would move it away")
+        for flag, value in (("--threads", args.threads), ("--workers", args.workers)):  # the only options applied
+            if value < 1:
+                parser.error(f"{flag} must be >= 1")
         applied = {"out", "resume", "overwrite", "threads", "workers", "keep_work", "worker_warmup"}
         if args.text_root:
             applied.add("md_recursive")  # set above by --text-root, not given
@@ -2039,6 +2042,15 @@ def _validate(args, parser):
         (args.workers >= 1, "--workers must be >= 1"),
         (0 <= args.max_replacement_ratio <= 1, "--max-replacement-ratio must be in [0, 1]"),
         (min(args.wiki_max_docs, args.parquet_max_docs, args.jsonl_max_docs) >= 0, "max-docs must be >= 0"),
+        (args.tokenizer_sample_chars > 0, "--tokenizer-sample-chars must be > 0"),
+        (args.val_max_chars > 0, "--val-max-chars must be > 0"),
+        (0 < args.max_val_group_share <= 1, "--max-val-group-share must be in (0, 1]"),
+        (args.near_dup_max_docs >= 0, "--near-dup-max-docs must be >= 0 (0 = no limit)"),
+        (args.boilerplate_min_len >= 1, "--boilerplate-min-len must be >= 1"),
+        (args.boilerplate_min_docs >= 2, "--boilerplate-min-docs must be >= 2"),
+        (args.keyword_min_hits >= 0, "--keyword-min-hits must be >= 0"),
+        (args.keyword_min_distinct >= 0, "--keyword-min-distinct must be >= 0"),
+        (args.title_weight >= 0, "--title-weight must be >= 0"),
     ]
     for ok, message in checks:
         if not ok:
