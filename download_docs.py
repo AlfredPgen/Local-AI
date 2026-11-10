@@ -1236,6 +1236,8 @@ def _rd_render(nodes, mode="text"):
             out.append(arg(0))
         elif name in _RD_DROP:
             continue
+        elif mode == "code" and not args:  # no Rd macro: an escape inside an R string ("\t", "\n", "\d"), as written
+            out.append("\\" + name)
         else:  # \link, \pkg, \var, \acronym, \method, \S4method, \enc, \url, unknown macros: their first argument
             out.append(arg(0))
     return "".join(out)

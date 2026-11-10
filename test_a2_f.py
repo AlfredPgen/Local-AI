@@ -53,6 +53,21 @@ class Audit2DocsYoutubeConvert(unittest.TestCase):
         self.assertEqual(d.pdf_tags("x<sup></sup>y and a<sub> </sub>b"), "xy and ab")
         self.assertEqual(d.pdf_tags("x<sup>2</sup> a<sub>ij</sub>"), "x^2 a_{ij}")  # unchanged
 
+    def test_docs_rd_keeps_r_escapes_in_code(self):
+        """F128: in \\usage and \\examples a backslash escape of an R string ("\\t", "\\n", "\\d") is kept as
+        written; in text sections an unknown macro still renders its (missing) first argument."""
+        import download_docs as d
+        md = d.rd_markdown(r'\name{f}\title{F}\usage{f(sep = "\t")}\examples{cat("a\n"); x <- gsub("\\d", "", y)}'
+                           r'\value{V.}')
+        self.assertIn(r'sep = "\t"', md)
+        self.assertIn(r'cat("a\n")', md)
+        self.assertIn(r'gsub("\d", "", y)', md)
+        self.assertIn("## Value", md)
+        text = d.rd_markdown(r"\name{f}\title{F}\description{\pkg{stats} and \unknownmacro}")
+        self.assertEqual(text, "# F\n\n## Description\n\nstats and\n")
+        # known Rd macros inside code keep their meaning
+        self.assertIn("f(x, ...)", d.rd_markdown(r"\name{f}\title{F}\usage{f(x, \dots)}"))
+
 
 if __name__ == "__main__":
     unittest.main()
