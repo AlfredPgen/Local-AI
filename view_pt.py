@@ -2295,7 +2295,9 @@ def main():
         pass
     ck = Checkpoint(args.file, args.trust_checkpoint)
     print_summary(ck)
-    print_tensors(ck)
+    # the tensor table is for the plain call and for looking a name up, not for every picture the trainer draws
+    if not (args.plot or args.html) or args.tensor or args.similar:
+        print_tensors(ck)
     if args.tensor:
         if args.tensor not in ck.weights:
             sys.exit(f"\nNo tensor named {args.tensor!r}. Use one of the names listed above.")

@@ -720,6 +720,30 @@ class Audit2Viewer(unittest.TestCase):
         # a checkpoint outside the repository is still left alone
         pushed(types_ns(path=os.path.join(self.tmp, "A_best.pt"), obj={"step": 8})).assert_not_called()
 
+    # ---------------- F407 ----------------
+    def test_tensor_table_is_not_printed_with_a_picture(self):
+        path = toy_file(self.tmp, "T_best.pt", history_rows(6))
+        png = os.path.join(self.tmp, "T.png")
+        table = "named tensors"
+        text, _ = run_main(path)
+        self.assertIn(table, text, "the plain call still lists the tensors")
+        self.assertIn("best validation: loss", text)
+        text, _ = run_main(path, "--plot", "--no-push", "--dpi", "50", "--out", png)
+        self.assertNotIn(table, text, "what the trainer's automatic dashboard appends to logs/dashboard.log")
+        self.assertIn("best validation: loss", text, "the summary stays")
+        self.assertIn("Saved", text)
+        self.assertNotIn(table, run_main(path, "--html", "--out", png)[0])
+        # a tensor or a token asked for by name: the table is printed as before
+        text, _ = run_main(path, "--plot", "--no-push", "--dpi", "50", "--out", png, "--tensor", "lm_head.weight")
+        self.assertIn(table, text)
+        import view_pt
+        argv = ["view_pt.py", path, "--plot", "--no-push", "--out", png, "--similar", "x"]
+        with unittest.mock.patch.object(sys, "argv", argv), redirect_stdout(io.StringIO()) as buf, \
+                unittest.mock.patch.object(tiny_gpt, "tokenizer_from_checkpoint", return_value=None), \
+                self.assertRaises(SystemExit):  # a toy file has no tokenizer, so --similar stops after the table
+            view_pt.main()
+        self.assertIn(table, buf.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main()
