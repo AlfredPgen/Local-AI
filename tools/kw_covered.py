@@ -74,8 +74,8 @@ def find(terms, nested):
         for w, _ in sa[0]:
             cands |= by_word.get(w.lower()[:3], set())
         for u in sorted(cands):
-            if u != t and u not in covered and shapes[u] and covers(shapes[u], sa, nested) \
-                    and not (covers(sa, shapes[u], nested) and u > t):
+            # a term of the same shape (a case variant) is left to the `seen` rule above: the first one stays
+            if u != t and u not in covered and shapes[u] and shapes[u] != sa and covers(shapes[u], sa, nested):
                 covered[t] = u
                 break
     return covered

@@ -1868,6 +1868,10 @@ class TestFixes(unittest.TestCase):
         self.assertEqual(nested.get("China Kadoorie Biobank"), "China Kadoorie")
         for kept in ("linear regression", "adalimumab", "=Met", "=MET", "polymer*"):
             self.assertNotIn(kept, nested)
+        # case variants of one term: the first in the file stays (they covered each other, so --fix removed all)
+        self.assertEqual(kw_covered.find(["polymerase", "helicase", "Polymerase"], nested=False),
+                         {"Polymerase": "polymerase"})
+        self.assertEqual(sorted(kw_covered.find(["zeta", "Zeta", "ZETA"], nested=False)), ["ZETA", "Zeta"])
 
     def test_download_docs_helpers(self):
         """download_docs.py: unsafe archive names, bad links, crawl scope, robots wildcards, decoding, Rd code."""
