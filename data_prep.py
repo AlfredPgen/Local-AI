@@ -559,12 +559,15 @@ def _can_overlap(a, b):
 def _re2_term(words, case_sensitive, lead, trail):
     rx = r"\W+".join(re.escape(w) for w in words)
     ascii_word = lambda ch: ch.isascii() and (ch.isalnum() or ch == "_")  # noqa: E731 - RE2 \b is ASCII-only
-    rx = (r"\b\w*" if lead else r"\b" if ascii_word(words[0][0]) else "") + rx
-    rx += r"\w*\b" if trail else r"\b" if ascii_word(words[-1][-1]) else ""
+    edge = r"\b" if ascii_word(words[0][0]) else ""  # '*école': no \b before a non-ASCII letter, wildcard or not
+    rx = (edge + r"\w*" if lead else edge) + rx
+    edge = r"\b" if ascii_word(words[-1][-1]) else ""
+    rx += r"\w*" + edge if trail else edge
     return f"(?-i:{rx})" if case_sensitive else rx
 
 
 PREFILTER_TERMS_PER_PATTERN = 200
+PREFILTER_VERSION = 1  # part of the cache key: add 1 with any change to _re2_term, _prefilter_patterns or _can_overlap
 # Every pattern is one more RE2 pass over all the text, so above this many patterns the prefilter costs more
 # than the exact Python check of every record that it saves (measured break-even: 17 patterns on Wikipedia
 # text, 30 on FineWeb). 'top' selection ranks by the RE2 counts and uses them whatever their number.
@@ -666,14 +669,16 @@ def prefilter_cache_path(keyword_spec):
 
 def cached_prefilter_patterns(terms, cache_path=None):
     """_prefilter_patterns(terms), read from the cache file when its key matches:
-    the SHA-256 of the terms (in order) plus PREFILTER_TERMS_PER_PATTERN, so any
-    edit of the keyword file or of the pattern size recomputes. Building the
+    the SHA-256 of the terms (in order) plus PREFILTER_TERMS_PER_PATTERN and
+    PREFILTER_VERSION, so any edit of the keyword file, of the pattern size or
+    of the rules that build the patterns recomputes. Building the
     patterns for 22,650 terms takes 65-155 s at the start of every data_prep and
     estimate_dataset run; the cache is read in milliseconds. A cache that cannot
     be read or written is simply not used."""
     if not terms:
         return []
-    key = hashlib.sha256(("\n".join(terms) + f"\n{PREFILTER_TERMS_PER_PATTERN}").encode("utf-8")).hexdigest()
+    key = hashlib.sha256(("\n".join(terms) + f"\n{PREFILTER_TERMS_PER_PATTERN}\nv{PREFILTER_VERSION}")
+                         .encode("utf-8")).hexdigest()
     if cache_path:
         try:
             with open(cache_path, encoding="utf-8") as handle:
@@ -688,7 +693,7 @@ def cached_prefilter_patterns(terms, cache_path=None):
             tmp = f"{cache_path}.{os.getpid()}.tmp"
             with open(tmp, "w", encoding="utf-8") as handle:
                 json.dump({"key": key, "terms": len(terms), "terms_per_pattern": PREFILTER_TERMS_PER_PATTERN,
-                           "patterns": patterns}, handle)
+                           "version": PREFILTER_VERSION, "patterns": patterns}, handle)
             os.replace(tmp, cache_path)
         except OSError:
             pass

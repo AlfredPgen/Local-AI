@@ -566,6 +566,40 @@ class Audit2DataPrep(unittest.TestCase):
         with self.assertRaises(TypeError):  # keyword-only: a seventh positional argument is still pattern_cache's place
             data_prep.KeywordFilter(terms, [], 1, 1, 3, 100_000, None, False)
 
+    # ---------------- F065: a wildcard next to a non-ASCII letter is found by the RE2 prefilter too ----------------
+    def test_prefilter_finds_wildcard_terms_that_end_in_a_non_ascii_letter(self):
+        import pyarrow as pa
+        for term, text in (("café*", "a café here"), ("café*", "two cafés"), ("*école", "the école"),
+                           ("*école", "an autoécole"), ("TNF-α*", "TNF-α rises"), ("=TNF-α*", "TNF-α rises")):
+            with self.subTest(term=term, text=text):
+                kw = data_prep.KeywordFilter([term], [], min_hits=1, min_distinct=1)
+                exact = kw.evaluate("", text)[2]
+                self.assertEqual(exact, 1)
+                hits, _, _ = data_prep._vector_scores({"text": pa.array([text])}, kw, "text", "title", None, None)
+                self.assertGreaterEqual(int(hits[0]), exact, kw.include_patterns)
+        # next to ASCII letters the patterns are what they were
+        self.assertEqual(data_prep._re2_term(["genom"], False, False, True), r"\bgenom\w*\b")
+        self.assertEqual(data_prep._re2_term(["mab"], False, True, False), r"\b\w*mab\b")
+        self.assertEqual(data_prep._re2_term(["MET"], True, False, False), r"(?-i:\bMET\b)")
+        self.assertEqual(data_prep._re2_term(["genetic", "drif"], False, False, True), r"\bgenetic\W+drif\w*\b")
+        self.assertEqual(data_prep._re2_term(["α", "synuclein"], False, False, False), r"α\W+synuclein\b")
+
+    # ---------------- F086: the pattern cache is rebuilt when the pattern rules change ----------------
+    def test_prefilter_cache_misses_when_the_pattern_version_changes(self):
+        terms = ["genetic drift", "allele*"]
+        cache = os.path.join(self.folder("f086"), "kw.txt.prefilter.json")
+        fresh = data_prep.cached_prefilter_patterns(terms, cache)
+        with open(cache, encoding="utf-8") as handle:
+            self.assertEqual(json.load(handle)["version"], data_prep.PREFILTER_VERSION)
+        with unittest.mock.patch.object(data_prep, "_prefilter_patterns", side_effect=AssertionError("rebuilt")):
+            self.assertEqual(data_prep.cached_prefilter_patterns(terms, cache), fresh, "same version: a hit")
+        with unittest.mock.patch.object(data_prep, "PREFILTER_VERSION", data_prep.PREFILTER_VERSION + 1), \
+                unittest.mock.patch.object(data_prep, "_prefilter_patterns", return_value=["(?:sentinel)"]) as built:
+            self.assertEqual(data_prep.cached_prefilter_patterns(terms, cache), ["(?:sentinel)"])
+            built.assert_called_once_with(terms)
+            self.assertEqual(data_prep.cached_prefilter_patterns(terms, cache), ["(?:sentinel)"])
+            built.assert_called_once_with(terms)  # the rewritten cache is a hit for the new version
+
 
 if __name__ == "__main__":
     unittest.main()
