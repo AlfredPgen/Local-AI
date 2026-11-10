@@ -1395,16 +1395,6 @@ def _ocr_page(page, tessdata, dpi=300):
     return "\n\n".join(b for b in blocks if b)
 
 
-def ocr_pdf(path, dpi=300):
-    """Text of a scanned PDF: every page read by OCR, then running headers and
-    page numbers removed as for ordinary PDFs."""
-    import pymupdf
-    tessdata = _tessdata_or_fail()
-    with pymupdf.open(path) as doc:
-        pages = [_ocr_page(page, tessdata, dpi) for page in doc]
-    return "\n\n".join(p for p in strip_page_furniture(pages) if p.strip())
-
-
 def _reflow(block):
     """One OCR text block as a paragraph: lines joined, words split by a line-end hyphen rejoined."""
     lines = [ln.strip() for ln in block.splitlines() if ln.strip()]

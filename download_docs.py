@@ -1038,7 +1038,7 @@ _RD_NAME = re.compile(r"[A-Za-z][A-Za-z0-9]*")
 _RD_RAW = {"eqn", "deqn", "Sexpr", "newcommand", "renewcommand", "out"}  # arguments kept as source text
 _RD_DROP = {"name", "alias", "docType", "keyword", "concept", "encoding", "Rdversion", "RdOpts", "Sexpr",
             "newcommand", "renewcommand", "dontshow", "testonly", "figure", "author", "references", "title",
-            "concept", "keyword", "md"}
+            "md"}
 _RD_SECTIONS = {"description": "Description", "usage": "Usage", "format": "Format", "arguments": "Arguments",
                 "details": "Details", "value": "Value", "note": "Note", "source": "Source", "seealso": "See also",
                 "examples": "Examples", "slot": "Slots"}
@@ -1121,7 +1121,7 @@ def _rd_parse(text, i=0, nested=False):
     return nodes, i
 
 
-def _rd_list(nodes, kind, mode):
+def _rd_list(nodes, kind):
     """\\itemize / \\enumerate / \\describe (and \\arguments, kind 'arguments') as a Markdown list."""
     items, cur = [], None
     for node in nodes:
@@ -1209,7 +1209,7 @@ def _rd_render(nodes, mode="text"):
         elif name == "tab":
             out.append("\x1f" if mode == "table" else "  ")
         elif name in ("itemize", "enumerate", "describe"):
-            out.append(_rd_list(args[0] if args and isinstance(args[0], list) else [], name, mode))
+            out.append(_rd_list(args[0] if args and isinstance(args[0], list) else [], name))
         elif name == "tabular":
             out.append(_rd_table(args[1]) if len(args) > 1 and isinstance(args[1], list) else "")
         elif name == "preformatted":
@@ -1260,7 +1260,7 @@ def rd_markdown(text):
                 if code.strip():
                     parts.append(f"## {_RD_SECTIONS[name]}\n\n" + ctm._fence(code, "r"))
             elif name == "arguments":
-                text_ = _rd_list(body, "arguments", "text").strip()
+                text_ = _rd_list(body, "arguments").strip()
                 if text_:
                     parts.append(f"## Arguments\n\n{text_}")
             else:
@@ -1856,13 +1856,13 @@ def do_github(ctx, row, writer):
             # a docs generator's config: its HTML output (pkgdown, mkdocs, Sphinx, Jekyll ...) duplicates sources
             # that are taken anyway
             html_ok = not any(_GENERATOR_RE.search(n) for n in names)
-            theme_dirs = {n.rsplit("/", 1)[0] + "/" for n in names if n.endswith(("mkdocs_theme.yml", "theme.toml",
-                                                                                   "_config.yml"))}
+            theme_dirs = {n.rsplit("/", 1)[0] + "/" for n in names
+                          if "/" in n and n.endswith(("mkdocs_theme.yml", "theme.toml", "_config.yml"))}
             chosen = []
             for rel, size in entries:
                 if sub and not rel.startswith(sub.rstrip("/") + "/"):
                     continue
-                if any(rel.lower().startswith(d) for d in theme_dirs if d != "/") and rel.lower().endswith(
+                if any(rel.lower().startswith(d) for d in theme_dirs) and rel.lower().endswith(
                         (".html", ".htm")):
                     continue
                 action = repo_action(rel, size, html_ok)
@@ -2340,7 +2340,7 @@ def run_row(ctx, row, label):
     return status, files, chars
 
 
-def print_list(rows, manifest, labels):
+def print_list(rows, manifest):
     print(f"{'tool':<16} {'kind':<6} {'files':>6} {'chars':>12}  {'status':<10} url")
     for row in rows:
         entry = manifest.get((row["tool"], row["kind"], row["url"])) or {}
@@ -2413,7 +2413,7 @@ def main(argv=None):
     manifest_path = os.path.join(args.out, "_manifest.tsv")
     if args.list:
         manifest = read_manifest(manifest_path)
-        print_list(rows, manifest, row_labels(rows, manifest))
+        print_list(rows, manifest)
         return
     PANDOC["path"] = ax.pandoc_path()
     if not PANDOC["path"]:

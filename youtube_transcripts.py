@@ -63,6 +63,8 @@ DEFAULT_KEYWORDS = os.path.join(HERE, "keywords.txt")
 FINAL = {"ok", "not_english", "too_short", "unavailable", "not_cc", "empty", "off_topic"}
 TSV_COLUMNS = ["video_id", "status", "source", "title", "date", "duration_s", "words", "keyword_hits", "licence",
                "file"]
+# "Sign in to confirm your age": one video, not a bot block (error_status tests it before BOT_CHECK)
+AGE_LIMITED = ("confirm your age", "age-restricted", "inappropriate for some users")
 BOT_CHECK = ("confirm you", "not a bot", "sign in to confirm")
 # YouTube limiting this session ("Video unavailable. This content isn't available, try again later. The current
 # session has been rate-limited"): every further video would fail the same way, so the run stops
@@ -74,8 +76,7 @@ FORMAT_FAILURE = ("requested format is not available", "not available on this ap
 TRANSIENT = FORMAT_FAILURE + ("try again later",)
 UPCOMING = ("premieres in", "live event will begin")
 UNAVAILABLE = ("private video", "members-only", "join this channel", "video unavailable", "has been removed",
-               "is not available", "please sign in",
-               "age-restricted", "confirm your age", "copyright", "this live event")
+               "is not available", "please sign in", "copyright", "this live event")
 
 
 class BotCheck(Exception):
@@ -95,14 +96,11 @@ def ydl(cookies=None, **extra):
     return yt_dlp.YoutubeDL(opts)
 
 
-AGE_LIMITED = ("confirm your age", "age-restricted", "inappropriate for some users")
-
-
 def error_status(text):
     """'unavailable' (final), 'upcoming', 'error' (both retried later) or
     'blocked' (YouTube is blocking or limiting this session) for an error text."""
     text = text.lower()
-    if any(a in text for a in AGE_LIMITED):  # "Sign in to confirm your age": one video, not a bot block
+    if any(a in text for a in AGE_LIMITED):
         return "unavailable"
     if any(b in text for b in BOT_CHECK + RATE_LIMITED):
         return "blocked"
