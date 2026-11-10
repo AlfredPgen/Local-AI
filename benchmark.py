@@ -696,11 +696,11 @@ class WSLSandbox:
                     "[ -d /etc/alternatives ] && args=\"$args --ro-bind /etc/alternatives /etc/alternatives\"\n"
                     f"[ -d {SANDBOX_SITE} ] && "
                     f"args=\"$args --ro-bind {SANDBOX_SITE} /site --setenv PYTHONPATH /site\"\n"
-                    f"eval timeout -k 2 {int(timeout)} prlimit --as={mem} bwrap $args {exe}\n")
+                    f"eval timeout -k 2 {int(timeout)} prlimit --as={mem} bwrap $args {exe} </dev/null\n")
         else:
             jail = (f"cd \"$d\"; timeout -k 2 {int(timeout)} prlimit --as={mem} unshare -rmn sh -c "
                     f"'mount -t tmpfs none /mnt && mount -t tmpfs none /home && cd \"$0\" && MPLBACKEND=Agg "
-                    f"exec {exe}' \"$d\"\n")
+                    f"exec {exe}' \"$d\" </dev/null\n")
         return ("d=$(mktemp -d /tmp/tgbench.XXXXXX)\n"
                 "base64 -d > \"$d/prog.py\" <<'__TINYGPT_B64__'\n" + "\n".join(lines) + "\n__TINYGPT_B64__\n"
                 + jail + "rc=$?\nrm -rf \"$d\"\nexit $rc\n")
@@ -726,7 +726,8 @@ class LocalSubprocess:
             with open(path, "w", encoding="utf-8") as handle:
                 handle.write(program)
             try:
-                proc = subprocess.run([sys.executable, "-I", path], cwd=d, capture_output=True, timeout=timeout + 5)
+                proc = subprocess.run([sys.executable, "-I", path], cwd=d, capture_output=True, timeout=timeout + 5,
+                                      stdin=subprocess.DEVNULL)
             except subprocess.TimeoutExpired:
                 return SandboxResult(False, "timeout")
         out = (proc.stdout + proc.stderr).decode(errors="replace")[-2000:]
