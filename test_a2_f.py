@@ -68,6 +68,63 @@ class Audit2DocsYoutubeConvert(unittest.TestCase):
         # known Rd macros inside code keep their meaning
         self.assertIn("f(x, ...)", d.rd_markdown(r"\name{f}\title{F}\usage{f(x, \dots)}"))
 
+    # ---- youtube_transcripts.py -------------------------------------------------------------------------
+    def test_youtube_video_spec_is_not_remembered_as_its_channel(self):
+        """F445: a video, playlist or /streams URL is listed as itself on the next run too; only a plain channel
+        (@handle, name, id, channel URL) is listed through its remembered channel address."""
+        import json
+        import youtube_transcripts as yt
+        channel_id = "UC" + "x" * 22
+        asked = []
+
+        class FakeYdl:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def extract_info(self, url, download=False):
+                asked.append(url)
+                n = 1 if "watch?v=" in url else 2 if "list=" in url else 250
+                videos = [{"id": f"v{k:010d}", "title": f"video {k}", "duration": 600} for k in range(n)]
+                info = {"channel_id": channel_id, "channel": "Some Channel", "uploader_id": "@somechannel"}
+                return {**videos[0], **info} if n == 1 else {**info, "id": "listing", "entries": videos}
+
+        out = os.path.join(self.tmp, "f445", "lectures")
+        meta = os.path.join(self.tmp, "f445", "_lectures_meta", "channels.json")
+        specs = ("https://www.youtube.com/watch?v=abcdefghijk", "https://www.youtube.com/playlist?list=PL123",
+                 "https://www.youtube.com/@somechannel/streams", "@somechannel",
+                 "https://www.youtube.com/@somechannel/videos")
+        with unittest.mock.patch.object(yt, "ydl", lambda *a, **k: FakeYdl()), \
+                unittest.mock.patch("sys.stdout", new_callable=__import__("io").StringIO):
+            for spec in specs:
+                del asked[:]
+                for _ in range(2):
+                    yt.main([spec, "--list-only", "--keywords", "none", "--out", out])
+                self.assertEqual(len(asked), 2, spec)
+                if spec.startswith("http") and not spec.endswith("/videos"):
+                    self.assertEqual(asked[1], asked[0], spec)
+                else:  # a plain channel: its remembered address, so no handle guessing or name search again
+                    self.assertEqual(asked[1], f"https://www.youtube.com/channel/{channel_id}/videos", spec)
+        with open(meta, encoding="utf-8") as handle:
+            memory = json.load(handle)
+        for spec in specs:
+            self.assertEqual(memory[spec]["name"], "Some Channel", spec)  # the name is kept for every kind
+        self.assertNotIn("url", memory[specs[0]])
+        self.assertNotIn("url", memory[specs[1]])
+        self.assertNotIn("url", memory[specs[2]])
+        self.assertEqual(memory["@somechannel"]["url"], f"https://www.youtube.com/channel/{channel_id}")
+        # an entry an earlier version wrote for a video URL (its whole channel) is harmless now
+        with unittest.mock.patch.object(yt, "ydl", lambda *a, **k: FakeYdl()), \
+                unittest.mock.patch("sys.stdout", new_callable=__import__("io").StringIO):
+            memory[specs[0]]["url"] = f"https://www.youtube.com/channel/{channel_id}"
+            with open(meta, "w", encoding="utf-8") as handle:
+                json.dump(memory, handle)
+            del asked[:]
+            yt.main([specs[0], "--list-only", "--keywords", "none", "--out", out])
+        self.assertEqual(asked, [specs[0]])
+
 
 if __name__ == "__main__":
     unittest.main()

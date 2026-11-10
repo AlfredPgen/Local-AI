@@ -118,16 +118,29 @@ def classify_error(exc):
     return status
 
 
+_ITEM_URL_RE = re.compile(r"(watch\?v=|youtu\.be/|[?&]list=|/shorts/)")  # one video or one playlist
+_TAB_URL_RE = re.compile(r"/(videos|streams|playlists|featured)$")  # a channel URL that names its tab
+
+
 def source_url(spec, tab="videos"):
     s = spec.strip()
     if s.startswith("http"):
-        if re.search(r"(watch\?v=|youtu\.be/|[?&]list=|/shorts/)", s):
+        if _ITEM_URL_RE.search(s):
             return s
         s = s.rstrip("/")
-        return s if re.search(r"/(videos|streams|playlists|featured)$", s) else f"{s}/{tab}"
+        return s if _TAB_URL_RE.search(s) else f"{s}/{tab}"
     if re.fullmatch(r"UC[\w-]{22}", s):
         return f"https://www.youtube.com/channel/{s}/{tab}"
     return f"https://www.youtube.com/@{s.lstrip('@').replace(' ', '')}/{tab}"
+
+
+def plain_channel(spec):
+    """True for a whole channel (@handle, name, channel ID, or channel URL with or
+    without /videos): only such a spec is listed through its remembered channel
+    address. A video, a playlist or another tab (/streams) is listed as given."""
+    s = spec.strip()
+    tab = _TAB_URL_RE.search(s.rstrip("/"))
+    return not _ITEM_URL_RE.search(s) and not (tab and tab.group(1) != "videos")
 
 
 def list_videos(spec, cookies, max_videos):
@@ -620,13 +633,16 @@ def main(argv=None):
                     and time.time() - known["finished"] < args.recheck_days * 86400):
                 skipped_recent.append(known.get("name") or spec)
                 continue
+            plain = plain_channel(spec)  # a video or playlist URL must not be replaced by its whole channel
             try:
-                channel, entries = list_videos(known.get("url") or spec, args.cookies_from_browser, args.max_videos)
+                channel, entries = list_videos((known.get("url") if plain else None) or spec,
+                                               args.cookies_from_browser, args.max_videos)
             except (LookupError, yt_dlp.utils.DownloadError) as exc:
                 print(f"[{spec}] skipped: {str(exc).splitlines()[0][:200]}", flush=True)
                 continue
             if channel.get("id"):
-                remember(spec, url=f"https://www.youtube.com/channel/{channel['id']}", name=channel["name"])
+                remember(spec, name=channel["name"],
+                         **({"url": f"https://www.youtube.com/channel/{channel['id']}"} if plain else {}))
             hours = sum(e.get("duration") or 0 for e in entries) / 3600
             if args.list_only:
                 print(f"[{channel['name']}] {len(entries):,} videos, {hours:,.0f} hours", flush=True)
