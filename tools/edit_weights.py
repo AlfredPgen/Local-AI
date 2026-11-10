@@ -110,15 +110,24 @@ def loop_labels(seq, start, eos):
     return labels
 
 
+def per_text_rates(seqs, start, eos, keep_empty=True):
+    """Per text, the share of generated tokens repeating an earlier 4-gram. A text with
+    no generated token before its end-of-text token counts as 0.0 (keep_empty, so the
+    array stays aligned with seqs) or is left out."""
+    out = []
+    for s in seqs:
+        lab = loop_labels(s, start, eos)
+        if lab or keep_empty:
+            out.append(sum(lab.values()) / len(lab) if lab else 0.0)
+    return np.array(out)
+
+
 def loop_stats(seqs, start, eos):
     """Mean share of generated tokens repeating an earlier 4-gram, and share of texts
     where more than a quarter do ('looping' texts)."""
-    rates = []
-    for s in seqs:
-        lab = loop_labels(s, start, eos)
-        if lab:
-            rates.append(sum(lab.values()) / len(lab))
-    rates = np.array(rates or [0.0])
+    rates = per_text_rates(seqs, start, eos, keep_empty=False)
+    if not len(rates):
+        rates = np.array([0.0])
     return {"repeat_token_share": float(rates.mean()), "looping_texts": float((rates > 0.25).mean()),
             "texts": len(rates)}
 

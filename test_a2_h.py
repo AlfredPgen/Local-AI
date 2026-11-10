@@ -511,6 +511,28 @@ class Audit2PipelineTools(unittest.TestCase):
         self.assertIn("ema", obj, "the loaded checkpoint dict itself is left as it was")
         self.assertTrue(os.path.exists(os.path.join(self.tmp, "edited_edit.json")))
 
+    def test_loop_rates_per_text_are_computed_in_one_place(self):
+        """F375: edit_weights.per_text_rates is the one per-text loop rate. loop_stats leaves out a text with
+        no generated token before its end-of-text token (and reports one text at rate 0 when all are such);
+        compare_edit keeps 0.0 for it, so that its paired arrays stay aligned. (The loop_stats values are a
+        guard: the same before and after.)"""
+        import torch
+        import compare_edit
+        import edit_weights as ew
+        start, eos = 4, 9
+        looping = torch.tensor([1, 2, 3, 4, 1, 2, 3, 4, 1, 2, 3, 4])  # 5 of the 8 generated tokens repeat a 4-gram
+        empty = torch.tensor([1, 2, 3, 4, 9, 5, 6, 7, 8, 1, 2, 3])  # ends at once
+        fresh = torch.tensor([1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12, 13])
+        seqs = [looping, empty, fresh]
+        self.assertEqual(ew.loop_stats(seqs, start, eos),
+                         {"repeat_token_share": 0.3125, "looping_texts": 0.5, "texts": 2})
+        self.assertEqual(ew.loop_stats([empty, empty], start, eos),
+                         {"repeat_token_share": 0.0, "looping_texts": 0.0, "texts": 1})
+        self.assertEqual(ew.per_text_rates(seqs, start, eos).tolist(), [0.625, 0.0, 0.0])
+        self.assertEqual(ew.per_text_rates(seqs, start, eos, keep_empty=False).tolist(), [0.625, 0.0])
+        self.assertEqual(ew.per_text_rates([empty], start, eos, keep_empty=False).tolist(), [])
+        self.assertFalse(hasattr(compare_edit, "per_text_rates"), "compare_edit uses edit_weights' function")
+
 
 if __name__ == "__main__":
     unittest.main()
