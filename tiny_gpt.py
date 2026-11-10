@@ -2520,8 +2520,7 @@ def default_rope_base(ctx):
 def attention_flop_share(cfg):
     """Share of the training FLOPs per token spent on attention scores:
     12 L ctx d / (6 N + 12 L ctx d) (see flops_per_token)."""
-    attn = 12 * cfg.n_layers * cfg.ctx * cfg.d_model
-    return attn / (6 * count_params(cfg)[2] + attn)
+    return 12 * cfg.n_layers * cfg.ctx * cfg.d_model / flops_per_token(cfg)
 
 
 def default_head_dim(d_model):
