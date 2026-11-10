@@ -185,6 +185,84 @@ class Audit2Downloaders(unittest.TestCase):
             pmc.harvest(self.QUERY, folder)
         self.assertEqual(self.pmc_ids(records), list(range(1, 302)))
 
+    def epmc_server(self, pages, asked, fail_at=None):
+        """A stand-in for download_pmc.http_get: `pages` maps a cursor to (ids, next cursor); the cursors
+        asked for are appended to `asked`; request number fail_at (from 1) raises OSError."""
+        import urllib.parse
+
+        def get(url, *args, **kwargs):
+            cursor = urllib.parse.parse_qs(urllib.parse.urlsplit(url).query)["cursorMark"][0]
+            asked.append(cursor)
+            if fail_at is not None and len(asked) == fail_at:
+                raise OSError("network down")
+            ids, nxt = pages[cursor]
+            return self.epmc_page(ids, nxt, total=sum(len(p[0]) for p in pages.values()))
+        return get
+
+    def test_f139_refresh_metadata_keeps_the_old_harvest_until_the_new_one_is_complete(self):
+        """F139 (part A): --refresh-metadata harvests into records.jsonl.gz.new / state.json.new; the old
+        harvest stays readable until the new one is complete, a rerun continues from the saved position,
+        and a swap stopped half-way is finished at the next start."""
+        folder = os.path.join(self.tmp, "metadata")
+        records, state_path = os.path.join(folder, "records.jsonl.gz"), os.path.join(folder, "state.json")
+        old = {"*": (range(1, 501), "c1"), "c1": (range(501, 1001), "c1")}
+        new = {"*": (range(1, 501), "n1"), "n1": (range(501, 1002), "n1")}
+
+        def state(path=state_path):
+            with open(path, encoding="utf-8") as f:
+                return json.load(f)
+
+        with unittest.mock.patch.object(pmc, "http_get", side_effect=self.epmc_server(old, [])), \
+                redirect_stdout(io.StringIO()):
+            self.assertEqual(pmc.harvest(self.QUERY, folder), records)
+        self.assertEqual(self.pmc_ids(records), list(range(1, 1001)))
+        self.assertTrue(state()["complete"])
+        self.assertRegex(state()["started"], r"^\d{4}-\d{2}-\d{2}$")
+        # a refresh interrupted after one page: the old harvest is untouched
+        asked = []
+        with unittest.mock.patch.object(pmc, "http_get", side_effect=self.epmc_server(new, asked, fail_at=2)), \
+                redirect_stdout(io.StringIO()), self.assertRaises(OSError):
+            pmc.harvest(self.QUERY, folder, refresh=True)
+        self.assertEqual(asked, ["*", "n1"])
+        self.assertEqual(self.pmc_ids(records), list(range(1, 1001)))
+        self.assertTrue(state()["complete"])
+        self.assertEqual((state(state_path + ".new")["cursor"], state(state_path + ".new")["complete"]), ("n1", False))
+        self.assertEqual(self.pmc_ids(records + ".new"), list(range(1, 501)))
+        # without the flag the old harvest is used (no request) and the unfinished refresh is mentioned
+        with unittest.mock.patch.object(pmc, "http_get", side_effect=AssertionError("no request expected")), \
+                redirect_stdout(io.StringIO()) as buf:
+            self.assertEqual(pmc.harvest(self.QUERY, folder), records)
+        self.assertIn("unfinished", buf.getvalue())
+        self.assertIn("--refresh-metadata", buf.getvalue())
+        # --metadata-as-is during a refresh selects from the old file
+        seen = []
+        with unittest.mock.patch.object(pmc, "keyword_list", side_effect=lambda path, *a, **k: seen.append(path) or []), \
+                unittest.mock.patch.object(pmc, "http_get", side_effect=AssertionError("no request expected")), \
+                redirect_stdout(io.StringIO()):
+            pmc.main(["--out", os.path.join(self.tmp, "out"), "--meta", self.tmp, "--keywords", "unused.txt",
+                      "--metadata-as-is", "--list-only"])
+        self.assertEqual(seen, [records])
+        self.assertEqual(self.pmc_ids(records), list(range(1, 1001)))
+        # a rerun with the flag continues from the saved position, then the new harvest replaces the old
+        asked = []
+        with unittest.mock.patch.object(pmc, "http_get", side_effect=self.epmc_server(new, asked)), \
+                redirect_stdout(io.StringIO()):
+            self.assertEqual(pmc.harvest(self.QUERY, folder, refresh=True), records)
+        self.assertEqual(asked, ["n1"])
+        self.assertEqual(sorted(os.listdir(folder)), ["records.jsonl.gz", "state.json"])
+        self.assertEqual(self.pmc_ids(records), list(range(1, 1002)))
+        self.assertEqual((state()["complete"], state()["records"]), (True, 1001))
+        # the swap stopped after the records were renamed: the next start (with or without the flag) finishes it
+        done = dict(state(), records=7)
+        with open(state_path + ".new", "w", encoding="utf-8") as f:
+            json.dump(done, f)
+        with unittest.mock.patch.object(pmc, "http_get", side_effect=AssertionError("no request expected")), \
+                redirect_stdout(io.StringIO()):
+            pmc.harvest(self.QUERY, folder, refresh=True)
+        self.assertEqual(sorted(os.listdir(folder)), ["records.jsonl.gz", "state.json"])
+        self.assertEqual(state()["records"], 7)
+        self.assertEqual(self.pmc_ids(records), list(range(1, 1002)))
+
 
 if __name__ == "__main__":
     unittest.main()

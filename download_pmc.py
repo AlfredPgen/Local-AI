@@ -32,12 +32,16 @@ into <meta>\metadata (about 9 hours, a few GB; resumable), then papers with 3
 matches from 3 different terms (the title counts 3 times) are ranked by keyword
 density (--rank cited: by citations) and the best --max-papers are fetched.
 Papers already downloaded are skipped. After editing the keywords, rerun: only
-the selection is redone. --refresh-metadata harvests again for new papers.
+the selection is redone. --refresh-metadata harvests everything again (new
+papers, current citation counts; again about 9 hours) into a second file; the
+first harvest stays in use until the new one is complete and replaces it, and a
+rerun with the option continues an interrupted refresh.
     python download_pmc.py --out %USERPROFILE%\ai_training_data\pmc --keywords keywords.txt --max-papers 300000
 """
 
 import argparse
 import concurrent.futures as cf
+import datetime
 import gzip
 import http.client
 import json
@@ -159,20 +163,68 @@ HARVEST_QUERY = "OPEN_ACCESS:y AND HAS_FT:y AND SRC:MED"
 _TAGS = re.compile(r"<[^>]+>")
 
 
+def _read_state(path):
+    if not os.path.isfile(path):
+        return {}
+    with open(path, encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def _finish_refresh(records, state_path):
+    """The end of a --refresh-metadata harvest: the complete new files replace
+    the old ones, the records first and then the state. A stop between the two
+    leaves a complete state.json.new without records.jsonl.gz.new, which the
+    next start finishes by calling this again."""
+    if os.path.isfile(records + ".new"):
+        os.replace(records + ".new", records)
+    elif not _read_state(state_path + ".new").get("records") and os.path.isfile(records):
+        os.remove(records)  # the new harvest found no paper at all
+    os.replace(state_path + ".new", state_path)
+
+
 def harvest(query, folder, refresh=False):
     """Title, abstract, year, citations and journal of every search hit with a
     PMCID, appended page by page to <folder>\\records.jsonl.gz. state.json keeps
-    the search position, so an interrupted harvest continues where it stopped."""
+    the search position, so an interrupted harvest continues where it stopped.
+    refresh=True harvests everything again into records.jsonl.gz.new with
+    state.json.new; the earlier harvest stays in place (and in use) until the
+    new one is complete and replaces it, and an interrupted refresh is continued
+    by the next refresh of the same query. Returns the records path."""
     os.makedirs(folder, exist_ok=True)
     records, state_path = os.path.join(folder, "records.jsonl.gz"), os.path.join(folder, "state.json")
-    state = {}
-    if os.path.isfile(state_path) and not refresh:
-        with open(state_path, encoding="utf-8") as handle:
-            state = json.load(handle)
+    unfinished = _read_state(state_path + ".new")
+    if unfinished.get("complete"):  # a refresh that was stopped while its files replaced the old ones
+        _finish_refresh(records, state_path)
+        unfinished, refresh = {}, False  # the refresh asked for is this one: it is done
+    if refresh:
+        if unfinished.get("query") == query:
+            print(f"Continuing the unfinished metadata refresh ({unfinished.get('records', 0):,} papers so far); "
+                  "the earlier harvest stays in use until it is complete.", flush=True)
+        else:
+            print(f"Harvesting the metadata again into {records}.new; the earlier harvest stays in use until "
+                  "it is complete.", flush=True)
+        count, _ = _harvest_pages(query, records + ".new", state_path + ".new")
+        _finish_refresh(records, state_path)
+        print(f"Metadata: {count:,} papers in {records}")
+        return records
+    if unfinished:
+        print(f"An unfinished metadata refresh exists ({unfinished.get('records', 0):,} papers so far); the earlier "
+              "harvest is used. Rerun with --refresh-metadata to continue it.", flush=True)
+    count, cached = _harvest_pages(query, records, state_path)
+    print(f"Metadata: {count:,} papers {'from' if cached else 'in'} {records}")
+    return records
+
+
+def _harvest_pages(query, records, state_path):
+    """The harvest loop on one records file and its state file. Returns (papers
+    in the file, True if the harvest was already complete)."""
+    state = _read_state(state_path)
     if state.get("query") != query:
         if os.path.isfile(records):
             os.remove(records)
-        state = {"query": query, "cursor": "*", "records": 0, "complete": False}
+        # "started": the day the harvest began (it runs for hours, possibly over several days)
+        state = {"query": query, "cursor": "*", "records": 0, "complete": False,
+                 "started": datetime.date.today().isoformat()}
     # "bytes": the size of the records file when the progress was last saved. Anything after it is a page whose
     # progress was never saved (possibly a gzip member cut off by a crash): cut it off, it is fetched again.
     # A state.json from before this field has none and is left as it is.
@@ -180,8 +232,7 @@ def harvest(query, folder, refresh=False):
         with open(records, "r+b") as handle:
             handle.truncate(state["bytes"])
     if state["complete"]:
-        print(f"Metadata: {state['records']:,} papers from {records}")
-        return records
+        return state["records"], True
     t0, start = time.time(), state["records"]
     while True:
         params = {"query": query, "format": "json", "resultType": "core", "pageSize": 1000,
@@ -218,8 +269,7 @@ def harvest(query, folder, refresh=False):
             print(f"  metadata: {state['records']:,} of about {total:,} papers "
                   f"({rate:,.0f}/s, about {max(left, 0):.1f} h left)", flush=True)
         if state["complete"]:
-            print(f"Metadata: {state['records']:,} papers in {records}")
-            return records
+            return state["records"], False
 
 
 def read_records(path):
