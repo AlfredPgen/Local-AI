@@ -4,10 +4,12 @@ any PyTorch state dict, and draw a diagnostic dashboard.
 Examples
 --------
     python view_pt.py tinyGPT_best.pt                      # text summary + tensor table
-    python view_pt.py tinyGPT.pt --plot                    # 4x4 dashboard PNG next to the file (tinyGPT_dashboard.png,
-                                                           # replaced each run; --out keeps a copy)
+    python view_pt.py tinyGPT.pt --plot                    # dashboard PNG next to the file (tinyGPT_dashboard.png,
+                                                           # replaced each run; --out writes it elsewhere)
+    python view_pt.py tinyGPT.pt --plot --panels all       # + the weight and behaviour panels (runs the model)
+    python view_pt.py tinyGPT.pt --plot-tokens             # the token panels (tinyGPT_tokens.png)
     python view_pt.py tinyGPT.pt --plot --html             # + hoverable embedding explorer
-    python view_pt.py tiny_gpt_bpe_best.pt --plot --history-log log.txt --dataset datasets\bio_v1
+    python view_pt.py tinyGPT_muon_best.pt --plot --panels all --history-log log.txt --dataset datasets\bio_v1
     python view_pt.py tinyGPT.pt --tensor blocks.0.attn.q_proj.weight
     python view_pt.py tinyGPT.pt --similar genetic
 
@@ -17,15 +19,20 @@ Python objects. On PyTorch older than 2.6 this protection has a known bypass
 --export folders (safetensors, never unpickled). --trust-checkpoint lifts the
 check entirely, for your own old files only.
 
-Dashboard rows
-  1  training history   loss curves, validation perplexity, learning rate,
-                        confidence / accuracy / fact probes ("how opinionated")
-  2  tokens             embedding PCA by token class, clustered cosine
-                        similarity, embedding norms, output preference
-  3  weights            per-block component scale, RMSNorm gains, singular
-                        spectra, per-head projection scale
-  4  behaviour          calibration, cloze fact probes, attention entropy,
-                        Adam update size
+Dashboard (--plot): nine panels from the stored evaluations; the model is not run
+  is the run healthy             loss, validation minus training, gradient norm
+  is it learning what it is for  validation by source, biology facts over
+                                 time and by subject
+  is it worth the hours          improvement per 1,000 steps, speed, plan
+  mixture of experts only        expert balance, load per block, router bias
+A training or best checkpoint's curves go on with the evaluations its run has
+since appended to <name>_metrics.jsonl beside it.
+--panels all adds the learning rate, calibration, weight scale per block,
+RMSNorm gains by depth, singular spectra, per-head projection scale and
+attention entropy, and shows the fact benchmark of the file's own weights
+(scored now unless training stored it for this step).
+--plot-tokens writes a second picture: embedding PCA by token class, clustered
+cosine similarity, embedding norms, output preference.
 Panels that need data the checkpoint does not have say so instead of
 plotting invented values.
 """
@@ -282,7 +289,7 @@ def fmt(v, spec=".4f"):
 
 def output_name(ck, kind, ext):
     """<checkpoint>_<kind><ext>: the same name every time, so a new dashboard replaces the
-    previous one (the step and the time it was drawn are in the picture's title)."""
+    previous one (the picture's header names the run, its step and when it was drawn)."""
     base = os.path.normpath(ck.path)
     stem = base if os.path.isdir(base) else os.path.splitext(base)[0]  # export folders may contain dots
     return f"{stem}_{kind}{ext}"
@@ -439,8 +446,7 @@ def eval_windows(ck, args, max_windows=None):
     max_windows is the TOTAL number of windows (default window_budget: 16, fewer
     for models above ~220M parameters), handed out round-robin over the
     validation sources, biggest first: with 12 sources a per-source share would
-    be 1 for any total up to 23 and could not shrink with the model. The windows
-    stay float32 on the CPU (bf16 is slower there)."""
+    be 1 for any total up to 23 and could not shrink with the model."""
     if ck.tok is None or ck.cfg is None:
         return None, "no tokenizer/architecture in this checkpoint"
     ctx = ck.cfg.ctx
