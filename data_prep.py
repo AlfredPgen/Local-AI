@@ -565,6 +565,16 @@ def _re2_term(words, case_sensitive, lead, trail):
 
 
 PREFILTER_TERMS_PER_PATTERN = 200
+# Every pattern is one more RE2 pass over all the text, so above this many patterns the prefilter costs more
+# than the exact Python check of every record that it saves (measured break-even: 17 patterns on Wikipedia
+# text, 30 on FineWeb). 'top' selection ranks by the RE2 counts and uses them whatever their number.
+PREFILTER_MAX_PATTERNS = 24
+
+
+def _use_prefilter(kw):
+    """Do the readers reject records by the RE2 counts before the full check?
+    (Read at call time: a test can patch the constant.)"""
+    return kw is not None and 0 < len(kw.include_patterns) <= PREFILTER_MAX_PATTERNS
 
 
 def _prefilter_patterns(terms):
@@ -1109,14 +1119,15 @@ def _best_candidates(cands, limit):
 def _prescored(source, kw, min_score, threads):
     """Record batches with their vectorised keyword scores, in order. Scoring is
     C++ (pyarrow releases the GIL), so the next batches are scored in background
-    threads while the current one is being used."""
+    threads while the current one is being used. The keyword hits are all 0
+    when the prefilter is not used (_use_prefilter)."""
     from concurrent.futures import ThreadPoolExecutor
     pending = collections.deque()
     with ThreadPoolExecutor(max_workers=max(1, threads)) as pool:
         for file_index, batch_index, arrays in source.batches():
             pending.append((file_index, batch_index, arrays,
-                            pool.submit(_vector_scores, arrays, kw, source.text_col, source.title_col,
-                                        source.score_col, min_score)))
+                            pool.submit(_vector_scores, arrays, kw if _use_prefilter(kw) else None, source.text_col,
+                                        source.title_col, source.score_col, min_score)))
             if len(pending) > 2 * max(1, threads):
                 f, b, a, future = pending.popleft()
                 yield f, b, a, future.result()
@@ -1137,7 +1148,7 @@ def iter_table_source(name, source, kw, max_docs, select, min_score, sample_frac
                     meta["rank"]; the exact max_docs cut is made by rank after
                     cleaning, filtering and boilerplate removal.
     """
-    need_vector = kw is not None and kw.active
+    prefilter = _use_prefilter(kw)
     t0 = time.time()
     if select == "top":
         from concurrent.futures import ThreadPoolExecutor
@@ -1198,7 +1209,7 @@ def iter_table_source(name, source, kw, max_docs, select, min_score, sample_frac
             if chars[r] == 0:
                 stats["skipped"]["empty"] += 1
                 continue
-            if need_vector and kw.include_patterns and hits[r] < kw.min_hits:
+            if prefilter and hits[r] < kw.min_hits:
                 stats["skipped"]["keyword_min_hits"] += 1
                 continue
             doc_id, title, text, meta = _row(arrays, r, source, file_index, batch_index)
@@ -1250,8 +1261,8 @@ def _iter_jsonl_all(paths, text_key, title_key, id_key, max_docs, stats, kw, bat
 
     def report():
         if stats["scanned"] >= progress["next"]:
-            print(f"  [{name}] scanned {stats['scanned']:,} records, {stats.get('accepted_raw', 0):,} passed the "
-                  f"prefilter ({time.time() - t0:,.0f} s)", flush=True)
+            print(f"  [{name}] scanned {stats['scanned']:,} records, {stats.get('accepted_raw', 0):,} sent to the "
+                  f"full check ({time.time() - t0:,.0f} s)", flush=True)
             progress["next"] = (stats["scanned"] // 500_000 + 1) * 500_000
 
     for path in paths:
@@ -1316,7 +1327,7 @@ def _jsonl_arrow_block(block, row0, path, text_key, title_key, id_key, kw):
     counts["missing_text"] = int(missing.sum())
     arrays = {"text": pc.fill_null(text, ""), "title": pc.fill_null(block.column(title_key), "")}
     keep = ~missing
-    if kw is not None and kw.include_patterns:
+    if _use_prefilter(kw):
         hits, chars, _ = _vector_scores(arrays, kw, "text", "title", None, None)
         counts["empty"] = int((keep & (chars == 0)).sum())
         keep &= chars > 0
@@ -1397,7 +1408,7 @@ def _jsonl_batch(pending, path, text_key, title_key, id_key, stats, kw):
         if bad:
             record["\0bad_unicode"] = bad  # counted with the cleaning steps once the record is checked
         records.append((record_no, record))
-    if kw is not None and kw.include_patterns and records:
+    if _use_prefilter(kw) and records:
         import pyarrow as pa
         arrays = {"text": pa.array([r[text_key] for _, r in records]),
                   "title": pa.array([str(r.get(title_key) or "") for _, r in records])}

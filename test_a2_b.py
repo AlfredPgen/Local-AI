@@ -496,6 +496,55 @@ class Audit2DataPrep(unittest.TestCase):
         self.assertEqual(stats["skipped"]["bad_gzip"], 1)
         self.assertIn("may be garbled", stats["warnings"][0])
 
+    # ---------------- F047: above PREFILTER_MAX_PATTERNS the RE2 prefilter is skipped, same documents ----------------
+    def kept_rows(self, out):
+        rows = [line.split("\t") for line in read_file(os.path.join(out, "docs.tsv")).splitlines()[1:]]
+        return [row for row in rows if row[3] in ("train", "val")]
+
+    def test_prefilter_gate_changes_no_kept_document(self):
+        self.assertEqual(data_prep.PREFILTER_MAX_PATTERNS, 24)
+        c = self.corpus()
+        common = ["--md-dir", c.md, "--wiki-dir", c.wiki, "--jsonl", c.pes2o, "--jsonl-name", "pes2o",
+                  "--parquet", c.parquet, "--parquet-name", "web", "--min-score", "2",
+                  "--include-keywords", "genetic*,allele*,protein,DNA,RNA,genome*", "--keyword-min-distinct", "2",
+                  "--vocab-size", "700", "--val-fraction", "0.2", "--threads", "2", "--workers", "1"]
+        real = data_prep._vector_scores
+        for mode, wiki_max in (("first", "0"), ("top", "30")):
+            built = {}
+            for limit in (0, 10 ** 9):  # prefilter never used / always used
+                with_kw = []
+
+                def recorded(arrays, kw, *a, **k):
+                    with_kw.append(kw is not None)
+                    return real(arrays, kw, *a, **k)
+
+                out = os.path.join(self.tmp, f"f047_{mode}_{'on' if limit else 'off'}")
+                with unittest.mock.patch.object(data_prep, "PREFILTER_MAX_PATTERNS", limit), \
+                        unittest.mock.patch.object(data_prep, "_vector_scores", recorded), \
+                        redirect_stdout(io.StringIO()):
+                    data_prep.prepare(["--out", out, "--wiki-max-docs", wiki_max] + common)
+                manifest = data_prep.read_manifest(out)
+                built[limit] = (manifest["fingerprint"], self.kept_rows(out))
+                self.assertTrue(with_kw, "the readers still ask for characters and scores")
+                if mode == "first" and not limit:
+                    self.assertFalse(any(with_kw), "no reader counted keywords: every rejection is the full check's")
+                else:  # 'top' selection ranks by the RE2 counts whatever the limit
+                    self.assertTrue(any(with_kw))
+                self.assertEqual(manifest["sources"]["wiki"]["select"], mode)
+            self.assertEqual(built[0][0], built[10 ** 9][0], mode)
+            self.assertEqual(built[0][1], built[10 ** 9][1], mode)
+            self.assertGreater(len(built[0][1]), 40)
+        # the line-by-line JSONL reader has the same gate
+        kw = data_prep.KeywordFilter(["genetic*", "allele*"], [], min_hits=1, min_distinct=1)
+        lines = [(1, json.dumps({"id": "a", "title": "", "text": "Genetic drift changes allele frequencies."})),
+                 (2, json.dumps({"id": "b", "title": "", "text": "A football match report."}))]
+        for limit, ids, skipped in ((0, ["a", "b"], 0), (10 ** 9, ["a"], 1)):
+            stats = data_prep._new_stats()
+            with unittest.mock.patch.object(data_prep, "PREFILTER_MAX_PATTERNS", limit):
+                docs = list(data_prep._jsonl_batch(lines, "x.jsonl", "text", "title", "id", stats, kw))
+            self.assertEqual([d[0] for d in docs], ids)
+            self.assertEqual(stats["skipped"]["keyword_min_hits"], skipped)
+
 
 if __name__ == "__main__":
     unittest.main()
