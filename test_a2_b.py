@@ -253,6 +253,28 @@ class Audit2DataPrep(unittest.TestCase):
         self.assertTrue(os.path.isdir(os.path.join(out, "_work")))
         self.assertNotIn("--resume", buf.getvalue())
 
+    # ---------------- F101: a build stopped during pass 2 really removes its work files ----------------
+    def test_build_stopped_in_pass2_leaves_no_work_files(self):
+        real, calls = data_prep._pass2_chunk, []
+
+        def interrupt_at_20(jobs):
+            calls.append(1)
+            if len(calls) == 20:
+                raise KeyboardInterrupt
+            return real(jobs)
+
+        for name, extra in (("f101", []), ("f101_wd", ["--work-dir", self.folder("f101_work")])):
+            out = os.path.join(self.tmp, name)
+            del calls[:]
+            with unittest.mock.patch.object(data_prep, "_pass2_chunk", interrupt_at_20):
+                with redirect_stdout(io.StringIO()) as buf, self.assertRaises(KeyboardInterrupt):
+                    data_prep.prepare(["--out", out] + extra + self.base_args())
+            self.assertEqual(len(calls), 20)
+            self.assertFalse(os.path.exists(os.path.join(out, "_work")), buf.getvalue())
+            self.assertIn("removed the work spool", buf.getvalue())
+            if extra:
+                self.assertEqual(os.listdir(extra[1]), [], "the spool sub-folder of --work-dir is gone too")
+
     def test_an_error_in_the_leakage_audit_still_only_skips_it(self):
         out = os.path.join(self.tmp, "f057err")
         real = data_prep._audit_chunk

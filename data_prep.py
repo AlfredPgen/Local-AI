@@ -64,6 +64,7 @@ import re
 import shutil
 import sys
 import time
+import traceback
 import unicodedata
 import zlib
 
@@ -2118,8 +2119,19 @@ def prepare(argv=None):
                           f"GB of spool in {spool_dir}). Continue from them with:\n"
                           f"  python data_prep.py --out {args.out} --resume")
             elif not args.keep_work:
-                _cleanup(work, state.get("spool_dir", work), False)
-                print(f"Build stopped; removed the work spool {work}. Rerun the same command to rebuild.")
+                # the frames of the stopped build still hold the spool being read and the signature file open,
+                # and Windows cannot delete an open file: drop their local variables first
+                traceback.clear_frames(sys.exc_info()[2])
+                spool_dir = state.get("spool_dir", work)
+                _cleanup(work, spool_dir, False)
+                left = [os.path.join(work, f) for f in sorted(os.listdir(work))] if os.path.isdir(work) else []
+                if spool_dir != work and os.path.isdir(spool_dir):
+                    left += [os.path.join(spool_dir, f) for f in sorted(os.listdir(spool_dir)) if f.startswith("spool")]
+                if left:
+                    print(f"Build stopped; {len(left)} work file(s) could not be removed: {', '.join(left[:5])}"
+                          f"{' ...' if len(left) > 5 else ''}. Rerun the same command to rebuild.")
+                else:
+                    print(f"Build stopped; removed the work spool {work}. Rerun the same command to rebuild.")
         raise
     finally:
         _release_lock(state.get("lock"))
