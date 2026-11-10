@@ -1174,7 +1174,7 @@ def cmd_run(args):
     print(f"{os.path.basename(path)}: step {step}, {params / 1e6:.1f}M parameters, {tiny_gpt.device_label(device)} "
           f"({amp_name}); limit {args.limit or 'none'}\n")
     t_all = time.time()
-    csv_rows, notes = [], []
+    notes = []
     for name in names:
         spec, t0 = BY_NAME[name], time.time()
         items = sample_items(read_items(name), args.limit, name)
@@ -1211,11 +1211,10 @@ def cmd_run(args):
             note += f"; greedy pass@1, tests in {sandbox.name} sandbox"
         write_item_csv(os.path.join(run_dir, f"{name}.csv"), rows)
         summaries = summarise(rows)
-        for s in summaries:
-            csv_rows.append({"time": now_iso(), "checkpoint": path, "step": step, "params": params, "benchmark": name,
-                             "category": s["category"], "n": s["n"], "accuracy": fmt(s["accuracy"]),
-                             "low": fmt(s["low"]), "high": fmt(s["high"]), "chance": fmt(s["chance"]),
-                             "floor": fmt(s["floor"]), "notes": note})
+        rows_out = [{"time": now_iso(), "checkpoint": path, "step": step, "params": params, "benchmark": name,
+                     "category": s["category"], "n": s["n"], "accuracy": fmt(s["accuracy"]), "low": fmt(s["low"]),
+                     "high": fmt(s["high"]), "chance": fmt(s["chance"]), "floor": fmt(s["floor"]), "notes": note}
+                    for s in summaries]
         s = summaries[0]
         floor_txt = f", floor {s['floor']:.1%}" if s["floor"] is not None else ""
         print(f"  {name}: {s['correct']}/{s['n']} = {s['accuracy']:.1%} (95% {s['low']:.1%}-{s['high']:.1%}); "
@@ -1224,7 +1223,7 @@ def cmd_run(args):
             print(f"    {t['category']:<14} {t['correct']}/{t['n']} = {t['accuracy']:.1%}")
         notes.append(f"{name} {s['accuracy']:.3f} (n={s['n']}, chance {s['chance']:.2f}"
                      + (f", floor {s['floor']:.3f}" if s["floor"] is not None else "") + ")")
-        append_results(args.results, csv_rows[-len(summaries):])
+        append_results(args.results, rows_out)
     print(f"\nResults appended to {args.results}; per-item CSVs in {run_dir} ({time.time() - t_all:,.0f} s)")
     if args.no_publish:
         tiny_gpt.publish_experiments = lambda *a, **k: print("experiments.csv: not published (--no-publish)")
