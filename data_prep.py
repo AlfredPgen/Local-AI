@@ -1721,7 +1721,6 @@ def lsh_clusters(signatures, threshold, active=None, chunk=100_000):
 # ---------------------------------------------------------------------------
 SPLIT_UNSET, SPLIT_TRAIN, SPLIT_VAL = 0, 1, 2  # split_of is an int8 array over the kept documents
 SPLIT_NAMES = ("?", "train", "val")
-SPLIT_CODE = {"train": SPLIT_TRAIN, "val": SPLIT_VAL}
 
 
 def _ledger_row(source, doc_id, title, status, reason, chars=0, tokens=0, hits=0, group=""):
@@ -2676,49 +2675,8 @@ def _prepare(args, state=None):
                     saw_val[r] = True
             del aliases, by_id, by_hash
 
-        def settled(r):
-            if saw_train is None:
-                return None
-            return "train" if saw_train[r] else ("val" if saw_val[r] else None)
-
-        for name, k in src_index.items():
-            idxs = np.flatnonzero((src_of == k) & ~dropped).tolist()
-            groups = collections.defaultdict(list)  # cluster root -> members (labels alone could collide)
-            for i in idxs:
-                groups[int(roots[i])].append(i)
-            total_chars = int(chars_of[idxs].sum()) if idxs else 0
-            budget = min(args.val_fraction * total_chars, args.val_max_chars)
-            # the group label is the root's "source:id", the same string the ledger's group column shows
-            order = sorted(groups, key=lambda g: stable_unit(args.seed, "split", f"{docs[g][0]}:{docs[g][1]}"))
-            val_chars = 0
-            if previous:  # only new documents are split (see above)
-                fresh = []
-                for g in order:
-                    target = settled(g)
-                    if target is None:
-                        fresh.append(g)
-                        continue
-                    kept_split[target] += len(groups[g])
-                    split_of[groups[g]] = SPLIT_CODE[target]
-                    if target == "val":
-                        settled_val.add(g)
-                        val_chars += int(chars_of[groups[g]].sum())
-                order = fresh
-            for g in order:
-                chars = int(chars_of[groups[g]].sum())
-                target = "train"
-                if len(groups) >= 2 and val_chars < budget:
-                    if g in cross_source:
-                        forced_train["cross_source_cluster"] += 1
-                    elif chars > args.max_val_group_share * budget:
-                        forced_train["group_too_large_for_val"] += 1
-                    elif val_chars + chars <= budget * 1.1:
-                        target = "val"
-                        val_chars += chars
-                split_of[groups[g]] = SPLIT_CODE[target]
-            sources[name]["val_chars_target"] = int(budget)
-            sources[name]["val_chars"] = int(val_chars)
-            sources[name]["train_chars"] = int(total_chars - val_chars)
+        _split_by_group(args, docs, roots, dropped, src_index, src_of, chars_of, sources, cross_source, saw_train,
+                        saw_val, split_of, forced_train, kept_split, settled_val)
         saw_train = saw_val = None
 
         if previous:
@@ -3127,6 +3085,61 @@ def _previous_split(dataset_dir):
             if by_hash.get(h) != "train":
                 by_hash[h] = status
     return by_id, by_hash
+
+
+def _split_by_group(args, docs, roots, dropped, src_index, src_of, chars_of, sources, cross_source, saw_train,
+                    saw_val, split_of, forced_train, kept_split, settled_val):
+    """Split every source's kept documents into train and validation by group
+    (a group: the documents of one near-duplicate cluster that are in the
+    source). Groups are taken in the order of stable_unit(seed, "split", label
+    of the root) until the validation budget is filled. saw_train / saw_val
+    (per cluster root, or None without --keep-split-from) settle a group
+    first. Writes split_of, the sources' val_chars_target / val_chars /
+    train_chars, forced_train, kept_split and settled_val."""
+    for name, k in src_index.items():
+        sel = np.flatnonzero((src_of == k) & ~dropped)
+        own_roots = roots[sel]
+        # one entry per group: its root, its first document (the position in sel), its size and its characters
+        uniq, first, inverse, sizes = np.unique(own_roots, return_index=True, return_inverse=True, return_counts=True)
+        # float64 sums are exact here: a group's characters stay far below 2**53
+        sums = np.bincount(inverse, weights=chars_of[sel], minlength=len(uniq)).astype(np.int64)
+        group_chars = dict(zip(uniq.tolist(), sums.tolist()))
+        group_size = dict(zip(uniq.tolist(), sizes.tolist()))
+        total_chars = int(chars_of[sel].sum())
+        budget = min(args.val_fraction * total_chars, args.val_max_chars)
+        # the group label is the root's "source:id", the same string the ledger's group column shows; groups with
+        # the same value stay in the order of their first document
+        order = sorted(uniq[np.argsort(first, kind="stable")].tolist(),
+                       key=lambda g: stable_unit(args.seed, "split", f"{docs[g][0]}:{docs[g][1]}"))
+        val_chars = 0
+        val_roots = []
+        if saw_train is not None:  # --keep-split-from: only new documents are split
+            fresh = []
+            for g in order:
+                if saw_train[g]:
+                    kept_split["train"] += group_size[g]
+                elif saw_val[g]:
+                    kept_split["val"] += group_size[g]
+                    settled_val.add(g)
+                    val_roots.append(g)
+                    val_chars += group_chars[g]
+                else:
+                    fresh.append(g)
+            order = fresh
+        for g in order:
+            chars = group_chars[g]
+            if len(uniq) >= 2 and val_chars < budget:
+                if g in cross_source:
+                    forced_train["cross_source_cluster"] += 1
+                elif chars > args.max_val_group_share * budget:
+                    forced_train["group_too_large_for_val"] += 1
+                elif val_chars + chars <= budget * 1.1:
+                    val_roots.append(g)
+                    val_chars += chars
+        split_of[sel] = np.where(np.isin(own_roots, np.asarray(val_roots, dtype=roots.dtype)), SPLIT_VAL, SPLIT_TRAIN)
+        sources[name]["val_chars_target"] = int(budget)
+        sources[name]["val_chars"] = int(val_chars)
+        sources[name]["train_chars"] = int(total_chars - val_chars)
 
 
 def _is_incomplete_build(folder):

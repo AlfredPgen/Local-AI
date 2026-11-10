@@ -944,6 +944,113 @@ class Audit2DataPrep(unittest.TestCase):
         self.assertLess(len(called), train, "documents without a kept window are not parsed")
         self.assertEqual(len(called), len(set(called)))
 
+    # ---------------- F058: the split works on arrays per source; same split as the per-group loop ----------------
+    @staticmethod
+    def split_per_group(args, docs, roots, dropped, src_index, src_of, chars_of, sources, cross_source, saw_train,
+                        saw_val, split_of, forced_train, kept_split, settled_val):
+        """The split as it was written before F058: one list of members, one sum and one assignment per group."""
+        code = {"train": data_prep.SPLIT_TRAIN, "val": data_prep.SPLIT_VAL}
+
+        def settled(r):
+            if saw_train is None:
+                return None
+            return "train" if saw_train[r] else ("val" if saw_val[r] else None)
+
+        for name, k in src_index.items():
+            idxs = np.flatnonzero((src_of == k) & ~dropped).tolist()
+            groups = collections.defaultdict(list)
+            for i in idxs:
+                groups[int(roots[i])].append(i)
+            total_chars = int(chars_of[idxs].sum()) if idxs else 0
+            budget = min(args.val_fraction * total_chars, args.val_max_chars)
+            order = sorted(groups, key=lambda g: data_prep.stable_unit(args.seed, "split", f"{docs[g][0]}:{docs[g][1]}"))
+            val_chars = 0
+            if saw_train is not None:
+                fresh = []
+                for g in order:
+                    target = settled(g)
+                    if target is None:
+                        fresh.append(g)
+                        continue
+                    kept_split[target] += len(groups[g])
+                    split_of[groups[g]] = code[target]
+                    if target == "val":
+                        settled_val.add(g)
+                        val_chars += int(chars_of[groups[g]].sum())
+                order = fresh
+            for g in order:
+                chars = int(chars_of[groups[g]].sum())
+                target = "train"
+                if len(groups) >= 2 and val_chars < budget:
+                    if g in cross_source:
+                        forced_train["cross_source_cluster"] += 1
+                    elif chars > args.max_val_group_share * budget:
+                        forced_train["group_too_large_for_val"] += 1
+                    elif val_chars + chars <= budget * 1.1:
+                        target = "val"
+                        val_chars += chars
+                split_of[groups[g]] = code[target]
+            sources[name]["val_chars_target"] = int(budget)
+            sources[name]["val_chars"] = int(val_chars)
+            sources[name]["train_chars"] = int(total_chars - val_chars)
+
+    def test_split_on_arrays_is_the_split_of_the_per_group_loop(self):
+        """50,000 documents in five sources (one with a single document, one with every document dropped),
+        near-duplicate clusters inside and across sources, dropped documents, with and without an earlier split:
+        _split_by_group gives the split, the per-source characters and the counters of the per-group loop."""
+        import argparse
+        rng = np.random.default_rng(58)
+        n = 50_000
+        names = ["wiki", "web", "pmc", "one", "none"]
+        src_index = {name: k for k, name in enumerate(names)}
+        src_of = rng.integers(0, 3, n).astype(np.int16)
+        src_of[777] = 3
+        src_of[rng.choice(np.setdiff1d(np.arange(n), [777]), 40, replace=False)] = 4
+        chars_of = rng.integers(500, 20_000, n).astype(np.int64)
+        docs = [[names[src_of[i]], f"doc{i}/file{i}.md", "t", int(chars_of[i])] for i in range(n)]
+        roots = np.arange(n, dtype=np.int32)
+        for i in sorted(rng.choice(np.arange(1, n), 4_000, replace=False).tolist()):
+            near = int(rng.integers(max(0, i - 50), i)) if i % 2 else int(rng.integers(0, i))
+            roots[i] = roots[near]  # the lowest index of the cluster, as lsh_clusters gives it
+        dropped = rng.random(n) < 0.03
+        dropped[src_of == 4] = True
+        members = collections.defaultdict(set)
+        for i in range(n):
+            members[int(roots[i])].add(int(src_of[i]))
+        cross_source = {r for r, m in members.items() if len(m) > 1}
+        self.assertGreater(len(cross_source), 500)
+        saw_train, saw_val = np.zeros(n, dtype=bool), np.zeros(n, dtype=bool)
+        seen = rng.random(n)
+        for r in members:
+            saw_train[r] = seen[r] < 0.2
+            saw_val[r] = 0.15 < seen[r] < 0.3  # some roots saw both: training wins
+        cases = [(None, None, 0.05, 10 ** 12, 0.25), (saw_train, saw_val, 0.05, 10 ** 12, 0.25),
+                 (saw_train, saw_val, 0.2, 3_000_000, 0.003), (None, None, 0.2, 3_000_000, 0.003)]
+        reasons = collections.Counter()
+        for st, sv, fraction, cap, share in cases:
+            args = argparse.Namespace(seed=1234, val_fraction=fraction, val_max_chars=cap, max_val_group_share=share)
+            got = []
+            for split in (self.split_per_group, data_prep._split_by_group):
+                split_of = np.zeros(n, dtype=np.int8)
+                sources = {name: {} for name in names}
+                forced, kept, settled_val = collections.Counter(), collections.Counter(), set()
+                split(args, docs, roots, dropped, src_index, src_of, chars_of, sources, cross_source, st, sv,
+                      split_of, forced, kept, settled_val)
+                got.append((split_of, sources, forced, kept, settled_val))
+            old, new = got
+            label = f"previous split {st is not None}, fraction {fraction}, cap {cap}"
+            self.assertTrue(np.array_equal(old[0], new[0]), label)
+            self.assertEqual(old[1:], new[1:], label)
+            self.assertEqual(json.dumps(new[1]), json.dumps(old[1]), "plain int values, as the manifest needs")
+            self.assertTrue(all(type(g) is int for g in new[4]), "roots as plain int, as the saved state holds them")
+            self.assertTrue((old[0][dropped] == data_prep.SPLIT_UNSET).all())
+            self.assertGreater(int((new[0] == data_prep.SPLIT_VAL).sum()), 100, label)
+            reasons.update(new[2])
+            self.assertEqual(bool(new[3]), st is not None)
+            self.assertEqual(new[1]["one"]["val_chars"], 0, "a source with one group has no validation part")
+            self.assertEqual(new[1]["none"], {"val_chars_target": 0, "val_chars": 0, "train_chars": 0})
+        self.assertTrue(reasons["cross_source_cluster"] and reasons["group_too_large_for_val"], reasons)
+
 
 if __name__ == "__main__":
     unittest.main()
