@@ -613,17 +613,20 @@ def history_from_log(path, ck_path=None, max_step=None, family=None):
     stem = re.sub(r"_best$", "", os.path.splitext(path_name(ck_path))[0]) if ck_path else None
     legacy = bool(family) and family.startswith("legacy")
     tiny = [] if legacy else [b for b in blocks if NEW_LINE.search(b)]
-    mine = [b for b in tiny if stem and re.search(r"checkpoints: .*?[\\/]" + re.escape(stem) + r"\.pt ", b)]
+    named = [b for b in blocks if stem and not legacy
+             and re.search(r"checkpoints: .*?[\\/]" + re.escape(stem) + r"\.pt ", b)]
+    # a fresh start under the same name (--overwrite, --init-from) begins a new curve, also when that session
+    # ended before its first evaluation; a block without such a RUN line (older logs) is merged as before
+    fresh = [i for i, b in enumerate(named) for run_line in [re.search(r"^RUN .*$", b, re.MULTILINE)]
+             if run_line and re.search(r"\| (fresh run|initialised from )", run_line.group(0))]
+    mine = [b for b in named[fresh[-1] if fresh else 0:] if NEW_LINE.search(b)]
+    if fresh and not mine:
+        return [], f"no evaluation in {os.path.basename(path)} since the last fresh start of {stem}.pt"
     if family == "tinygpt" and not mine:
         return [], f"no tinyGPT session in {os.path.basename(path)} names {stem}.pt"
     if mine or tiny:
         merged, sessions = {}, 0
         for block in (mine or tiny[-1:]):
-            # a fresh start under the same name (--overwrite, --init-from) begins a new curve; a block without
-            # such a RUN line (older logs) is merged as before
-            run_line = re.search(r"^RUN .*$", block, re.MULTILINE)
-            if run_line and re.search(r"\| (fresh run|initialised from )", run_line.group(0)):
-                merged, sessions = {}, 0
             sessions += 1
             for s, _, tr, va, vs, lr in NEW_LINE.findall(block):
                 if int(vs) == int(s) and (max_step is None or int(s) <= int(max_step)):

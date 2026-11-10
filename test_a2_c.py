@@ -689,6 +689,19 @@ class Audit2Viewer(unittest.TestCase):
         hist, label = view_pt.history_from_log(log, "A.pt", None, "tinygpt")
         self.assertEqual([(h["step"], h["val_loss"]) for h in hist], [(100, 2.1)])
         self.assertIn("1 session(s) of A", label)
+        # the fresh start counts also when that session was stopped before its first evaluation and then resumed
+        early = os.path.join(self.tmp, "stopped_early_log.txt")
+        with open(early, "w", encoding="utf-8") as f:
+            f.write(session("a", "fresh run", (100, 9.1), (200, 8.1), (300, 7.1)) + session("b", "fresh run")
+                    + "step     0/400 | baseline before training | val 9.900 @0 | ppl 19930.4 | bpb 3.600\n")
+        self.assertEqual(view_pt.history_from_log(early, "A.pt", None, "tinygpt"),
+                         ([], "no evaluation in stopped_early_log.txt since the last fresh start of A.pt"))
+        self.assertEqual(view_pt.history_from_log(early, "A.pt", None, None)[0], [], "not the replaced run's curve")
+        with open(early, "a", encoding="utf-8") as f:
+            f.write(session("c", "RESUMED C:\\x\\A.pt at step 50", (200, 5.1), (400, 4.1)))
+        hist, label = view_pt.history_from_log(early, "A_best.pt", None, "tinygpt")
+        self.assertEqual([(h["step"], h["val_loss"]) for h in hist], [(200, 5.1), (400, 4.1)])
+        self.assertIn("1 session(s) of A", label)
 
     # ---------------- F401 ----------------
     def test_heatmap_cell_text_follows_the_drawn_colour(self):
