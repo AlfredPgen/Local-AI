@@ -115,6 +115,7 @@ def main():
             ds = tiny_gpt.resolve_dataset(obj, args.dataset)
         except SystemExit as exc:
             why = str(exc)
+    del obj  # the rest of the raw checkpoint (a training checkpoint's optimizer state) is not needed beside the model
 
     def report(label, text):
         prefix = [tok.bos_id] if tok.bos_id >= 0 else []

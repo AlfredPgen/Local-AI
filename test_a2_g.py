@@ -562,6 +562,43 @@ class Audit2FinetuneTools(unittest.TestCase):
         self.assertIsNone(message)
         self.assertIn("Likelihood test", out)
 
+    def test_detect_text_drops_the_raw_checkpoint_before_scoring(self):
+        """F111: the raw checkpoint (for a training checkpoint: the optimizer state) is released once the
+        dataset has been read from it; it is not kept beside the model while texts are generated and scored."""
+        import weakref
+        import detect_text
+
+        class Raw(dict):  # a dict that a weak reference can watch
+            pass
+        tok = self.sentencepiece()
+        ck = self.save_checkpoint(toy_model(9, ctx=64, vocab=tok.vocab_size), "detect_raw.pt",
+                                  tokenizer={"proto": tok.proto, **tok.meta()},
+                                  dataset={"path": "no_such_dataset_y", "fingerprint": "f0"},
+                                  optimizer={"state": torch.zeros(8)})
+        real_load, real_score = tiny_gpt.load_for_inference, detect_text.likelihood_score
+        raw, alive = [], []
+
+        def load(path, device="cpu", trust=False):
+            model, tok_, cfg, obj = real_load(path, device, trust)
+            obj = Raw(obj)
+            raw.append(weakref.ref(obj))
+            return model, tok_, cfg, obj
+
+        def score(model, ids, device):
+            alive.append(raw[-1]() is not None)
+            return real_score(model, ids, device)
+        with unittest.mock.patch.object(tiny_gpt, "load_for_inference", load), \
+                unittest.mock.patch.object(detect_text, "likelihood_score", score), \
+                unittest.mock.patch.object(tiny_gpt, "generate", lambda *a, **k: "Genetic drift is random."):
+            out, message = self.detect(["Genetic drift is random.", "--checkpoint", ck])
+            self.assertIsNone(message)
+            self.assertEqual(alive, [False], "the raw checkpoint was still held while the text was scored")
+            out, message = self.detect(["--calibrate", "--checkpoint", ck])
+        self.assertIsNone(message)
+        self.assertIn("validation text not scored: ", out)  # the dataset entry was read before the release
+        self.assertIn("no_such_dataset_y", out)
+        self.assertEqual(alive, [False] * 6)
+
     # ---- posttrain.py -----------------------------------------------------------------------------------
     def posttrain_data(self, tag):
         folder = os.path.join(self.tmp, tag)
