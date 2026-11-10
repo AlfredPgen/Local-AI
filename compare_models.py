@@ -44,10 +44,13 @@ import data_prep  # noqa: E402
 import tiny_gpt  # noqa: E402
 
 
-def validation_documents(dataset_dir, per_source, max_chars, layout=None):
+def validation_documents(dataset_dir, per_source, max_chars, layout=None, parity=None):
     """Evenly spaced validation documents per source, as text. With a dict as
     `layout`, layout[source] = (segments found, offset): segment k is the
-    (k + offset)-th validation document of that source (offset None: unknown)."""
+    (k + offset)-th validation document of that source (offset None: unknown).
+    parity 0 / 1: only documents with an even / odd index within their source,
+    so two callers with different parities never share a document (a source
+    with no such document is left out)."""
     manifest, arrays = data_prep.open_token_files(dataset_dir, verify=False)
     meta = manifest["tokenizer"]
     tok = data_prep.Tokenizer.from_file(os.path.join(dataset_dir, meta["file"]), meta.get("encode_mode", "lines"))
@@ -60,7 +63,10 @@ def validation_documents(dataset_dir, per_source, max_chars, layout=None):
         ends = np.append(starts[1:], len(arr))
         if layout is not None:  # a segment starts at a document's start token, or after its end token
             layout[source] = (len(starts), 0 if tok.bos_id >= 0 else 1 if boundary >= 0 else None)
-        chosen = np.unique(np.linspace(0, len(starts) - 1, min(per_source, len(starts))).astype(int))
+        pool = np.arange(len(starts)) if parity is None else np.arange(parity, len(starts), 2)
+        if len(pool) == 0:
+            continue
+        chosen = pool[np.unique(np.linspace(0, len(pool) - 1, min(per_source, len(pool))).astype(int))]
         for k in chosen:
             text = tok.decode(np.asarray(arr[starts[k]:ends[k]]).tolist()).strip()
             if len(text) >= 200:

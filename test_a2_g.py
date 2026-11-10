@@ -341,6 +341,39 @@ class Audit2FinetuneTools(unittest.TestCase):
             entries[a] = {"path": "datasets/other", "fingerprint": "f2"}
             asked.clear()
 
+    def test_validation_documents_by_parity_are_disjoint(self):
+        """F381 (compare_models half): validation_documents(parity=0) and (parity=1) take documents with an
+        even / odd index within their source, so two tools never share one whatever number each asks for; a
+        source without an odd document is left out; without parity the selection is exactly the old one."""
+        import numpy as np
+        import compare_models
+        import data_prep
+        sizes = {"big": 41, "mid": 7, "one": 1, "two": 2}
+        doc = [0] + [1 + i % 40 for i in range(250)]  # a start token, then 250 characters of CharTok text
+        arrays = {"val": {s: np.array(doc * n, dtype=np.uint16) for s, n in sizes.items()}}
+        manifest = {"tokenizer": {"file": "tokenizer.model", "encode_mode": "lines"}}
+
+        def picked(per_source, **kw):
+            with unittest.mock.patch.object(data_prep, "open_token_files",
+                                            lambda folder, verify=True: (manifest, arrays)), \
+                    unittest.mock.patch.object(data_prep.Tokenizer, "from_file", lambda *a, **k: CharTok()):
+                return [(s, k) for s, k, _ in compare_models.validation_documents("ds", per_source, 4000, **kw)]
+        for per_source in (1, 4, 30, 352):  # the selection before the change, copied here
+            old = [(s, int(k)) for s, n in sorted(sizes.items())
+                   for k in np.unique(np.linspace(0, n - 1, min(per_source, n)).astype(int))]
+            self.assertEqual(picked(per_source), old, per_source)
+        for n_even, n_odd in ((352, 256), (5, 3), (3, 5), (1, 1)):
+            even, odd = picked(n_even, parity=0), picked(n_odd, parity=1)
+            self.assertFalse(set(even) & set(odd))
+            self.assertTrue(all(k % 2 == 0 for _, k in even) and all(k % 2 == 1 for _, k in odd))
+            self.assertEqual({s for s, _ in even}, set(sizes))
+            self.assertEqual({s for s, _ in odd}, {"big", "mid", "two"}, "a source with one document has no odd one")
+        self.assertEqual([k for s, k in picked(352, parity=0) if s == "big"], list(range(0, 41, 2)))
+        self.assertEqual([k for s, k in picked(3, parity=1) if s == "big"], [1, 19, 39])
+        layout = {}
+        picked(4, parity=1, layout=layout)
+        self.assertEqual(layout, {s: (n, 0) for s, n in sizes.items()})
+
     # ---- posttrain.py -----------------------------------------------------------------------------------
     def posttrain_data(self, tag):
         folder = os.path.join(self.tmp, tag)
