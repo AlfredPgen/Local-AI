@@ -4857,7 +4857,7 @@ class TestBenchmarkSuite(unittest.TestCase):
         half = {"answer": "4.5", "output_type": "integer", "lower": "4.5", "upper": "4.5"}
         self.assertFalse(b.numeric_correct(half, "4")[0], "round(4) == round(4.5) must not count")
         self.assertTrue(b.numeric_correct(half, "4.5")[0])
-        date ={"answer": "09/11/2014", "output_type": "date", "lower": "09/11/2014", "upper": "09/11/2014"}
+        date = {"answer": "09/11/2014", "output_type": "date", "lower": "09/11/2014", "upper": "09/11/2014"}
         self.assertTrue(b.numeric_correct(date, " 9/11/2014.")[0])
         self.assertFalse(b.numeric_correct(date, " 09/12/2014")[0])
         tup = {"answer": "(4 weeks, 2 days)", "output_type": "integer"}
