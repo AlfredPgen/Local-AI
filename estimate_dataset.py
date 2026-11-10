@@ -71,6 +71,7 @@ class Tally:
         self.reasons = {}
         self.texts, self.text_chars = [], 0
         self.max_docs, self.select = 0, "first"
+        self.sample_fraction = 1.0  # data_prep --sample-fraction: the share of a web source's records a build reads
         self.ranked = []          # (keyword score, characters) of kept sample documents, for 'top' selection
 
     def keep(self, text):
@@ -89,7 +90,8 @@ class Tally:
             docs = self.total * self.kept / max(self.sampled, 1)
             chars = self.total_bytes * self.kept_chars / max(self.sampled_bytes, 1)
         else:
-            scale = self.total / max(self.sampled, 1)
+            # data_prep samples the records first and applies the document limit to what is left
+            scale = self.total / max(self.sampled, 1) * self.sample_fraction
             docs, chars = self.kept * scale, self.kept_chars * scale
         if self.max_docs and docs > self.max_docs:
             if self.select == "top" and self.ranked:
@@ -157,8 +159,8 @@ def table_source(name, kind, source, args, use_kw, min_score, max_docs, select):
     """Wikipedia (Arrow) or Parquet: every k-th record batch is examined."""
     import pyarrow.parquet as pq
     t = Tally(name, kind)
-    t.max_docs = max_docs
-    t.select = "top" if select == "top" or (select == "auto" and use_kw and max_docs) else "first"
+    t.max_docs, t.sample_fraction = max_docs, args.sample_fraction
+    t.select ="top" if select == "top" or (select == "auto" and use_kw and max_docs) else "first"
     k = max(1, round(1 / args.sample))
     kw = dp._W_KW if use_kw else None
     need = kw is not None and bool(kw.include_patterns)
@@ -200,7 +202,7 @@ def table_source(name, kind, source, args, use_kw, min_score, max_docs, select):
 
 def jsonl_source(name, paths, args, use_kw, max_docs):
     t = Tally(name, "jsonl")
-    t.max_docs = max_docs
+    t.max_docs, t.sample_fraction = max_docs, args.sample_fraction
     k = max(1, round(1 / args.sample))
     kw = dp._W_KW if use_kw else None
     for path in paths:
@@ -357,16 +359,19 @@ def main(argv=None):
     train_chars = sum(c for _, c in estimates.values())
     vocab = args.vocab_size or dp.auto_vocab_size(train_chars)
     tok = rebuild = None
+    tok_path = opts.tokenizer
     if opts.tokenizer:
         try:
             tok = dp.load_tokenizer_from_any(opts.tokenizer)
         except (SystemExit, Exception) as exc:  # noqa: BLE001 - e.g. a dataset folder whose tokenizer file is gone
             print(f"--tokenizer {opts.tokenizer} cannot be read ({type(exc).__name__}: {exc}); a tokenizer is trained "
                   "on the kept sample instead", flush=True)
+    elif args.tokenizer_from:  # data_prep's own option: the build would reuse this tokenizer
+        tok, tok_path = dp.load_tokenizer_from_any(args.tokenizer_from), args.tokenizer_from
     with tempfile.TemporaryDirectory() as work:
         if tok is not None:
-            how = f"tokenizer {opts.tokenizer}"
-            if tok.vocab_size != vocab:
+            how = f"tokenizer {tok_path}"
+            if tok.vocab_size != vocab and not args.tokenizer_from:
                 rebuild = (f"a rebuild from scratch would train a {vocab:,}-piece tokenizer"
                            + (" (about 10 % fewer tokens)" if vocab > tok.vocab_size else "")
                            + ": python estimate_dataset.py for that")

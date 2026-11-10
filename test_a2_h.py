@@ -153,13 +153,10 @@ class Audit2PipelineTools(unittest.TestCase):
             estimate_dataset.main(argv)
         return out.getvalue()
 
-    def test_estimate_with_a_tokenizer_sizes_models_for_its_vocabulary(self):
-        """F191: with --tokenizer the model-size table is built for that tokenizer's vocabulary and one line
-        names the vocabulary a rebuild would train; a tokenizer that cannot be read falls back to training."""
+    def tokenizer_model(self, name):
+        """(path, pieces) of a small SentencePiece model with data_prep's line-break pieces."""
         import sentencepiece as spm
-        import tiny_gpt
-        folder = self.text_folder("f191_text")
-        work = os.path.join(self.tmp, "f191_tok")
+        work = os.path.join(self.tmp, name)
         os.makedirs(work, exist_ok=True)
         corpus = os.path.join(work, "corpus.txt")
         with open(corpus, "w", encoding="utf-8", newline="\n") as f:
@@ -168,7 +165,14 @@ class Audit2PipelineTools(unittest.TestCase):
                                        vocab_size=120, hard_vocab_limit=False, user_defined_symbols=["\n", "\t"],
                                        unk_id=0, bos_id=1, eos_id=2, pad_id=-1, minloglevel=2)
         model = os.path.join(work, "tok.model")
-        size = spm.SentencePieceProcessor(model_file=model).get_piece_size()
+        return model, spm.SentencePieceProcessor(model_file=model).get_piece_size()
+
+    def test_estimate_with_a_tokenizer_sizes_models_for_its_vocabulary(self):
+        """F191: with --tokenizer the model-size table is built for that tokenizer's vocabulary and one line
+        names the vocabulary a rebuild would train; a tokenizer that cannot be read falls back to training."""
+        import tiny_gpt
+        folder = self.text_folder("f191_text")
+        model, size = self.tokenizer_model("f191_tok")
         self.assertNotEqual(size, 4096)
         argv = ["--md-dir", folder, "--tflops", "1", "--hours", "1"]
         with unittest.mock.patch.object(tiny_gpt, "shape_ladder", wraps=tiny_gpt.shape_ladder) as ladder:
@@ -187,6 +191,49 @@ class Audit2PipelineTools(unittest.TestCase):
         self.assertIn("cannot be read", out)
         self.assertIn("training a 4,096-piece SentencePiece tokenizer on the kept sample", out)
         self.assertNotIn("a rebuild from scratch", out)
+
+    def test_estimate_honours_sample_fraction_and_tokenizer_from(self):
+        """F148: data_prep's --sample-fraction scales the web sources before the --*-max-docs cap, and
+        --tokenizer-from is the tokenizer measured with (both were parsed and ignored)."""
+        import gzip
+        import estimate_dataset
+        import pyarrow as pa
+        import pyarrow.parquet as pq
+        t = estimate_dataset.Tally("fineweb", "parquet")
+        t.total, t.sampled, t.kept, t.kept_chars, t.sample_fraction = 1000, 100, 50, 5000, 0.5
+        self.assertEqual(t.estimate(), (250, 25000))
+        t.max_docs = 200  # the cap applies to what the sample fraction leaves
+        self.assertEqual(t.estimate(), (200, 20000))
+        t.max_docs = 400
+        self.assertEqual(t.estimate(), (250, 25000), "half the records cannot fill a cap of 400")
+        md = estimate_dataset.Tally("md", "markdown")
+        md.total, md.sampled, md.kept, md.kept_chars, md.total_bytes, md.sampled_bytes = 10, 10, 10, 900, 1000, 1000
+        md.sample_fraction = 0.5
+        self.assertEqual(md.estimate(), (10, 900), "data_prep does not sample text folders")
+        # the sources take the fraction from the data_prep options
+        work = os.path.join(self.tmp, "f148")
+        os.makedirs(work, exist_ok=True)
+        parquet, jsonl = os.path.join(work, "web.parquet"), os.path.join(work, "papers.json.gz")
+        pq.write_table(pa.table({"id": [f"w{i}" for i in range(20)],
+                                 "text": [T.BIO + " " + T.paragraphs(300 + i, 4) for i in range(20)]}), parquet)
+        with gzip.open(jsonl, "wt", encoding="utf-8") as f:
+            for i in range(12):
+                f.write(json.dumps({"id": f"p{i}", "text": T.BIO + " " + T.paragraphs(700 + i, 5)}) + "\n")
+        model, size = self.tokenizer_model("f148_tok")
+        argv = ["--sample", "1", "--tflops", "1", "--hours", "1", "--parquet", parquet, "--parquet-name", "web",
+                "--jsonl", jsonl, "--jsonl-name", "papers", "--tokenizer-from", model]
+
+        def kept(out):
+            rows = {ln.split()[0]: ln.split() for ln in out.splitlines() if ln.split()[:1] in (["web"], ["papers"])}
+            return {name: (int(r[2]), int(r[3])) for name, r in rows.items()}  # (in source, kept docs)
+
+        out = self.run_estimate(argv)
+        self.assertEqual(kept(out), {"web": (20, 20), "papers": (12, 12)})
+        self.assertIn(f"characters per token from tokenizer {model}", out)
+        self.assertNotIn("training a", out)
+        self.assertNotIn("a rebuild from scratch", out, "the build itself would reuse this tokenizer")
+        self.assertEqual(kept(self.run_estimate(argv + ["--sample-fraction", "0.5"])),
+                         {"web": (20, 10), "papers": (12, 6)})
 
 
 if __name__ == "__main__":
