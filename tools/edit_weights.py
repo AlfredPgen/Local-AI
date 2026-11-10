@@ -133,7 +133,7 @@ class BandStats:
     those n_bands x dim numbers cross to the CPU per layer and batch (a batch adds
     at most batch x 16 values per band, well within float32)."""
 
-    def __init__(self, n_layers, n_bands, dim, device=None):
+    def __init__(self, n_layers, n_bands, dim):
         z = lambda: torch.zeros(n_layers, n_bands, dim, dtype=torch.float64)  # noqa: E731
         self.s = [z(), z()]
         self.q = [z(), z()]
@@ -272,7 +272,7 @@ def main(argv=None):
     p.add_argument("--dev-prompts", type=int, default=96, help="other prompts for choosing among candidates")
     p.add_argument("--prompt-tokens", type=int, default=32)
     p.add_argument("--new-tokens", type=int, default=160)
-    p.add_argument("--layers", type=int, default=4, help="layers (best separating) to try edits in")
+    p.add_argument("--layers", type=int, default=4, help="layers with the strongest loop neuron to try edits in")
     p.add_argument("--bpb-docs", type=int, default=3, help="validation documents per source for the safety check")
     p.add_argument("--max-bpb-loss", type=float, default=0.002, help="largest bits-per-byte increase accepted")
     p.add_argument("--batch", type=int, default=32)
@@ -319,7 +319,6 @@ def main(argv=None):
     for li in range(len(model.blocks)):
         diff, eff = resid.effect(li)
         r = diff / diff.norm()
-        sep = float((r * eff).sum() / (r * r).sum().sqrt()) if torch.isfinite(eff).all() else 0.0
         _, neff = neur.effect(li)
         top = torch.argsort(neff, descending=True)[:16]
         layer_info.append({"layer": li, "direction": r.float().cpu(), "direction_effect": float(diff.norm()),

@@ -226,23 +226,21 @@ def sample_probabilities(tallies, estimates, args, budget=6_000_000):
     as a build's tokenizer: share = weight x estimated training characters / mass
     (data_prep.tokenizer_shares), and the sample's total is the largest `budget`
     for which no source needs more text than its sample holds."""
-    weights = dp.parse_tokenizer_weights(args.tokenizer_weights, [t.name for t in tallies]) if args else {}
+    weights = dp.parse_tokenizer_weights(args.tokenizer_weights, [t.name for t in tallies])
     shares = dp.tokenizer_shares({t.name: max(estimates[t.name][1], 1) for t in tallies}, weights)
     available = {t.name: max(t.text_chars, 1) for t in tallies}
     total = min([budget] + [available[n] / shares[n] for n in shares if shares[n] > 0])
     return {n: min(1.0, total * shares[n] / available[n]) for n in shares}
 
 
-def train_tokenizer(tallies, vocab, work, args=None, estimates=None):
+def train_tokenizer(tallies, vocab, work, args, estimates):
     """A tokenizer like data_prep.py's, trained on the kept sample (with --superbpe:
     the same two stages) with data_prep's window sampler, so the characters per
     token measured here match a real build's."""
     import sentencepiece as spm
-    extra = max(1, round(vocab * args.superbpe_fraction)) if getattr(args, "superbpe", False) else 0
-    if estimates is None:
-        estimates = {t.name: (t.kept, t.kept_chars) for t in tallies}
+    extra = max(1, round(vocab * args.superbpe_fraction)) if args.superbpe else 0
     probs = sample_probabilities(tallies, estimates, args)
-    seed = args.seed if args is not None else 1234
+    seed = args.seed
     corpus = os.path.join(work, "corpus.txt")
     with open(corpus, "w", encoding="utf-8", newline="\n") as out:
         for t in tallies:
@@ -319,7 +317,7 @@ def main(argv=None):
     kw = dp.KeywordFilter(include, exclude, args.keyword_min_hits, args.keyword_min_distinct, args.title_weight,
                           pattern_cache=dp.prefilter_cache_path(args.include_keywords))
     dp._init_worker(kw, {"language": args.language, "max_replacement_ratio": args.max_replacement_ratio,
-                         "min_chars": args.min_chars, "exact_dedup": args.exact_dedup,
+                         "min_chars": args.min_chars,
                          "boilerplate": "off", "boilerplate_min_len": args.boilerplate_min_len})
     spec = args.keyword_sources.strip().lower()
 
@@ -397,7 +395,7 @@ def main(argv=None):
     data_tokens = epochs * unique
     flops, source = (opts.tflops * 1e12, f"--tflops {opts.tflops:g}") if opts.tflops else measured_speed(HERE)
 
-    def per_token(n, c):
+    def per_token(c):
         # tiny_gpt's own rules: the context of default_ctx (256 up to d 192, 512 up to d 512, 1024 up to d 1024,
         # 2048 up to d 2048, then 4096) and flops_per_token (6 per active parameter + 12 x layers x context x width)
         return tiny_gpt.flops_per_token(dataclasses.replace(c, ctx=tiny_gpt.default_ctx(c.d_model)))
@@ -409,7 +407,7 @@ def main(argv=None):
     commands = []
 
     def row(label, n, c, d):
-        hours = d * per_token(n, c) / flops / 3600 / 0.92 if flops else float("nan")
+        hours = d * per_token(c) / flops / 3600 / 0.92 if flops else float("nan")
         commands.append(f"{label}: python tiny_gpt.py --dataset <folder> --d-model {c.d_model} --layers {c.n_layers} "
                         f"--train-tokens {int(d / 1e7) * 10_000_000}")
         return (f"{label:<16}{n / 1e6:>9.1f}M  d{c.d_model:<5} L{c.n_layers:<3}{d / 1e9:>9.2f}B{d / n:>9.0f}"
@@ -430,7 +428,7 @@ def main(argv=None):
         for hours in (float(h) for h in opts.hours.split(",") if h.strip()):
             best = None
             for n, c in shapes:
-                tokens = min(flops * hours * 3600 * 0.92 / per_token(n, c), data_tokens)
+                tokens = min(flops * hours * 3600 * 0.92 / per_token(c), data_tokens)
                 if tokens >= r * n:
                     best = (n, c, tokens)
             if best:

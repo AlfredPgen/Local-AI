@@ -231,7 +231,7 @@ def main():
         return step_posttrain(args.name)
     if args.step == "estimate":
         # the same data settings as 'build' (everything after data_prep.py --out <folder>)
-        return run([sys.executable, "estimate_dataset.py", "--hours", "12,24,48,72"] + build_command()[4:])
+        return run([sys.executable, "estimate_dataset.py"] + build_command()[4:])
     if args.step == "build":
         return step_build()
     if args.step == "plan":
