@@ -300,6 +300,58 @@ class Audit2Downloaders(unittest.TestCase):
         self.assertLess(longest_sleep(500, "30"), 4.01)  # Retry-After is honoured for 429 and 503 only
         self.assertLessEqual(longest_sleep(429, "999999"), 3600)
 
+    KEYWORDS = "genetic*\nallele*\ndrift\nselection\n"
+    MATCH = ("Genetic drift and allele frequencies", "Genetic drift changes allele frequencies; selection acts too.")
+
+    def keyword_records(self, extra=()):
+        """(records path, keyword file): matching and non-matching papers in several languages."""
+        import data_prep
+        papers = [(1, "eng", 10) + self.MATCH, (2, "eng", 99, "Cooking pasta", "Boil the water, add salt."),
+                  (3, "", 30) + self.MATCH, (4, "fre", 40) + self.MATCH, (5, "English", 50) + self.MATCH,
+                  (6, "ENG", 5, "Allele selection", "Genetic drift. " * 3 + "Padding words here. " * 40),
+                  (7, "en", 70, "Drift", "Allele genetic selection drift."), (8, "ger", 80) + self.MATCH]
+        papers += list(extra)
+        lines = [json.dumps({"pmcid": f"PMC{i}", "pmid": str(i), "year": "2020", "cited": cited, "journal": "J Test",
+                             "lang": lang, "title": title, "abstract": abstract})
+                 for i, lang, cited, title, abstract in papers]
+        folder, records = self.pmc_cache([gzip.compress(("\n".join(lines) + "\n").encode("utf-8"))])
+        keywords = os.path.join(self.tmp, "kw.txt")
+        with open(keywords, "w", encoding="utf-8") as f:
+            f.write(self.KEYWORDS)
+        return records, keywords, data_prep
+
+    @staticmethod
+    def reference_rows(dp, records, spec, min_hits, min_distinct, limit, rank, skip=()):
+        """What keyword_list must return: the full check (KeywordFilter.evaluate) on every English paper."""
+        import math
+        kw = dp.KeywordFilter(dp.read_terms(spec), [], min_hits, min_distinct, title_weight=3)
+        kept = []
+        for rec in pmc.read_records(records):
+            if rec["lang"] and not rec["lang"].lower().startswith("en"):
+                continue
+            keep, _, hits, _ = kw.evaluate(rec["title"], rec["abstract"])
+            if keep:
+                words = len(rec["title"].split()) + len(rec["abstract"].split())
+                kept.append((hits / math.sqrt(max(words, 50)), rec))
+        order = (lambda p: (-p[1]["cited"], -p[0], p[1]["pmcid"])) if rank == "cited" else \
+            (lambda p: (-p[0], -p[1]["cited"], p[1]["pmcid"]))
+        kept = [r for _, r in sorted(kept, key=order) if r["pmcid"] not in skip]
+        return [(r["pmcid"], r["pmid"], r["year"], str(r["cited"]), r["journal"], r["title"]) for r in kept[:limit]]
+
+    def test_f143_pmc_keyword_list_without_the_prefilter(self):
+        """F143: keyword_list decides with the full check alone (no C++ prefilter pass) and gives the
+        same rows; papers in another language are skipped, papers without a language are kept."""
+        records, keywords, dp = self.keyword_records()
+        path = os.path.join(self.tmp, "list.tsv")
+        for rank in ("density", "cited"):
+            with unittest.mock.patch.object(dp, "_vector_scores", side_effect=AssertionError("prefilter called")), \
+                    redirect_stdout(io.StringIO()):
+                rows = pmc.keyword_list(records, keywords, 3, 3, 100, rank, path)
+            self.assertEqual(rows, self.reference_rows(dp, records, keywords, 3, 3, 100, rank))
+            self.assertEqual(sorted(r[0] for r in rows), ["PMC1", "PMC3", "PMC5", "PMC6", "PMC7"])
+            with open(path, encoding="utf-8") as f:
+                self.assertEqual([tuple(line.split("\t")) for line in f.read().splitlines()[3:]], rows)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -308,8 +308,6 @@ def keyword_list(records_path, keyword_path, min_hits, min_distinct, limit, rank
     times), best first, as list rows; written to `path`. rank: 'density'
     (keyword matches per square root of words) or 'cited' (most cited first).
     Papers in `skip` (PMCIDs already downloaded) are left out of the list."""
-    import pyarrow as pa
-
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     import data_prep as dp
 
@@ -317,10 +315,12 @@ def keyword_list(records_path, keyword_path, min_hits, min_distinct, limit, rank
     kept, n, t0 = [], 0, time.time()
 
     def score(chunk):
-        arrays = {"text": pa.array([r["abstract"] for r in chunk]), "title": pa.array([r["title"] for r in chunk])}
-        upper, _, _ = dp._vector_scores(arrays, kw, "text", "title", None, None)  # C++ prefilter, never too low
-        for rec, bound in zip(chunk, upper):
-            if bound < min_hits or not rec["lang"].lower().startswith(("eng", "en")) and rec["lang"]:
+        # The full check on every record, without data_prep's C++ prefilter (_vector_scores) in front of it: a
+        # prefilter pays only when it rejects most records, and with the keyword list used here it rejected
+        # 2-19 % of these abstracts and cost more than the check it saved. A much narrower keyword list
+        # (one that rejects two thirds or more) would make it worth having again.
+        for rec in chunk:
+            if rec["lang"] and not rec["lang"].lower().startswith(("eng", "en")):
                 continue
             keep, _, hits, _ = kw.evaluate(rec["title"], rec["abstract"])
             if keep:
