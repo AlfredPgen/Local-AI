@@ -251,13 +251,59 @@ class Audit2PipelineTools(unittest.TestCase):
             f.write("Lietuviškas tekstas.")
         with open(os.path.join(folder, "sub", "other.LT.md"), "w", encoding="utf-8") as f:
             f.write("Lietuviškas tekstas.")
-        args = types.SimpleNamespace(md_glob=None, md_exclude=["*.lt.md"], md_recursive=True, sample=1.0)
+        args = types.SimpleNamespace(md_glob=None, md_exclude=["*.lt.md"], md_recursive=True, sample=1.0,
+                                     est_seed=0)
         with unittest.mock.patch.object(estimate_dataset, "examine"):
             tally = estimate_dataset.markdown_source("md", [folder], args, False, random.Random(0))
         stats = {"scanned": 0, "skipped": collections.Counter(), "cleaning": collections.Counter()}
         docs = list(dp.iter_markdown([folder], list(dp.MD_PATTERNS_DEFAULT), args.md_exclude, True, stats, []))
         self.assertEqual([d[0] for d in docs], ["keep.md"])
         self.assertEqual((tally.total, tally.sampled), (len(docs), len(docs)))
+
+    def test_estimate_stores_a_random_sample_of_texts_and_measures_on_held_out_ones(self):
+        """F153: the texts kept for the tokenizer are a reservoir sample of all kept documents (they were the
+        first 6M characters, the start of the first files), and characters per token of a tokenizer trained
+        here are measured on texts it was not trained on."""
+        import data_prep as dp
+        import estimate_dataset
+
+        def fill(name, seed=0):
+            tally = estimate_dataset.Tally(name, "parquet", seed)
+            for i in range(200):  # first half short English, second half long technical text
+                tally.keep(f"{i:03d} " + ("short english text. " * 5000 if i < 100 else "long technical text " * 10000))
+            return tally
+
+        t = fill("web")
+        ids = [int(text[:3]) for text in t.texts]
+        self.assertEqual((t.kept, len(ids), len(set(ids))), (200, 60, 60), "6M characters of 100k-character texts")
+        self.assertTrue(20 <= sum(i >= 100 for i in ids) <= 40, ids)  # about half; the old store had none
+        self.assertEqual(t.text_chars, sum(len(text) for text in t.texts))
+        self.assertEqual(t.kept_chars, 100 * 100_004 + 100 * 200_004)
+        self.assertEqual(ids, [int(text[:3]) for text in fill("web").texts], "the same sample every time")
+        self.assertNotEqual(ids, [int(text[:3]) for text in fill("web", seed=1).texts])
+        small = estimate_dataset.Tally("md", "markdown")
+        for i in range(7):
+            small.keep(f"text {i}")
+        self.assertEqual(small.texts, [f"text {i}" for i in range(7)], "below the budget every text is stored")
+        # every fifth stored text is held out; a source with fewer than five has none to spare
+        self.assertEqual(estimate_dataset.split_texts(list("abcdefghijk")), (list("abcdfghik"), list("ej")))
+        self.assertEqual(estimate_dataset.split_texts(list("abcd")), (list("abcd"), list("abcd")))
+        folder = self.text_folder("f153_text", n=10)
+        trained, measured = [], []
+        real_lines, real_cpt = dp.tokenizer_sample_lines, estimate_dataset.chars_per_token
+        argv = ["--md-dir", folder, "--tflops", "1", "--hours", "1"]
+        with unittest.mock.patch.object(dp, "tokenizer_sample_lines",
+                                        side_effect=lambda text, *a, **k: trained.append(text) or real_lines(
+                                            text, *a, **k)), \
+                unittest.mock.patch.object(estimate_dataset, "chars_per_token",
+                                           side_effect=lambda tok, texts: measured.append(list(texts)) or real_cpt(
+                                               tok, texts)):
+            self.run_estimate(argv)
+            self.assertEqual((len(trained), len(measured), len(measured[0])), (8, 1, 2))
+            self.assertFalse(set(trained) & set(measured[0]), "measured on texts the tokenizer did not see")
+            model, _ = self.tokenizer_model("f153_tok")
+            self.run_estimate(argv + ["--tokenizer", model])
+            self.assertEqual((len(trained), len(measured), len(measured[1])), (8, 2, 10), "a given tokenizer: all")
 
 
 if __name__ == "__main__":
