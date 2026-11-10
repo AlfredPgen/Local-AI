@@ -863,7 +863,8 @@ def parse_date(text):
 
 def numeric_correct(item, generated):
     """(correct, parsed) following MedCalc-Bench: dates exact, tuples (weeks, days) exact, integers exact after
-    rounding, decimals within the item's lower/upper limits."""
+    rounding, decimals within the item's lower/upper limits (also the 'integer' items whose answer is not a whole
+    number, as in the official grader)."""
     gt = str(item["answer"]).strip()
     if item.get("output_type") == "date" or DATE_RE.search(gt):
         got, want = parse_date(generated), parse_date(gt)
@@ -876,7 +877,7 @@ def numeric_correct(item, generated):
     value = parse_first_number(generated)
     if value is None:
         return False, None
-    if item.get("output_type") == "integer":
+    if item.get("output_type") == "integer" and float(gt).is_integer():
         return round(value) == round(float(gt)), value
     try:
         low, high = float(item.get("lower")), float(item.get("upper"))
@@ -1180,7 +1181,7 @@ def cmd_run(args):
             note += "; option log-likelihood per character"
         elif spec["kind"] == "numeric":
             rows = score_numeric(model, tok, items, device, amp_dtype, batch=args.batch)
-            note += "; greedy, first number, MedCalc tolerance"
+            note += "; greedy, first number, MedCalc tolerance, integer rule: official"
         else:
             rows = score_code(model, tok, items, device, amp_dtype, sandbox, args.max_new_tokens, args.timeout,
                               batch=args.batch)

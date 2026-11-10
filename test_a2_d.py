@@ -27,6 +27,70 @@ class Audit2Benchmark(unittest.TestCase):
     def tearDownClass(cls):
         shutil.rmtree(cls.tmp, ignore_errors=True)
 
+    def suite_run(self, label, items, extra=(), sandbox=None):
+        """`benchmark.py run --device cpu --no-publish` on a tiny saved checkpoint, every output path inside the
+        temporary folder. items = {benchmark name: [item, ...]}. Returns (exit code, stdout, rows of the results
+        CSV, {file name: rows} of the per-item CSVs, rows of experiments.csv)."""
+        import csv
+        import dataclasses
+        import json
+        import torch
+        import tiny_gpt
+        from test_tiny_gpt import CharTok
+        b = self.b
+        root = os.path.join(self.tmp, label)
+        bench, runs = os.path.join(root, "bench"), os.path.join(root, "bench", "runs")
+        for name, its in items.items():
+            os.makedirs(os.path.join(bench, name))
+            b.write_items(os.path.join(bench, name, "items.jsonl"), its)
+        with open(os.path.join(bench, "manifest.json"), "w", encoding="utf-8") as handle:
+            json.dump({"benchmarks": {name: {"items": len(its)} for name, its in items.items()}}, handle)
+        torch.manual_seed(0)
+        cfg = tiny_gpt.ModelConfig(vocab_size=50, ctx=64, d_model=32, n_layers=2, n_heads=4, n_kv_heads=2)
+        ck = os.path.join(root, "model", "tiny_best.pt")
+        os.makedirs(os.path.dirname(ck))
+        torch.save({"format": tiny_gpt.CHECKPOINT_FORMAT, "format_version": tiny_gpt.FORMAT_VERSION,
+                    "checkpoint_type": "inference", "model_config": dataclasses.asdict(cfg),
+                    "model": tiny_gpt.TinyGPT(cfg).state_dict(), "step": 7}, ck)
+        results = os.path.join(root, "results", "benchmarks.csv")
+        out = io.StringIO()
+        with unittest.mock.patch.object(b, "BENCH_DIR", bench), \
+                unittest.mock.patch.object(b, "MANIFEST", os.path.join(bench, "manifest.json")), \
+                unittest.mock.patch.object(b, "RUNS_DIR", runs), \
+                unittest.mock.patch.object(b, "select_sandbox", return_value=sandbox), \
+                unittest.mock.patch.object(tiny_gpt, "tokenizer_from_checkpoint", return_value=CharTok()), \
+                unittest.mock.patch.object(tiny_gpt, "publish_experiments", tiny_gpt.publish_experiments), \
+                redirect_stdout(out):
+            code = b.main(["run", "--checkpoint", ck, "--benchmarks", ",".join(items), "--device", "cpu",
+                           "--no-publish", "--results", results, *extra])
+
+        def table(path):
+            with open(path, encoding="utf-8-sig", newline="") as handle:
+                return list(csv.DictReader(handle))
+
+        item_rows = {}
+        for folder in (os.listdir(runs) if os.path.isdir(runs) else []):
+            for name in os.listdir(os.path.join(runs, folder)):
+                item_rows[name] = table(os.path.join(runs, folder, name))
+        experiments = os.path.join(root, "model", "results", "experiments.csv")
+        return (code, out.getvalue(), b.read_results(results), item_rows,
+                table(experiments) if os.path.isfile(experiments) else [])
+
+    @staticmethod
+    def medcalc_items():
+        return [{"id": f"medcalc-{i}", "question": "Score?", "options": None, "answer": answer, "category": "risk",
+                 "kind": "numeric", "context": "A patient note.", "output_type": kind, "lower": answer,
+                 "upper": answer, "calculator": "c"} for i, (answer, kind) in enumerate((("4", "integer"),
+                                                                                        ("2.5", "decimal")))]
+
+    def test_medcalc_rows_name_the_integer_rule(self):
+        """F016: MedCalc rows scored with the official integer rule say so in their notes (earlier rows of
+        results/benchmarks.csv used rounding for the 34 'integer' items whose answer is not a whole number)."""
+        code, _, rows, _, _ = self.suite_run("f016", {"medcalc": self.medcalc_items()})
+        self.assertEqual(code, 0)
+        self.assertEqual([r["benchmark"] for r in rows], ["medcalc"])
+        self.assertIn("integer rule: official", rows[0]["notes"])
+
     def test_generated_code_gets_no_stdin(self):
         """F020: the jailed program reads /dev/null, not the rest of the wrapper script piped to `bash -s` (which
         holds the clean-up lines), and the unsafe local runner gives its child no stdin either."""
