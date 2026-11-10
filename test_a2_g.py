@@ -257,6 +257,22 @@ class Audit2FinetuneTools(unittest.TestCase):
         for key in finals[0]:
             self.assertTrue(torch.equal(finals[0][key], finals[1][key]), key)
 
+    def test_dpo_checkpoint_keeps_the_sft_record(self):
+        """F159: a DPO checkpoint made from an SFT checkpoint carries the SFT stage's record as
+        finetune['previous']; a fine-tune of a pre-trained checkpoint has no such key."""
+        folder = os.path.join(self.tmp, "previous_ft")
+        os.makedirs(folder)
+        base = self.finetune_base("ft_base_previous.pt")
+        sft, _ = self.finetune(folder, "sft", base, "P_sft", epochs=1)
+        dpo, _ = self.finetune(folder, "dpo", sft, "P_dpo", epochs=1)
+        first = torch.load(sft, map_location="cpu", weights_only=True)["finetune"]
+        self.assertNotIn("previous", first)
+        second = torch.load(dpo, map_location="cpu", weights_only=True)["finetune"]
+        self.assertEqual(second["method"], "dpo")
+        self.assertEqual(second["previous"]["method"], "sft")
+        self.assertEqual(second["previous"]["history"], first["history"])
+        self.assertEqual(os.path.normcase(second["previous"]["base"]), os.path.normcase(os.path.abspath(base)))
+
     # ---- posttrain.py -----------------------------------------------------------------------------------
     def posttrain_data(self, tag):
         folder = os.path.join(self.tmp, tag)

@@ -199,7 +199,8 @@ def save(model, tok, cfg, base_obj, path, info, history):
         "model_config": dataclasses.asdict(cfg), "model": tiny_gpt.cpu_state_dict(model),
         "tokenizer": {"proto": tok.proto, **tok.meta()}, "dataset": base_obj.get("dataset"),
         "step": base_obj.get("step"), "train_config": base_obj.get("train_config"),
-        "finetune": {**info, "history": history},
+        "finetune": {**info, "history": history,
+                     **({"previous": base_obj["finetune"]} if base_obj.get("finetune") else {})},
         "metrics": {"history": base_metrics.get("history", []), "best_val": base_metrics.get("best_val"),
                     "best_step": base_metrics.get("best_step"), "last_eval": None,
                     "base_last_eval": base_metrics.get("last_eval") or base_metrics.get("base_last_eval")},
@@ -214,7 +215,7 @@ def train(args):
     scaler = torch.amp.GradScaler(device.type) if need_scaler else None  # fp16 needs loss scaling
     model, tok, cfg, base_obj = tiny_gpt.load_for_inference(args.base, device, args.trust_checkpoint)
     # keep only what save() needs: the raw weights (and any optimizer state) would sit in RAM until the end
-    base_obj = {k: base_obj.get(k) for k in ("dataset", "step", "train_config", "metrics")}
+    base_obj = {k: base_obj.get(k) for k in ("dataset", "step", "train_config", "metrics", "finetune")}
     gc.collect()
     model.set_attention_impl(tiny_gpt.choose_attention(device, cfg, amp_dtype, "auto")[0])
     out_path = os.path.join(args.out_dir, args.name + ".pt")
