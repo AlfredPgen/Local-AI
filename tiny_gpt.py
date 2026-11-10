@@ -2450,12 +2450,10 @@ def generate(model, tok, prompt, max_new_tokens, device, amp_dtype=None, tempera
 # ---------------------------------------------------------------------------
 # Planner
 # ---------------------------------------------------------------------------
-# Twice the published rates (see heuristic_lr); the factor 2 comes from the 2026-11-05 sweep
+# LR_TABLE_FACTOR x the published rates: the sweep behind the factor is in heuristic_lr's docstring
 LR_TABLE_FACTOR = 2.0
 LR_TABLE = [(1e6, 4.0e-3), (1e7, 2.4e-3), (1e8, 1.2e-3), (1e9, 6.0e-4)]
-# lr x weight decay is the shrink per step of decoupled weight decay (p <- p (1 - lr wd), AdamW and Muon alike)
-# and 1 / (lr wd) its timescale (Wang and Aitchison 2024); the published 0.1 belongs to the published rates, so
-# with the table at LR_TABLE_FACTOR x those rates the default is 0.1 / LR_TABLE_FACTOR
+# the published 0.1 divided by the same factor, so lr x weight decay (the shrink per step) stays as published
 WEIGHT_DECAY_DEFAULT = 0.1 / LR_TABLE_FACTOR
 
 
@@ -2475,8 +2473,7 @@ def heuristic_lr(n_params):
     above x4; a 500-step optimum over-states the rate of a run 60x longer by about
     1.7x (DeepSeek LLM's C^-0.125 compute term), 4 / 1.7 = 2.35, so the measured
     arm below that, 2, is applied. x1 was not run at d 512 (time cap) and AdamW
-    alone was not swept; the first long run with this table is checked against an
-    old-table run at 2,000 steps. Runs planned before it keep their recorded rate
+    alone was not swept. Runs planned before the sweep keep their recorded rate
     (--resume never re-plans the rate)."""
     x = math.log10(max(n_params, 1))
     pts = [(math.log10(n), math.log10(lr)) for n, lr in LR_TABLE]
@@ -2494,10 +2491,10 @@ def default_layers(d_model):
 
 def default_ctx(d_model):
     """Context length by width: the one rule plan_run, plan_table and
-    estimate_dataset share. 1024 up to d 1024 (the laptop plan), 2048 up to
-    d 2048 (the 1.45B Mac shape), 4096 above. Attention is 12 x layers x ctx x d
-    FLOPs per token on top of 6 N, so a longer context costs a growing share
-    (attention_flop_share); --ctx overrides."""
+    estimate_dataset share. 256 up to d 192, 512 up to d 512, 1024 up to d 1024
+    (the laptop plan), 2048 up to d 2048 (the 1.45B Mac shape), 4096 above.
+    Attention is 12 x layers x ctx x d FLOPs per token on top of 6 N, so a longer
+    context costs a growing share (attention_flop_share); --ctx overrides."""
     if d_model <= 192:
         return 256
     if d_model <= 512:
@@ -2509,10 +2506,12 @@ def default_ctx(d_model):
 
 def default_rope_base(ctx):
     """RoPE base for a context: 10,000 up to ctx 2048, then growing as ctx^2
-    (10,000 x (ctx / 2048)^2 rounded to thousands: 4k 40k, 8k 160k, 16k 640k),
-    at or above the lower bound of Men et al. 2024 ("Base of RoPE bounds
-    context length") and Llama 3's 500k at 8k. Below the bound the model keeps
-    its perplexity but loses long-range retrieval."""
+    (10,000 x (ctx / 2048)^2 rounded to thousands: 4k 40k, 8k 160k, 16k 640k).
+    Against the lower bound of Men et al. 2024 ("Base of RoPE bounds context
+    length", Table 2: 1k 4.3e3, 2k 1.6e4, 4k 2.7e4, 8k 8.4e4, 16k 3.1e5) the
+    default is at or above it at every length except ctx 2048, where 10,000 is
+    below the 1.6e4 bound. Below the bound the model keeps its perplexity but
+    loses long-range retrieval."""
     if ctx <= 2048:
         return 10_000.0
     return float(round(10_000 * (ctx / 2048) ** 2, -3))
@@ -2530,7 +2529,8 @@ def default_head_dim(d_model):
 
 
 def default_kv_heads(n_heads):
-    """GQA with 4 query heads per K/V head once there are >= 8 heads."""
+    """GQA with 4 query heads per K/V head once there are >= 8 heads, when the
+    head count is divisible by 4 (otherwise ordinary multi-head attention)."""
     return n_heads // 4 if n_heads >= 8 and n_heads % 4 == 0 else n_heads
 
 
@@ -2545,9 +2545,9 @@ def shape_ladder(vocab_size, ctx=512):
 
 
 def tokens_per_step_legacy(n_params):
-    """The rule before the 2026-11 audit: ~16 sqrt(N) tokens per optimizer step,
-    rounded to a power of two between 16k and 512k. Kept as the reference
-    batch of the learning-rate table (lr_batch_factor)."""
+    """The reference batch the learning-rate table was calibrated at (the old
+    16 sqrt(N) rule): ~16 sqrt(N) tokens per optimizer step, rounded to a power
+    of two between 16k and 512k (lr_batch_factor)."""
     raw = 16 * math.sqrt(n_params)
     return int(min(max(2 ** round(math.log2(raw)), 16_384), 524_288))
 
@@ -2744,11 +2744,10 @@ def estimate_train_bytes(cfg, micro_batch, amp=True, checkpointing=False, loss_c
     state (AdamW 8; Muon 4 for the block matrices), activations kept for the
     backward pass (only each block's FP32 input with activation checkpointing,
     plus one block being recomputed) and the output-layer logits (one piece of
-    loss_chunk tokens when the loss is computed in pieces). The activation and
-    logit terms are calibrated to the CUDA allocator's RESERVED peak (measured
-    estimate/peak 0.98-1.21 eager, 1.05-1.3 compiled, on the 216M run's shapes);
-    the 0.8 budget factor is the margin and the first-step out-of-memory handler
-    the safety net, so no further factor is applied here. With `device` given and
+    loss_chunk tokens when the loss is computed in pieces). The reference is the
+    CUDA allocator's ALLOCATED peak (peak_memory_bytes); the 0.8 budget factor is
+    the margin and the first-step out-of-memory handler the safety net, so no
+    further factor is applied here. With `device` given and
     attention_keeps_scores(device) true (MPS), each layer also keeps its causal
     scores: n_heads x ctx x 6 bytes per token (the bf16 cast copy, 2, and the fp32
     softmax output, 4); with checkpointing the `+ t * per_token_layer` term already
@@ -2799,6 +2798,7 @@ def memory_options(checkpointing="auto", loss_chunk=None):
     (measured on the RTX 3070 at the 216M shape)."""
     ck = [False, True] if checkpointing == "auto" else [checkpointing == "on"]
     lc = [0, LOSS_CHUNK_TOKENS] if loss_chunk is None else [loss_chunk]
+    # cheapest first (the comprehension already yields that order; the key states the rule)
     return sorted(((c, l) for c in ck for l in lc), key=lambda o: (o[0], o[1] != 0))
 
 
@@ -3001,12 +3001,9 @@ def plan_run(args, manifest, device, amp_dtype, token_cap=None, fixed_cfg=None):
     epochs = train_tokens / max(unique, 1)
     dropout = args.dropout if args.dropout is not None else (0.0 if epochs <= 4 else 0.1)
     cfg.dropout = dropout
-    # the LR table was calibrated at the old batch rule; a doubled or halved batch moves the rate by sqrt(2). The
-    # factor follows the batch the run will use (micro x accumulation x ctx: --batch-size and --grad-accum may fix it
-    # far from the planner's target), and its power-of-two rounding leaves accumulation rounding alone
+    # lr_batch_factor on the batch the run will use (micro x accumulation x ctx): about x1.4 / x0.7 for double / half
     lr_factor = 1.0 if args.lr else lr_batch_factor(n_active, tokens_per_step)
-    # --lr-scale: the sweep knob on the heuristic rate (LR_TABLE moves only by a factor that two sizes agree on, with
-    # lr x weight_decay kept constant: see heuristic_lr and WEIGHT_DECAY_DEFAULT)
+    # --lr-scale: the sweep knob on the heuristic rate
     lr_scale = float(getattr(args, "lr_scale", 1.0) or 1.0)
     if args.lr and lr_scale != 1.0:  # recorded as the factor the run's rate actually carries
         lines.append(f"--lr-scale {lr_scale:g} has no effect: --lr sets the peak learning rate (recorded as 1)")
@@ -3195,7 +3192,7 @@ def sustained_speed(out_dir, device):
     """(FLOP/s, description) that this computer sustained in its last training run
     of at least 12 minutes on this kind of device (experiments.csv), or (None,
     reason). A short benchmark on a cool laptop GPU runs at boost clocks; over
-    hours the power and heat limits slow it down (1.7x on this RTX 3070), so a
+    hours the power and heat limits slow it down (about 1.6x on this RTX 3070), so a
     real run is the better guide. Rows from before the device column are CUDA."""
     import csv
     try:
@@ -3969,7 +3966,8 @@ def compat_dataset_dir(args):
 
 
 def ensure_dataset(args):
-    """--dataset, or the dataset path stored in a checkpoint, or (compat) build one from --data."""
+    """--dataset, or (compat) a dataset built from --data/--wiki-articles; None otherwise (a resumed run takes
+    the path from its checkpoint in _train)."""
     if args.dataset:
         return os.path.abspath(args.dataset)
     if args.data or args.wiki_articles:
