@@ -106,6 +106,55 @@ class Audit2Benchmark(unittest.TestCase):
         self.assertTrue(row["notes"].startswith(tiny_gpt.device_label(torch.device("cpu")) + "; medqa "),
                         row["notes"])
 
+    def plot_figures(self, label, rows):
+        """`benchmark.py plot` on a results table made of `rows` (benchmark, category, accuracy, floor or None,
+        optional checkpoint/step/params): ({PNG name: its Figure}, stdout). The PNGs are drawn into the
+        temporary folder."""
+        import matplotlib.figure
+        import tiny_gpt
+        b = self.b
+        path = os.path.join(self.tmp, label, "benchmarks.csv")
+        full = []
+        for r in rows:
+            low, high = tiny_gpt.wilson_interval(round(r["accuracy"] * 20), 20)
+            full.append({"time": "t", "checkpoint": "tinyGPT_best.pt", "step": 1000, "params": 1000000, "n": 20,
+                         "low": low, "high": high, "chance": 0.25, "notes": "", **r,
+                         "floor": "" if r.get("floor") is None else r["floor"]})
+        b.append_results(path, full)
+        figures, save, out = {}, matplotlib.figure.Figure.savefig, io.StringIO()
+
+        def savefig(fig, name, *args, **kwargs):
+            figures[os.path.basename(name)] = fig
+            return save(fig, name, *args, **kwargs)
+
+        with unittest.mock.patch.object(matplotlib.figure.Figure, "savefig", savefig), redirect_stdout(out):
+            self.assertEqual(b.main(["plot", "--results", path, "--out-dir", os.path.join(self.tmp, label, "plots"),
+                                     "--dpi", "40"]), 0)
+        return figures, out.getvalue()
+
+    def test_category_panel_without_a_floor(self):
+        """F003: after `run --no-floor` the category bars are neutral (not all red) and neither the legend nor
+        the axis speaks of a floor; a category with a floor is still green above it and red at or below."""
+        import matplotlib.colors
+        import view_pt as vp
+
+        def panel(label, floors):
+            rows = [{"benchmark": "mmlu", "category": "all", "accuracy": 0.3, "floor": floors[0]}]
+            rows += [{"benchmark": "mmlu", "category": c, "accuracy": a, "floor": f}
+                     for c, a, f in zip(("anatomy", "genetics", "virology"), (0.2, 0.4, 0.6), floors)]
+            ax = self.plot_figures(label, rows)[0]["tinyGPT_best_categories.png"].axes[0]
+            colours = [matplotlib.colors.to_hex(p.get_facecolor()[:3]) for p in ax.patches]
+            return colours, [t.get_text() for t in ax.get_legend().get_texts()], ax.get_xlabel()
+
+        colours, legend, xlabel = panel("f003_none", (None, None, None))
+        self.assertEqual(colours, [vp.SERIES[0]] * 3)
+        self.assertFalse([text for text in legend if "floor" in text], legend)
+        self.assertEqual(xlabel, "accuracy")
+        colours, legend, xlabel = panel("f003_mixed", (0.3, 0.3, None))  # sorted by accuracy: 0.2, 0.4, 0.6
+        self.assertEqual(colours, [vp.CRITICAL, vp.GOOD, vp.SERIES[0]])
+        self.assertTrue([text for text in legend if "floor" in text], legend)
+        self.assertIn("green above floor", xlabel)
+
     def test_medcalc_rows_name_the_integer_rule(self):
         """F016: MedCalc rows scored with the official integer rule say so in their notes (earlier rows of
         results/benchmarks.csv used rounding for the 34 'integer' items whose answer is not a whole number)."""

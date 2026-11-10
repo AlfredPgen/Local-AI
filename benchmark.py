@@ -1356,18 +1356,20 @@ def cmd_plot(args):
             hi = np.array([_f(r["high"]) for r in cats])
             fl = [_f(r["floor"]) for r in cats]
             yy = np.arange(len(cats))
-            ax.barh(yy, a, color=[vp.GOOD if f is not None and v > f else vp.CRITICAL for v, f in zip(a, fl)],
-                    height=0.62, alpha=0.9)
+            floors = any(f is not None for f in fl)  # none after `run --no-floor`: neutral bars, no floor marks
+            ax.barh(yy, a, color=[vp.SERIES[0] if f is None else vp.GOOD if v > f else vp.CRITICAL
+                                  for v, f in zip(a, fl)], height=0.62, alpha=0.9)
             ax.errorbar(a, yy, xerr=[a - lo, hi - a], fmt="none", ecolor=vp.INK2, elinewidth=0.7, capsize=1.5)
-            ax.scatter([f if f is not None else np.nan for f in fl], yy, marker="|", s=80, color=vp.INK, lw=1.6,
-                       zorder=4, label="floor (question words shuffled)")
+            if floors:
+                ax.scatter([f if f is not None else np.nan for f in fl], yy, marker="|", s=80, color=vp.INK, lw=1.6,
+                           zorder=4, label="floor (question words shuffled)")
             chance = np.mean([_f(r["chance"]) for r in cats])
             ax.axvline(chance, color=vp.MUTED, lw=0.8, ls=":", label=f"chance (mean {chance:.0%})")
             ax.set_yticks(yy)
             ax.set_yticklabels([f"{r['category']} (n={r['n']})" for r in cats], fontsize=6.5)
             ax.set_xlim(0, 1)
             ax.grid(axis="y", visible=False)
-            ax.set_xlabel("accuracy; green above floor, red at or below")
+            ax.set_xlabel("accuracy; green above floor, red at or below" if floors else "accuracy")
             ax.set_title(f"{BY_NAME[bench]['title']} by category", loc="left")
             ax.legend(loc="lower right")
         out = os.path.join(args.out_dir, f"{stem}_categories.png")
