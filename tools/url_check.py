@@ -5,6 +5,7 @@ type, size). Prints a JSON report. One request at a time, 1 s apart.
 
 The TSV needs a header with at least the columns 'tool' and 'url'.
 """
+import argparse
 import csv
 import json
 import sys
@@ -29,8 +30,11 @@ def check(url):
 
 
 def main():
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("sources", metavar="SOURCES.tsv", help="table with the columns 'tool' and 'url'")
+    args = p.parse_args()
     sys.stdout.reconfigure(encoding="utf-8")  # JSON may hold non-ASCII names, also when redirected to a file
-    lines = [ln for ln in open(sys.argv[1], encoding="utf-8") if ln.strip() and not ln.lstrip().startswith("#")]
+    lines = [ln for ln in open(args.sources, encoding="utf-8") if ln.strip() and not ln.lstrip().startswith("#")]
     rows = list(csv.DictReader(lines, delimiter="\t"))  # '#' lines are comments, as in download_docs.py
     out = []
     for r in rows:

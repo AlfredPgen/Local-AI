@@ -16,6 +16,7 @@ Case: a case-insensitive B covers any A; a case-sensitive B covers only
 case-sensitive A with the same letters. Exact duplicates keep the first one.
 --fix removes the same-length covered terms in place (the narrower term goes).
 """
+import argparse
 import os
 import sys
 
@@ -88,8 +89,13 @@ def find(terms, nested):
 
 
 def main():
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("keywords", metavar="KEYWORDS.txt", help="keyword file to check")
+    p.add_argument("--nested", action="store_true", help="also report phrases that contain a shorter phrase")
+    p.add_argument("--fix", action="store_true", help="remove the same-length covered terms from the file")
+    args = p.parse_args()
     sys.stdout.reconfigure(encoding="utf-8")
-    path, nested, fix = sys.argv[1], "--nested" in sys.argv, "--fix" in sys.argv
+    path, nested, fix = args.keywords, args.nested, args.fix
     lines = open(path, encoding="utf-8").read().splitlines()
     terms = list(dict.fromkeys(ln.strip() for ln in lines if ln.strip() and not ln.strip().startswith("#")))
     covered = find(terms, nested)

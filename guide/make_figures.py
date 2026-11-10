@@ -1,4 +1,5 @@
 """Figures for the tinyGPT learning guide (Nature-style schematics)."""
+import argparse
 import os
 
 import matplotlib
@@ -204,6 +205,7 @@ def stages():
 
 
 if __name__ == "__main__":
+    argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter).parse_args()
     os.makedirs(OUT, exist_ok=True)
     pipeline()
     architecture()

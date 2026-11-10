@@ -560,6 +560,70 @@ class Audit2PipelineTools(unittest.TestCase):
         self.assertEqual(term_evidence.read_batch(batch), rows)
         self.assertIs(kw_check.read_batch, term_evidence.read_batch)
 
+    def test_scripts_with_new_parsers_answer_help_and_do_no_work(self):
+        """F146: guide/make_figures.py and four tools had no argument parser, so `--help` redrew the guide's
+        figures, wrote files named '--help' or failed with FileNotFoundError. Each now prints its usage and
+        docstring, exits 0 and writes nothing. A script whose source has no parser is not started here."""
+        scripts = [os.path.join("guide", "make_figures.py")] + [
+            os.path.join("tools", name) for name in ("term_evidence.py", "url_check.py", "kw_check.py",
+                                                     "kw_covered.py")]
+        figures = os.path.join(HERE, "guide", "figures")
+
+        def stamps():
+            return {name: os.stat(os.path.join(figures, name)).st_mtime_ns for name in sorted(os.listdir(figures))}
+
+        before = stamps()
+        for rel in scripts:
+            with open(os.path.join(HERE, rel), encoding="utf-8") as handle:
+                source = handle.read()
+            self.assertIn("ArgumentParser(", source, rel)
+            cwd = tempfile.mkdtemp(dir=self.tmp)
+            code, out = T.run([os.path.join(HERE, rel), "--help"], cwd=cwd)
+            self.assertEqual((code, os.listdir(cwd)), (0, []), (rel, out[-600:]))
+            self.assertIn("usage: " + os.path.basename(rel), out)
+            self.assertIn(source.split('"""')[1].strip().splitlines()[0], out, rel)
+        self.assertEqual(stamps(), before, "--help must not redraw the guide's figures")
+
+    def test_keyword_tools_take_their_arguments_through_a_parser(self):
+        """F146: kw_covered takes --nested and --fix before or after the file (the file used to be whatever
+        stood first); term_evidence takes OUT.tsv and one or more batch files."""
+        from contextlib import redirect_stderr
+        import kw_covered
+        import term_evidence
+        path = os.path.join(self.tmp, "covered.txt")
+        text = "# words\npolymer*\npolymerase\nChina Kadoorie\nChina Kadoorie Biobank\n"
+        with open(path, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write(text)
+        with redirect_stderr(io.StringIO()) as err:
+            out = self.tool_main(kw_covered, ["kw_covered.py", "--nested", path])
+        self.assertEqual(out, "China Kadoorie Biobank\tnested\tChina Kadoorie\npolymerase\tsame length\tpolymer*\n")
+        self.assertIn("1 same-length covered terms, 1 nested", err.getvalue())
+        with open(path, encoding="utf-8", newline="") as handle:
+            self.assertEqual(handle.read(), text, "nothing is removed without --fix")
+        with redirect_stderr(io.StringIO()):
+            self.tool_main(kw_covered, ["kw_covered.py", path, "--fix"])
+        with open(path, encoding="utf-8", newline="") as handle:
+            self.assertEqual(handle.read(), text.replace("polymerase\n", ""))
+
+        batches = []
+        for name, body in (("a.txt", "# genes\nBRCA1\n*mab\n"), ("b.txt", "# methods\nlinear regression\n")):
+            batches.append(os.path.join(self.tmp, name))
+            with open(batches[-1], "w", encoding="utf-8", newline="\n") as handle:
+                handle.write(body)
+        table = os.path.join(self.tmp, "evidence.tsv")
+        with unittest.mock.patch.object(term_evidence, "hits", lambda session, query: len(query)):
+            said = self.tool_main(term_evidence, ["term_evidence.py", table] + batches)
+        self.assertIn("3 terms, 2 queries to run", said)
+        with open(table, encoding="utf-8") as handle:
+            self.assertEqual(handle.read().splitlines(),
+                             ["term\tcategory\tbatch\tquery\thits", 'BRCA1\tgenes\ta.txt\t"BRCA1"\t7',
+                              "*mab\tgenes\ta.txt\t\t-1", 'linear regression\tmethods\tb.txt\t"linear regression"\t19'])
+        with redirect_stderr(io.StringIO()) as err, self.assertRaises(SystemExit) as stop:
+            self.tool_main(term_evidence, ["term_evidence.py", os.path.join(self.tmp, "none.tsv")])
+        self.assertEqual(stop.exception.code, 2, "a table without a batch file is a usage error")
+        self.assertIn("BATCH.txt", err.getvalue())
+        self.assertFalse(os.path.exists(os.path.join(self.tmp, "none.tsv")))
+
 
 if __name__ == "__main__":
     unittest.main()

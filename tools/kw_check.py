@@ -12,6 +12,7 @@ Flags, per term (a flag means "a person should look", not "wrong"):
   in_batch_twice   the same term twice in this batch
 "new_categories" lists the batch's '# category' names that keywords.txt does not have yet.
 """
+import argparse
 import collections
 import glob
 import json
@@ -29,9 +30,13 @@ def norm(t):
 
 
 def main():
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("batch", metavar="BATCH.txt", help="keyword batch file to check")
+    p.add_argument("n_docs", metavar="N_FINEWEB_DOCS", nargs="?", type=int, default=5000,
+                   help="FineWeb-Edu documents for the common_in_web flag (default 5000; 0 skips it)")
+    args = p.parse_args()
     sys.stdout.reconfigure(encoding="utf-8")  # JSON may hold non-ASCII names, also when redirected to a file
-    path = sys.argv[1]
-    n_docs = int(sys.argv[2]) if len(sys.argv) > 2 else 5000
+    path, n_docs = args.batch, args.n_docs
     rows = read_batch(path)
     keywords = os.path.join(HERE, "keywords.txt")
     existing = {norm(t) for t in dp.read_terms(keywords)}
