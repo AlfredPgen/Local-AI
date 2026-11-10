@@ -706,11 +706,6 @@ def mathml(el, top=True):
     return "".join(k)
 
 
-def jats_to_markdown(xml_bytes):
-    """(info dict, markdown) for one JATS article."""
-    return Jats(ET.fromstring(xml_bytes)).markdown()
-
-
 # ---------------------------------------------------------------------------
 # 2. fetch + convert, in parallel
 # ---------------------------------------------------------------------------
