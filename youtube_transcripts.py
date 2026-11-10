@@ -45,6 +45,7 @@ videos are Creative Commons, and --creative-commons-only keeps only those.
 """
 
 import argparse
+import collections
 import glob
 import html
 import json
@@ -159,11 +160,11 @@ def list_videos(spec, cookies, max_videos):
             raise
         info = _find_channel_by_name(spec.lstrip("@"), cookies)  # "StatQuest with Josh Starmer" -> its channel
     entries = []
-    stack = [info] if not info.get("entries") else list(info["entries"])
+    stack = collections.deque([info] if not info.get("entries") else info["entries"])
     while stack:
-        e = stack.pop(0)
+        e = stack.popleft()
         if e.get("entries"):
-            stack[:0] = list(e["entries"])
+            stack.extendleft(reversed(list(e["entries"])))  # in front, in their own order
         elif e.get("id") and len(e["id"]) == 11:
             entries.append(e)
     seen, unique = set(), []

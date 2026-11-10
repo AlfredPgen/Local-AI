@@ -185,6 +185,35 @@ class Audit2DocsYoutubeConvert(unittest.TestCase):
         self.assertEqual([c for c in proc.nice.call_args_list if c.args or c.kwargs], [])  # ... and never set
         self.assertIs(yt.safe_name, download_pmc.safe_name)
 
+    def test_list_videos_keeps_nested_order(self):
+        """F443 (guard): nested playlists are flattened depth first, in the order YouTube lists them."""
+        import youtube_transcripts as yt
+
+        def video(letter):
+            return {"id": letter * 11, "title": letter}
+
+        info = {"id": "channel", "channel": "C", "channel_id": "UC" + "z" * 22,
+                "entries": iter([video("a"),
+                                 {"id": "tab", "entries": iter([video("b"),
+                                                                {"id": "inner", "entries": iter([video("c")])},
+                                                                video("d")])},
+                                 video("e"), video("a")])}  # generators, as yt-dlp returns them; a repeat is dropped
+
+        class FakeYdl:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def extract_info(self, url, download=False):
+                return info
+
+        with unittest.mock.patch.object(yt, "ydl", lambda *a, **k: FakeYdl()):
+            channel, entries = yt.list_videos("@c", None, 0)
+        self.assertEqual([e["title"] for e in entries], ["a", "b", "c", "d", "e"])
+        self.assertEqual(channel["name"], "C")
+
 
 if __name__ == "__main__":
     unittest.main()
