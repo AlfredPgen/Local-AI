@@ -227,8 +227,8 @@ def read_records(path):
     (a page cut off by a crash before the harvest guarded against that) is read
     up to the damage, with a warning, instead of stopping the run."""
     seen = set()
-    try:
-        with gzip.open(path, "rt", encoding="utf-8") as handle:
+    with gzip.open(path, "rt", encoding="utf-8") as handle:  # a missing file is an error, as before
+        try:
             for line in handle:
                 try:
                     rec = json.loads(line)
@@ -238,9 +238,10 @@ def read_records(path):
                 if pmcid and pmcid not in seen:
                     seen.add(pmcid)
                     yield rec
-    except (OSError, EOFError, zlib.error) as exc:  # gzip.BadGzipFile is an OSError
-        print(f"  warning: {path} is damaged ({type(exc).__name__}: {exc}); using the {len(seen):,} papers before "
-              "the damage, everything after it is not read. --refresh-metadata harvests again.", flush=True)
+        except (OSError, EOFError, zlib.error) as exc:  # gzip.BadGzipFile is an OSError
+            print(f"  warning: {path} is damaged ({type(exc).__name__}: {exc}); using the {len(seen):,} papers "
+                  "before the damage, everything after it is not read. --refresh-metadata harvests again.",
+                  flush=True)
 
 
 def keyword_list(records_path, keyword_path, min_hits, min_distinct, limit, rank, path, skip=()):

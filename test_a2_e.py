@@ -172,6 +172,8 @@ class Audit2Downloaders(unittest.TestCase):
         with redirect_stdout(io.StringIO()) as buf:
             self.assertEqual(self.pmc_ids(records), [1, 2, 3])
         self.assertIn("damaged", buf.getvalue())
+        with self.assertRaises(FileNotFoundError):  # a missing file is not "damaged"
+            self.pmc_ids(records + ".absent")
         # a line that is JSON but no record is skipped
         folder, records = self.pmc_cache([gzip.compress(b'{"x": 1}\n17\n'), first])
         self.assertEqual(self.pmc_ids(records), [1, 2, 3])
