@@ -152,8 +152,72 @@ class Audit2Downloaders(unittest.TestCase):
             text = ax.pdf_markdown(PDF)
         self.assertEqual(text, f"# Intro\n\n{intro}\n\n## Appendix A\n\n{appendix}\n\nContact: [email]\n")
 
+    LISTED = [["2101.00001", "biology", "1.500", "2021", "q-bio.PE", "", "Drift in small populations",
+               "We model genetic drift."],
+              ["2101.00002", "biology", "1.200", "2021", "q-bio.PE", "cc-by", "Allele: selection?", "An abstract, two."],
+              ["2101.00003", "statistics", "0.900", "2022", "stat.ME", "", "Variance of estimators", ""]]
+
+    def run_arxiv(self, out, meta, *options, loaded=None):
+        """download_arxiv.main on a prepared folder: no network, LaTeX conversion replaced by a stand-in
+        that builds the Markdown from the row's title and abstract. Returns the console text."""
+        real_read = ax.read_list
+
+        def read_list(*args, **kwargs):
+            rows = real_read(*args, **kwargs)
+            if loaded is not None:
+                loaded.extend(rows)
+            return rows
+
+        def latex(blob, title, abstract, pandoc):
+            return ax.clean_markdown("Body text. " * 400, title, abstract), "latex"
+
+        with unittest.mock.patch.multiple(
+                ax, harvest=unittest.mock.Mock(return_value=5), pandoc_path=lambda: "pandoc",
+                check_pdf_route=lambda: None, http_get=unittest.mock.Mock(return_value=b"\\documentclass{article}"),
+                latex_markdown=latex, read_list=read_list), redirect_stdout(io.StringIO()) as buf:
+            ax.main(["--out", out, "--meta", meta, "--sets", "q-bio", "--wait", "0", *options])
+        return buf.getvalue()
+
+    def test_f125_title_and_abstract_are_loaded_for_the_papers_to_fetch_only(self):
+        """F125: main keeps the title and abstract of the papers it is about to fetch, not of the whole
+        list; their Markdown is unchanged."""
+        out, meta = self.arxiv_folders(self.LISTED)
+
+        def one_done():
+            with open(os.path.join(meta, "report.tsv"), "w", encoding="utf-8", newline="\n") as f:
+                f.write("\t".join(ax.REPORT_COLUMNS) + "\n")
+                f.write("\t".join(["2101.00001", "ok", "9", "latex", "biology", "2021", "q-bio.PE", "", "x.md"]) + "\n")
+
+        one_done()
+        loaded = []
+        self.run_arxiv(out, meta, loaded=loaded)
+        body = ("Body text. " * 400).strip()
+        expected = {"2101.00002__Allele selection.md": f"# Allele: selection?\n\n## Abstract\n\nAn abstract, two.\n\n{body}\n",
+                    "2101.00003__Variance of estimators.md": f"# Variance of estimators\n\n{body}\n"}
+        self.assertEqual(sorted(os.listdir(out)), sorted(expected))
+        for name, text in expected.items():
+            with open(os.path.join(out, name), encoding="utf-8", newline="") as f:
+                self.assertEqual(f.read(), text, name)
+        rows = {row["id"]: row for row in loaded}
+        self.assertEqual(sorted(rows), [r[0] for r in self.LISTED])
+        self.assertEqual(rows["2101.00001"], {"id": "2101.00001", "group": "biology", "score": "1.500", "year": "2021",
+                                              "categories": "q-bio.PE", "licence": ""})
+        self.assertEqual((rows["2101.00002"]["title"], rows["2101.00002"]["abstract"]),
+                         ("Allele: selection?", "An abstract, two."))
+        self.assertEqual((rows["2101.00003"]["title"], rows["2101.00003"]["abstract"]), ("Variance of estimators", ""))
+        # the default read_list still gives whole rows (download_rxiv reads its list with it)
+        whole = ax.read_list(os.path.join(meta, "list.tsv"))
+        self.assertEqual([[row[c] for c in ax.LIST_COLUMNS] for row in whole], self.LISTED)
+        # --max-papers counts the papers that are done, and only the rest get their text
+        shutil.rmtree(out)
+        one_done()
+        loaded = []
+        self.run_arxiv(out, meta, "--max-papers", "2", loaded=loaded)
+        self.assertEqual(os.listdir(out), ["2101.00002__Allele selection.md"])
+        self.assertEqual(["abstract" in row for row in loaded], [False, True, False])
+
     # ---------------- download_pmc.py ----------------
-    QUERY ="OPEN_ACCESS:y AND TEST:y"
+    QUERY = "OPEN_ACCESS:y AND TEST:y"
 
     @staticmethod
     def epmc_page(ids, cursor, total=0, cited=None):

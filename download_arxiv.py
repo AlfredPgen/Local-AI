@@ -464,13 +464,37 @@ def build_list(cache_dir, sets, keyword_path, min_hits, min_distinct, path):
         by_group[r[3]] = by_group.get(r[3], 0) + 1
     print(f"Paper list: {len(rows):,} of {counts['records']:,} papers match the keywords {by_group} "
           f"(no matching category {counts['no_group']:,}, too few keyword matches {counts['keywords']:,}); {path}")
-    return [dict(zip(LIST_COLUMNS, [r[2], r[3], f"{-r[1]:.3f}", r[4], r[5], r[6], r[7], r[8]])) for r in rows]
+    # without title and abstract, like read_list(text=False): add_list_text reads them back for the papers to fetch
+    return [dict(zip(LIST_COLUMNS, [r[2], r[3], f"{-r[1]:.3f}", r[4], r[5], r[6]])) for r in rows]
 
 
-def read_list(path):
+_TEXT_COLUMNS = ("title", "abstract")  # most of list.tsv: about 1.3 GB of memory for the whole arXiv list
+
+
+def read_list(path, text=True):
+    """The rows of list.tsv as dicts. text=False leaves out the title and the
+    abstract; add_list_text adds them to the rows that need them."""
     with open(path, encoding="utf-8") as handle:
         head = handle.readline().rstrip("\n").split("\t")
-        return [dict(zip(head, line.rstrip("\n").split("\t"))) for line in handle if line.strip()]
+        if text:
+            return [dict(zip(head, line.rstrip("\n").split("\t"))) for line in handle if line.strip()]
+        return [{name: value for name, value in zip(head, line.rstrip("\n").split("\t")) if name not in _TEXT_COLUMNS}
+                for line in handle if line.strip()]
+
+
+def add_list_text(path, rows):
+    """A second pass over list.tsv: the title and abstract of `rows` (dicts
+    without them: the papers about to be fetched) are filled in, in place."""
+    wanted = {row["id"]: row for row in rows}
+    if not wanted:
+        return
+    with open(path, encoding="utf-8") as handle:
+        head = handle.readline().rstrip("\n").split("\t")
+        for line in handle:
+            row = wanted.get(line.partition("\t")[0])  # the id is the first column
+            if row is not None:
+                row.update((name, value) for name, value in zip(head, line.rstrip("\n").split("\t"))
+                           if name in _TEXT_COLUMNS)
 
 
 # ---------------------------------------------------------------------------
@@ -933,19 +957,10 @@ def main(argv=None):
     if fresh or args.rebuild_list or not os.path.isfile(list_path):
         rows = build_list(cache, args.sets, args.keywords, args.min_hits, args.min_distinct, list_path)
     else:
-        rows = read_list(list_path)
+        rows = read_list(list_path, text=False)
         print(f"Paper list: {len(rows):,} papers from {list_path} (--rebuild-list selects again)")
     if args.list_only:
         return
-    missing = {r["id"] for r in rows if "abstract" not in r}  # a list.tsv written before it held the abstracts
-    if missing:
-        abstracts = {}
-        for rec in read_cache(cache, args.sets):  # the abstract goes into each paper's Markdown
-            if rec["id"] in missing:  # only the selected papers: the whole cache would take GBs
-                abstracts[rec["id"]] = rec["abstract"]
-        for row in rows:
-            row.setdefault("abstract", abstracts.get(row["id"], ""))
-        del abstracts
     report_path = os.path.join(args.meta, "report.tsv")
     pdf_limits = {}
     done = read_report(report_path, pdf_limits)
@@ -965,6 +980,16 @@ def main(argv=None):
               "pandoc cannot read) are left for a later run.", flush=True)
     if args.max_papers:
         todo = todo[:max(0, args.max_papers - len([1 for r in rows if done.get(r["id"]) == "ok"]))]
+    add_list_text(list_path, todo)  # the title and abstract go into each paper's Markdown
+    missing = {r["id"] for r in todo if "abstract" not in r}  # a list.tsv written before it held the abstracts
+    if missing:
+        abstracts = {}
+        for rec in read_cache(cache, args.sets):
+            if rec["id"] in missing:  # only the papers to fetch: the whole cache would take GBs
+                abstracts[rec["id"]] = rec["abstract"]
+        for row in todo:
+            row.setdefault("abstract", abstracts.get(row["id"], ""))
+        del abstracts
     per_paper = max(MIN_REQUEST_GAP, sum(args.wait) / 2)
     print(f"{len(rows) - len(todo):,} papers done or not wanted; fetching {len(todo):,} into {args.out} "
           f"(a random {args.wait[0]:g}-{args.wait[1]:g} s pause before each paper: about {3600 / per_paper:,.0f} "
