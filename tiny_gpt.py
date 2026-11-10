@@ -1440,8 +1440,9 @@ def resolve_ema(settings, requested, resumed):
     evaluation), so the average is an opt-in for long runs, where its stable-phase
     gain is still to be measured. A resumed run keeps what its checkpoint says, and
     a checkpoint from before the key existed says off: a run never gains an average
-    silently. --ema on a resume overrides (a decay starts the average from the
-    current weights, off removes it)."""
+    silently. --ema on a resume overrides: a decay replaces the run's decay and its
+    saved average continues (a run without one starts it from the current weights);
+    off removes it."""
     if resumed:
         settings.setdefault("ema", 0.0)
         if requested is not None:
@@ -3573,8 +3574,9 @@ def parse_args(argv=None):
                    help="exponential moving average of the weights (fp32, on the CPU, debiased so it never holds the "
                         "initial weights), scored beside the raw weights at each evaluation and saved as "
                         "<name>_best.pt when it is the better of the two (default off; on = %g per step; a resumed "
-                        "run keeps its setting unless this is given: a decay starts an average from the current "
-                        "weights, off removes it)" % EMA_DECAY_DEFAULT)
+                        "run keeps its setting unless this is given: a decay replaces the run's decay and its saved "
+                        "average continues, a run without one starts it from the current weights; off removes it)"
+                        % EMA_DECAY_DEFAULT)
     g.add_argument("--doc-mask", choices=("on", "off"),
                    help="confine attention to each document of a training window (documents start with BOS): default "
                         "off; it is the training objective, so fixed for a run and ignored on --resume")
