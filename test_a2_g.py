@@ -379,6 +379,23 @@ class Audit2FinetuneTools(unittest.TestCase):
         self.assertIsNone(message)
         self.assertEqual([c[0] for c in calls], ["sft", "dpo"])
 
+    def test_posttrain_run_passes_the_seed_on(self):
+        """F183 (with F182): posttrain run --seed reaches both fine-tunes (the default 0 is finetune's own), and
+        eval, which has no use for a seed, no longer accepts one."""
+        import posttrain
+        calls, _, message = self.posttrain_run("seed_run", ["--device", "cpu", "--seed", "5"])
+        self.assertIsNone(message)
+        self.assertEqual([c[0] for c in calls], ["sft", "dpo"])
+        for argv in calls:
+            self.assertEqual(argv[argv.index("--seed") + 1], "5", argv)
+        calls, _, _ = self.posttrain_run("seed_default", ["--device", "cpu"])
+        for argv in calls:
+            self.assertEqual(argv[argv.index("--seed") + 1], "0", argv)
+        self.assertEqual(posttrain.parse_args(["data", "--seed", "3"]).seed, 3)
+        with redirect_stderr(io.StringIO()) as err, self.assertRaises(SystemExit):
+            posttrain.parse_args(["eval", "x.pt", "--seed", "3"])
+        self.assertIn("--seed", err.getvalue())
+
     def test_posttrain_reuse_sft(self):
         """F163: posttrain run --reuse-sft skips SFT when <name>_sft.pt is an SFT made from this --base, and DPO
         starts from it; with another --base it exits; without the flag SFT runs as before."""

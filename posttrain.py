@@ -382,7 +382,7 @@ def run(args):
     if args.device != "cpu" and finetune.gpu_busy(args.out_dir):
         raise SystemExit(tiny_gpt.GPU_BUSY_MESSAGE)
     # --force: the GPU was checked above; this process's own cached memory from SFT must not count as busy for DPO
-    common = ["--out-dir", args.out_dir, "--device", args.device, "--force"] \
+    common = ["--out-dir", args.out_dir, "--device", args.device, "--force", "--seed", str(args.seed)] \
         + (["--overwrite"] if args.overwrite else []) + (["--trust-checkpoint"] if args.trust_checkpoint else [])
     # finetune returns the file it wrote: a locked target is saved under another name, and DPO and the
     # evaluation must use that new file, not the old one
@@ -423,6 +423,7 @@ def parse_args(argv=None):
     e.add_argument("--force", action="store_true", help="use the GPU even if another job seems to be using it")
     for s in (d, r, e):
         s.add_argument("--data-dir", default=DEFAULT_DATA)
+    for s in (d, r):
         s.add_argument("--seed", type=int, default=0)
     for s in (r, e):
         s.add_argument("--probes", default=os.path.join(HERE, "probes_biology.tsv"))
