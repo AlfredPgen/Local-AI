@@ -744,6 +744,19 @@ class Audit2Viewer(unittest.TestCase):
             view_pt.main()
         self.assertIn(table, buf.getvalue())
 
+    # ---------------- F406 ----------------
+    def test_tensor_heading_names_an_untied_output_head_as_untied(self):
+        torch.manual_seed(0)
+        cfg = tiny_gpt.ModelConfig(vocab_size=50, ctx=16, d_model=32, n_layers=1, n_heads=4, n_kv_heads=2,
+                                   tie_embeddings=False)
+        untied = toy_file(self.tmp, "untied.pt", history_rows(3), model_config=dataclasses.asdict(cfg),
+                          model=tiny_gpt.TinyGPT(cfg).state_dict())
+        text, _ = run_main(untied, "--tensor", "lm_head.weight")
+        self.assertNotIn("output head (tied)", text)
+        self.assertIn("\nlm_head.weight (output head):\n", text)
+        text, _ = run_main(toy_file(self.tmp, "tied.pt", history_rows(3)), "--tensor", "lm_head.weight")
+        self.assertIn("\nlm_head.weight (output head (tied)):\n", text)
+
 
 if __name__ == "__main__":
     unittest.main()

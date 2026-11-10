@@ -2302,7 +2302,8 @@ def main():
         if args.tensor not in ck.weights:
             sys.exit(f"\nNo tensor named {args.tensor!r}. Use one of the names listed above.")
         torch.set_printoptions(precision=4, edgeitems=4, linewidth=120, sci_mode=False)
-        print(f"\n{args.tensor} ({pretty_name(args.tensor)}):\n{ck.weights[args.tensor]}")
+        label = pretty_name(args.tensor, tied=ck.cfg is None or ck.cfg.tie_embeddings)
+        print(f"\n{args.tensor} ({label}):\n{ck.weights[args.tensor]}")
     if args.similar:
         pieces = ck.pieces()
         if ck.embedding is None or pieces is None:
