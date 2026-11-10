@@ -1964,7 +1964,9 @@ def parse_args(argv=None):
     g.add_argument("--scan-only", action="store_true", help="stop after filtering/dedup; write the report only")
     g.add_argument("--keep-work", action="store_true", help="keep the _work spool files")
     g.add_argument("--work-dir", help="folder for the text spools (default: <out>\\_work); a build at 3-5x the "
-                                      "current corpus needs 40-70 GB there, so point it at the bigger drive")
+                                      "current corpus needs 40-70 GB there, so point it at the bigger drive. Each "
+                                      "dataset gets its own sub-folder <name>_<hash>_spool there, so builds can "
+                                      "share the folder")
     g.add_argument("--resume", action="store_true",
                    help="continue a build that failed after pass 2 (its <out>\\_work\\state.pkl and spool exist): "
                         "the split (if needed), the tokenizer and the tokenization are redone, not the reading")
@@ -2173,8 +2175,17 @@ def _prepare(args, state=None):
     os.makedirs(work, exist_ok=True)
     state["work"] = work
     # the spools (the cleaned text, compressed) may live on another drive: --work-dir; the small work files
-    # (state, signatures, tokenizer corpus) stay in <out>/_work, where a later run finds the resumable state
-    spool_dir = os.path.abspath(args.work_dir) if args.work_dir else work
+    # (state, signatures, tokenizer corpus) stay in <out>/_work, where a later run finds the resumable state.
+    # Each dataset has its own sub-folder of --work-dir (name + a hash of the --out path), so builds that share
+    # the folder never overwrite or delete each other's spools; a resumed build uses the folder its state names
+    st = _load_state(state_path) if resumed else None
+    if resumed:
+        spool_dir = os.path.dirname(st["spool2"])
+    elif args.work_dir:
+        tag = hashlib.sha256(os.path.normcase(out).encode("utf-8")).hexdigest()[:8]
+        spool_dir = os.path.join(os.path.abspath(args.work_dir), f"{os.path.basename(out)}_{tag}_spool")
+    else:
+        spool_dir = work
     os.makedirs(spool_dir, exist_ok=True)
     state["spool_dir"] = spool_dir
     print(f"{'Resuming' if resumed else 'Preparing'} dataset in {out}")
@@ -2183,9 +2194,7 @@ def _prepare(args, state=None):
               f"min hits {args.keyword_min_hits}, min distinct {args.keyword_min_distinct}, "
               f"sources: {args.keyword_sources}")
 
-    st = None
     if resumed:
-        st = _load_state(state_path)
         spool2 = st["spool2"]
         if not os.path.isfile(spool2):
             raise SystemExit(f"--resume: the spool {spool2} is missing; the build cannot continue (start it again "
@@ -3607,8 +3616,10 @@ def _move_leaks_to_train(leakage, docs, roots, clusters, split_of, dropped, sett
 
 
 def _cleanup(work, spool_dir, keep):
-    """Remove the work folder and the spool files (a --work-dir folder itself is
-    the user's: only the spools in it are removed, and it is left if not empty)."""
+    """Remove the work folder and the spool files. With --work-dir the spools
+    are in this dataset's own sub-folder of it (<name>_<hash>_spool): only the
+    spool files there are removed, then the sub-folder if it is empty. The
+    --work-dir folder itself and everything else in it are the user's and stay."""
     if keep:
         print(f"Work files kept in {work}" + (f" and {spool_dir}" if spool_dir != work else ""))
         return

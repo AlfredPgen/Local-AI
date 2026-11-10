@@ -94,6 +94,66 @@ class Audit2DataPrep(unittest.TestCase):
         self.assertEqual(data_prep.read_manifest(out)["fingerprint"], data_prep.read_manifest(plain)["fingerprint"])
         self.assertEqual(read_file(os.path.join(out, "leakage.tsv")), read_file(os.path.join(plain, "leakage.tsv")))
 
+    # ---------------- F062: builds that share one --work-dir keep their spools apart ----------------
+    def stop_after_pass2(self, argv):
+        """prepare(argv) with the tokenizer training failing once: the build stops resumable; returns its output."""
+        real = data_prep._train_tokenizer
+
+        def fail_once(*a, **k):
+            data_prep._train_tokenizer = real
+            raise OSError("disk full (simulated)")
+
+        data_prep._train_tokenizer = fail_once
+        try:
+            with redirect_stdout(io.StringIO()) as buf, self.assertRaises(OSError):
+                data_prep.prepare(argv)
+        finally:
+            data_prep._train_tokenizer = real
+        return buf.getvalue()
+
+    def spools(self, folder):
+        return sorted(os.path.relpath(os.path.join(root, name), folder) for root, _, names in os.walk(folder)
+                      for name in names if name.startswith("spool") and name != "spool_x.txt")
+
+    def test_a_second_build_in_the_same_work_dir_leaves_a_stopped_builds_spool(self):
+        shared = self.folder("f062_work")
+        mine = os.path.join(shared, "spool_x.txt")  # a file of the user in the folder: never removed
+        with open(mine, "w") as f:
+            f.write("keep me")
+        h1, h2 = os.path.join(self.tmp, "f062_h1"), os.path.join(self.tmp, "f062_h2")
+        self.stop_after_pass2(["--out", h1, "--work-dir", shared] + self.base_args())
+        kept = self.spools(shared)
+        self.assertEqual(len(kept), 1, kept)
+        self.assertTrue(kept[0].startswith("f062_h1_") and os.path.dirname(kept[0]).endswith("_spool"), kept)
+        with redirect_stdout(io.StringIO()):
+            data_prep.prepare(["--out", h2, "--work-dir", shared, "--scan-only"] + self.base_args())
+        self.assertEqual(self.spools(shared), kept, "the other build removed only its own spool")
+        with redirect_stdout(io.StringIO()):
+            data_prep.prepare(["--out", h1, "--resume", "--threads", "2", "--workers", "1"])
+        self.assertEqual(data_prep.read_manifest(h1)["fingerprint"],
+                         data_prep.read_manifest(self.plain())["fingerprint"])
+        self.assertEqual(self.spools(shared), [])
+        self.assertEqual(os.listdir(shared), ["spool_x.txt"], "the sub-folders are gone, the user's file is not")
+
+    def test_resume_finds_a_spool_in_the_work_dir_itself(self):
+        """A build stopped before the sub-folders existed has its spool directly in --work-dir: the path
+        saved in state.pkl is used, never a recomputed one."""
+        shared = self.folder("f062_old")
+        out = os.path.join(self.tmp, "f062_h3")
+        self.stop_after_pass2(["--out", out, "--work-dir", shared] + self.base_args())
+        state_path = os.path.join(out, "_work", data_prep.STATE_NAME)
+        st = data_prep._load_state(state_path)
+        old = os.path.join(shared, os.path.basename(st["spool2"]))
+        os.replace(st["spool2"], old)
+        os.rmdir(os.path.dirname(st["spool2"]))
+        st["spool2"] = old
+        data_prep._save_state(state_path, st)
+        with redirect_stdout(io.StringIO()):
+            data_prep.prepare(["--out", out, "--resume", "--threads", "2", "--workers", "1"])
+        self.assertEqual(data_prep.read_manifest(out)["fingerprint"],
+                         data_prep.read_manifest(self.plain())["fingerprint"])
+        self.assertFalse(os.path.exists(old))
+
     def test_an_error_in_the_leakage_audit_still_only_skips_it(self):
         out = os.path.join(self.tmp, "f057err")
         real = data_prep._audit_chunk
