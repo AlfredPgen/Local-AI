@@ -894,6 +894,39 @@ def _lower_priority():
         pass
 
 
+def todo_rows(rows, done, pdf_limits, have, pdf_seconds):
+    """The list rows still to fetch: no Markdown file yet, no final status, and
+    a PDF that ran out of time only when the limit is now larger."""
+    def wanted(row):
+        if row["id"].replace("/", "_") in have:
+            return False
+        if row["id"] in pdf_limits:
+            return pdf_seconds > pdf_limits[row["id"]]
+        return done.get(row["id"]) not in FINAL
+    return [r for r in rows if wanted(r)]
+
+
+def parse_wait(p, text, example):
+    """The value of --wait as (MIN, MAX) seconds; a wrong one ends the run
+    through the parser p, with `example` as the example in the message."""
+    try:
+        low, _, high = text.partition("-")
+        wait = (float(low), float(high or low))
+    except ValueError:
+        p.error(f"--wait must be MIN-MAX seconds, e.g. {example}")
+    if not 0 <= wait[0] <= wait[1] <= 3600:
+        p.error("--wait must be MIN-MAX with 0 <= MIN <= MAX <= 3600")
+    return wait
+
+
+def meta_dir(out, meta):
+    """The folder for the metadata cache, list.tsv and report.tsv: --meta, or
+    _<out name>_meta next to the output folder `out`."""
+    if meta:
+        meta = os.path.expanduser(os.path.expandvars(meta))
+    return os.path.abspath(meta or os.path.join(os.path.dirname(out), f"_{os.path.basename(out)}_meta"))
+
+
 def parse_args(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--out", required=True, help="folder for the Markdown files (e.g. ai_training_data\\arxiv)")
@@ -921,19 +954,10 @@ def parse_args(argv=None):
         p.error("--max-papers must be >= 0")
     if args.pdf_seconds <= 0:
         p.error("--pdf-seconds must be > 0")
-    try:
-        low, _, high = args.wait.partition("-")
-        args.wait = (float(low), float(high or low))
-    except ValueError:
-        p.error("--wait must be MIN-MAX seconds, e.g. 5-60")
-    if not 0 <= args.wait[0] <= args.wait[1] <= 3600:
-        p.error("--wait must be MIN-MAX with 0 <= MIN <= MAX <= 3600")
+    args.wait = parse_wait(p, args.wait, "5-60")
     # %USERPROFILE% / $HOME / ~ are expanded here too: PowerShell leaves %VAR% as it is
     args.out = os.path.abspath(os.path.expanduser(os.path.expandvars(args.out)))
-    if args.meta:
-        args.meta = os.path.expanduser(os.path.expandvars(args.meta))
-    args.meta = os.path.abspath(args.meta or os.path.join(os.path.dirname(args.out),
-                                                          f"_{os.path.basename(args.out)}_meta"))
+    args.meta = meta_dir(args.out, args.meta)
     return args
 
 
@@ -975,15 +999,7 @@ def main(argv=None):
     pdf_limits = {}
     done = read_report(report_path, pdf_limits)
     have = {name.split("__", 1)[0] for name in os.listdir(args.out) if name.endswith(".md")}
-
-    def wanted(row):
-        if row["id"].replace("/", "_") in have:
-            return False
-        if row["id"] in pdf_limits:  # its PDF ran out of time: tried again only with a larger --pdf-seconds
-            return args.pdf_seconds > pdf_limits[row["id"]]
-        return done.get(row["id"]) not in FINAL
-
-    todo = [r for r in rows if wanted(r)]
+    todo = todo_rows(rows, done, pdf_limits, have, args.pdf_seconds)
     pdf_problem = check_pdf_route()
     if pdf_problem:
         print(f"Warning: the PDF converter cannot run: {pdf_problem}. Papers that need it (PDF-only, or LaTeX "

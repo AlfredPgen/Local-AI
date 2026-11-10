@@ -458,16 +458,7 @@ def fetch_paper(row, server, out_dir, min_body, pdf_seconds=ax.PDF_SECONDS, pdf_
     return {**base, "status": "ok", "chars": len(md), "method": method, "file": name}
 
 
-def todo_rows(rows, done, pdf_limits, have, pdf_seconds):
-    """The list rows still to fetch: no Markdown file yet, no final status, and
-    a PDF that ran out of time only when the limit is now larger."""
-    def wanted(row):
-        if row["id"].replace("/", "_") in have:
-            return False
-        if row["id"] in pdf_limits:
-            return pdf_seconds > pdf_limits[row["id"]]
-        return done.get(row["id"]) not in FINAL
-    return [r for r in rows if wanted(r)]
+todo_rows = ax.todo_rows  # the list rows still to fetch: the same rule as for arXiv
 
 
 # ---------------------------------------------------------------------------
@@ -504,20 +495,11 @@ def parse_args(argv=None):
         p.error("--pdf-seconds must be > 0")
     if not 0.5 <= args.min_gap <= 600:
         p.error("--min-gap must be 0.5..600 seconds")
-    try:
-        low, _, high = args.wait.partition("-")
-        args.wait = (float(low), float(high or low))
-    except ValueError:
-        p.error("--wait must be MIN-MAX seconds, e.g. 5-15")
-    if not 0 <= args.wait[0] <= args.wait[1] <= 3600:
-        p.error("--wait must be MIN-MAX with 0 <= MIN <= MAX <= 3600")
+    args.wait = ax.parse_wait(p, args.wait, "5-15")
     # %USERPROFILE% / $HOME / ~ are expanded here too: PowerShell leaves %VAR% as it is
     out = args.out or os.path.join("~", "ai_training_data", args.server)
     args.out = os.path.abspath(os.path.expanduser(os.path.expandvars(out)))
-    if args.meta:
-        args.meta = os.path.expanduser(os.path.expandvars(args.meta))
-    args.meta = os.path.abspath(args.meta or os.path.join(os.path.dirname(args.out),
-                                                          f"_{os.path.basename(args.out)}_meta"))
+    args.meta = ax.meta_dir(args.out, args.meta)
     return args
 
 
