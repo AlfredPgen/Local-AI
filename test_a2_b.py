@@ -15,6 +15,7 @@ import re
 import shutil
 import sys
 import tempfile
+import threading
 import time
 import unittest
 import unittest.mock
@@ -384,6 +385,36 @@ class Audit2DataPrep(unittest.TestCase):
             self.assertEqual(json.load(f)["pid"], os.getpid())
         data_prep._release_lock(lock)
         self.assertFalse(os.path.exists(lock))
+
+    # ---------------- F258: the token files are hashed in threads, with the same check ----------------
+    def test_token_files_are_verified_in_threads_and_the_first_bad_file_is_named(self):
+        ds = os.path.join(self.tmp, "f258")
+        shutil.copytree(self.plain(), ds)
+        real, threads = data_prep.sha256_file, []
+
+        def recorded(path, *a, **k):
+            threads.append(threading.get_ident())
+            return real(path, *a, **k)
+
+        with unittest.mock.patch.object(data_prep, "sha256_file", recorded):
+            manifest, arrays = data_prep.open_token_files(ds, verify=True)
+        files = [info[split]["file"] for info in manifest["sources"].values() for split in ("train", "val")
+                 if info.get(split)]
+        self.assertEqual(files[:3], ["train.md.bin", "val.md.bin", "train.notes.bin"])
+        self.assertEqual(len(threads), len(files), "every token file is hashed once")
+        self.assertNotIn(threading.main_thread().ident, threads, "hashed in worker threads, not one after another")
+        self.assertEqual(sum(len(a) for a in arrays.values()), len(files))
+        del arrays  # the memory maps: Windows does not let a mapped file be rewritten
+        for name in ("val.md.bin", "train.notes.bin"):  # one changed byte in two files: the first one is named
+            with open(os.path.join(ds, name), "r+b") as f:
+                byte = f.read(1)
+                f.seek(0)
+                f.write(bytes([byte[0] ^ 1]))
+        with self.assertRaises(SystemExit) as stop:
+            data_prep.open_token_files(ds, verify=True)
+        self.assertIn("val.md.bin failed its SHA-256 check", str(stop.exception))
+        with unittest.mock.patch.object(data_prep, "sha256_file", side_effect=AssertionError("hashed")):
+            data_prep.open_token_files(ds, verify=False)  # sizes only: nothing is hashed
 
     def test_an_error_in_the_leakage_audit_still_only_skips_it(self):
         out = os.path.join(self.tmp, "f057err")

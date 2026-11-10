@@ -309,12 +309,15 @@ def open_token_files(dataset_dir, verify=True):
     """Memory-map every token file listed in the manifest.
 
     Returns (manifest, {"train": {source: memmap}, "val": {source: memmap}}).
-    Sizes are always checked; SHA-256 checksums when verify=True.
+    Sizes are always checked; SHA-256 checksums when verify=True, in a few
+    threads (hashlib releases the GIL), all before returning: a mismatch names
+    the first failing file in manifest order.
     """
     manifest = read_manifest(dataset_dir)
     dtype = np.dtype(manifest["dtype"])
     root = os.path.realpath(dataset_dir)
     arrays = {"train": {}, "val": {}}
+    checks = []  # (path, expected sha256) in manifest order
     for source, info in manifest["sources"].items():
         for split in ("train", "val"):
             entry = info.get(split)
@@ -327,9 +330,16 @@ def open_token_files(dataset_dir, verify=True):
             if not os.path.isfile(path) or os.path.getsize(path) != expected:
                 raise SystemExit(f"{path} is missing or has the wrong size "
                                  f"(expected {expected:,} bytes). Rebuild the dataset.")
-            if verify and entry.get("sha256") and sha256_file(path) != entry["sha256"]:
-                raise SystemExit(f"{path} failed its SHA-256 check. Rebuild the dataset.")
+            if verify and entry.get("sha256"):
+                checks.append((path, entry["sha256"]))
             arrays[split][source] = np.memmap(path, dtype=dtype, mode="r", shape=(int(entry["tokens"]),))
+    if checks:
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=min(4, os.cpu_count() or 1)) as pool:
+            digests = list(pool.map(sha256_file, [path for path, _ in checks]))
+        for (path, expected), digest in zip(checks, digests):
+            if digest != expected:
+                raise SystemExit(f"{path} failed its SHA-256 check. Rebuild the dataset.")
     return manifest, arrays
 
 
