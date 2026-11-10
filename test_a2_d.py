@@ -179,9 +179,10 @@ class Audit2Benchmark(unittest.TestCase):
         # two models scored at different steps: two lines per benchmark, the model in the label, legend outside
         ax = self.plot_figures("f004_two", small + scored("m/big_best.pt", 5000000, (1500, 2500), nine[:2])
                                )[0]["progress.png"].axes[0]
+        big, little = [1500.0, 2500.0], [1000.0, 2000.0]
         self.assertEqual([(line.get_label(), line.get_linestyle(), list(line.get_xdata())) for line in ax.lines[:4]],
-                         [("bench0: big (5.0M)", "-", [1500.0, 2500.0]), ("bench0: small (1.0M)", "--", [1000.0, 2000.0]),
-                          ("bench1: big (5.0M)", "-", [1500.0, 2500.0]), ("bench1: small (1.0M)", "--", [1000.0, 2000.0])])
+                         [("bench0: big (5.0M)", "-", big), ("bench0: small (1.0M)", "--", little),
+                          ("bench1: big (5.0M)", "-", big), ("bench1: small (1.0M)", "--", little)])
         self.assertEqual(len(ax.lines), 2 * 2 + 7)
         self.assertEqual(ax.lines[0].get_color(), ax.lines[1].get_color())
         self.assertGreater(ax.get_legend().get_bbox_to_anchor().x0, ax.bbox.x1)
@@ -205,8 +206,8 @@ class Audit2Benchmark(unittest.TestCase):
             minloglevel=2)
         long_text = paragraphs(5, 3)
         prompts = ["", "a", "Gene", "Question: which gene?\nAnswer:", "ends in a space ", "ends in a newline\n",
-                   "two newlines\n\n", "  leading spaces", "naïve café: β-globin α1 → 5′ end", "日本語 \U0001f9ec emoji",
-                   long_text, long_text + " ", long_text + "\nAnswer:", long_text[:300] + " µ"]
+                   "two newlines\n\n", "  leading spaces", "naïve café: β-globin α1 → 5′ end",
+                   "日本語 \U0001f9ec emoji", long_text, long_text + " ", long_text + "\nAnswer:", long_text[:300] + " µ"]
         rng, steps = random.Random(0), 0
         for mode in ("lines", "plain"):
             tok = data_prep.Tokenizer(writer.getvalue(), mode)
@@ -382,6 +383,80 @@ class Audit2Benchmark(unittest.TestCase):
         self.assertEqual(b._list("['it\\'s' \"say \\\"x\\\"\"\n 'c']"), ["it\\'s", 'say \\"x\\"', "c"])
         self.assertEqual(b._list("[1, 2]"), [1, 2])
         self.assertEqual((b._list(None), b._list("plain"), b._list(("x", "y"))), ([], ["plain"], ["x", "y"]))
+
+    def test_run_scores_and_records(self):
+        """F206 (guard): `benchmark.py run` on a tiny checkpoint scores a multiple-choice, a numeric and a coding
+        set (the tests go to a stand-in sandbox: nothing is executed), appends the summary rows to the results
+        CSV, writes one CSV of items per set and one experiments.csv row, all inside the temporary folder."""
+        import tiny_gpt
+        b = self.b
+
+        class Sandbox:
+            name, programs = "stand-in", []
+
+            def describe(self):
+                return "stand-in sandbox"
+
+            def run(self, program, timeout=20, **kwargs):
+                self.programs.append(program)
+                return b.SandboxResult(True, "passed", "ok")
+
+        def repo_tables():
+            paths = (b.RESULTS_CSV, tiny_gpt.experiments_path(HERE))
+            return [(os.path.getsize(p), os.stat(p).st_mtime_ns) if os.path.isfile(p) else None for p in paths]
+
+        before, publish = repo_tables(), tiny_gpt.publish_experiments
+        sets = {"medqa": self.mcq_items(), "medcalc": self.medcalc_items(), "humaneval": [self.humaneval_item()]}
+        code, out, rows, item_rows, experiments = self.suite_run("f206", sets, extra=["--limit", "4"],
+                                                                 sandbox=Sandbox())
+        self.assertEqual(code, 0, out)
+        self.assertEqual((repo_tables(), tiny_gpt.publish_experiments), (before, publish), "nothing outside the folder")
+        for text in ("Sandbox for generated code: stand-in sandbox", "tiny_best.pt: step 7, ", "medqa: 4 items (mcq)",
+                     "medcalc: 2 items (numeric)", "humaneval: 1 items (code)", "Results appended to "):
+            self.assertIn(text, out)
+        # the results CSV: for each set the overall row, then its tags and (more than one) categories
+        self.assertEqual([r["benchmark"] for r in rows if r["category"] == "all"], list(sets))
+        medqa = [r for r in rows if r["benchmark"] == "medqa"]
+        self.assertEqual(medqa[0]["n"], "4")
+        self.assertEqual([r["category"] for r in medqa[1:2]], ["[biology]"])
+        self.assertEqual(sum(int(r["n"]) for r in medqa if r["category"] in ("cells", "genes")), 4)
+        self.assertEqual([r["benchmark"] for r in rows[len(medqa):]], ["medcalc", "humaneval"])
+        params = str(tiny_gpt.count_params(tiny_gpt.ModelConfig(vocab_size=50, ctx=64, d_model=32, n_layers=2,
+                                                                 n_heads=4, n_kv_heads=2))[0])
+        for r in rows:
+            self.assertEqual(list(r), b.RESULT_COLUMNS)
+            self.assertEqual((os.path.basename(r["checkpoint"]), r["step"], r["params"]), ("tiny_best.pt", "7", params))
+            self.assertRegex(r["time"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d")
+            self.assertTrue(0.0 <= float(r["low"]) <= float(r["accuracy"]) <= float(r["high"]) <= 1.0, r)
+        by_set = {r["benchmark"]: r for r in rows if r["category"] == "all"}
+        self.assertEqual(by_set["medqa"]["notes"], "4 of 6 items (hash sample); option log-likelihood per character")
+        self.assertEqual((by_set["medqa"]["chance"], by_set["medqa"]["floor"] != ""), ("0.3333", True))
+        self.assertTrue(by_set["medcalc"]["notes"].startswith("2 of 2 items (hash sample); greedy, first number, "))
+        self.assertEqual((by_set["medcalc"]["n"], by_set["medcalc"]["floor"]), ("2", ""))
+        self.assertEqual(by_set["humaneval"]["notes"],
+                         "1 of 1 items (hash sample); greedy pass@1, tests in stand-in sandbox")
+        self.assertEqual((by_set["humaneval"]["n"], float(by_set["humaneval"]["accuracy"])), ("1", 1.0))
+        # the per-item CSVs, and the one program that went to the sandbox
+        self.assertEqual(sorted(item_rows), ["humaneval.csv", "medcalc.csv", "medqa.csv"])
+        self.assertEqual([len(item_rows[f"{name}.csv"]) for name in sets], [4, 2, 1])
+        self.assertTrue({"id", "category", "correct", "chance", "floor_correct", "answer"}
+                        <= set(item_rows["medqa.csv"][0]))
+        self.assertTrue({"id", "correct", "parsed", "generated"} <= set(item_rows["medcalc.csv"][0]))
+        self.assertEqual((item_rows["humaneval.csv"][0]["status"], item_rows["humaneval.csv"][0]["correct"]),
+                         ("passed", "True"))
+        self.assertEqual(len(Sandbox.programs), 1)
+        self.assertTrue(Sandbox.programs[0].startswith("def f():\n"))
+        self.assertTrue(Sandbox.programs[0].endswith("\n\ndef check(c): pass\n\ncheck(f)\n"))
+        # the experiments row
+        self.assertEqual(len(experiments), 1)
+        row = experiments[0]
+        self.assertEqual((row["event"], row["name"], row["step"], row["params"], row["d_model"], row["layers"],
+                          row["ctx"], row["vocab"]),
+                         ("benchmark suite", "tiny_best.pt", "7", params, "32", "2", "64", "50"))
+        self.assertEqual(os.path.basename(row["checkpoint"]), "tiny_best.pt")
+        for text in ("medqa 0.", "medcalc 0.", "humaneval 1.000 (n=1, chance 0.00)", "; limit 4; items in "
+                     "benchmarks\\runs\\tiny_best_"):
+            self.assertIn(text, row["notes"])
 
     def test_generated_code_gets_no_stdin(self):
         """F020: the jailed program reads /dev/null, not the rest of the wrapper script piped to `bash -s` (which
