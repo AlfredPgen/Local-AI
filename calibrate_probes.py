@@ -195,6 +195,20 @@ def sanity_loss(model, tok, device):
     return float(torch.nn.functional.cross_entropy(logits, y))
 
 
+def to_bfloat16(model, cfg):
+    """bfloat16 weights for a GPU (half the memory, fast tensor cores). model.to(dtype) casts the RoPE tables
+    too, which tiny_gpt keeps exact in float32: they are built again."""
+    model.to(torch.bfloat16)
+    model.rope = tiny_gpt.RotaryEmbedding(cfg.head_dim, cfg.ctx, cfg.rope_base)
+
+
+def cache_file(repo, items_key, device_type, floor):
+    """Where one model's scores are kept: per device type, because a GPU scores in BF16 and the CPU in FP32
+    and a few items differ between the two."""
+    return os.path.join(CACHE_DIR, f"{repo.replace('/', '__')}_{items_key}_{device_type}"
+                                   f"{'_floor' if floor else ''}.json")
+
+
 # ---------------------------------------------------------------------------
 # another training job on this machine: a live training lock (any device) or an occupied NVIDIA GPU
 gpu_busy = tiny_gpt.gpu_busy
@@ -293,7 +307,7 @@ def main():
     items_key = hashlib.sha256((json.dumps([[p["prompt"], p["answer"], p["distractors"]] for p in probes])
                                 + scoring).encode()).hexdigest()[:16]  # new items or new scoring code: rescore
     def cache_path(repo):
-        return os.path.join(CACHE_DIR, f"{repo.replace('/', '__')}_{items_key}{'_floor' if args.floor else ''}.json")
+        return cache_file(repo, items_key, device.type, args.floor)
 
     if not all(os.path.isfile(cache_path(repo)) for repo in args.models):
         check_packages()
@@ -332,7 +346,7 @@ def main():
                 continue
             model.float()
         elif model.token_embedding.weight.dtype == torch.float32:
-            model.to(torch.bfloat16)  # GPU: half the memory, fast tensor cores
+            to_bfloat16(model, cfg)
         model.to(device)
         loss = sanity_loss(model, tok, device)
         if loss > 5.0:

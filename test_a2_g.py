@@ -146,6 +146,21 @@ class Audit2FinetuneTools(unittest.TestCase):
         with open(probes, "rb") as f:
             self.assertEqual(f.read(), before)
 
+    def test_calibration_cache_per_device_and_float32_rope_tables(self):
+        """F021: scores made in BF16 on a GPU and in FP32 on the CPU are cached apart, and the cast to bfloat16
+        leaves the RoPE tables in float32 (model.to(dtype) alone rounds them)."""
+        import calibrate_probes as cp
+        model = toy_model(4)
+        cp.to_bfloat16(model, model.cfg)
+        self.assertEqual(model.token_embedding.weight.dtype, torch.bfloat16)
+        self.assertEqual(model.rope.cos.dtype, torch.float32)
+        self.assertEqual(model.rope.sin.dtype, torch.float32)
+        self.assertEqual(model.rope.cos.shape[-2], model.cfg.ctx)
+        cpu, cuda = (cp.cache_file("org/a", "0123", kind, False) for kind in ("cpu", "cuda"))
+        self.assertNotEqual(cpu, cuda)
+        self.assertEqual(os.path.dirname(cpu), cp.CACHE_DIR)
+        self.assertNotEqual(cp.cache_file("org/a", "0123", "cpu", True), cpu)
+
 
 if __name__ == "__main__":
     unittest.main()
