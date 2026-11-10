@@ -3,6 +3,12 @@ r"""Set the fact benchmark's difficulty labels from how reference language model
     python calibrate_probes.py                    # score, write difficulty labels, write a report
     python calibrate_probes.py --report-only      # score and report; leave the probe file unchanged
     python calibrate_probes.py --device cuda      # only when no training run is using the GPU (or --device mps)
+    python calibrate_probes.py --allow-partial    # label from the models that could be scored
+
+If a reference model cannot be scored (too little free RAM on the CPU, or a failed
+sanity check), nothing is written: labels from fewer models differ from the full
+set's. Rerun when memory or the GPU is free (the models scored so far are cached),
+or pass --allow-partial.
 
 Reference models are small open models with the Llama design, the same as tinyGPT's
 (RoPE, RMSNorm, SwiGLU, grouped-query attention). They are downloaded once from Hugging
@@ -41,6 +47,7 @@ DEFAULT_MODELS = [
     "TinyLlama/TinyLlama-1.1B-intermediate-step-1431k-3T",
     "HuggingFaceTB/SmolLM2-1.7B",
 ]
+CACHE_DIR = os.path.join(os.path.expanduser("~"), ".cache", "tinygpt_calibration")  # one score file per model
 SANITY_TEXT = ("Genetic drift is the change in the frequency of an existing gene variant in a population due to "
                "random chance. It may cause gene variants to disappear completely and thereby reduce genetic "
                "variation. It can also cause initially rare alleles to become much more frequent and even fixed. "
@@ -264,6 +271,9 @@ def main():
     ap.add_argument("--batch", type=int, default=16, help="sequences scored together")
     ap.add_argument("--floor", action="store_true", help="also score shuffled questions (4x slower)")
     ap.add_argument("--report-only", action="store_true", help="do not rewrite the difficulty labels")
+    ap.add_argument("--allow-partial", action="store_true",
+                    help="write the report and the labels although a requested model could not be scored "
+                         "(default: stop and write nothing)")
     ap.add_argument("--force", action="store_true", help="use the GPU even if it looks busy")
     ap.add_argument("--no-record", action="store_true", help="do not add rows to experiments.csv")
     args = ap.parse_args()
@@ -277,14 +287,13 @@ def main():
     base = os.path.splitext(args.probes)[0]
     print(f"{len(probes)} items from {args.probes}; {len(args.models)} reference models on {device}")
 
-    per_model = {}
+    per_model, skipped = {}, []
     scoring = "".join(inspect.getsource(f) for f in (tiny_gpt.score_probes, tiny_gpt.shuffled_prompt, HFTokenizer,
                                                     tinygpt_from_llama, interleave_rope_rows)) + model_code()
     items_key = hashlib.sha256((json.dumps([[p["prompt"], p["answer"], p["distractors"]] for p in probes])
                                 + scoring).encode()).hexdigest()[:16]  # new items or new scoring code: rescore
-    cache_dir = os.path.join(os.path.expanduser("~"), ".cache", "tinygpt_calibration")
     def cache_path(repo):
-        return os.path.join(cache_dir, f"{repo.replace('/', '__')}_{items_key}{'_floor' if args.floor else ''}.json")
+        return os.path.join(CACHE_DIR, f"{repo.replace('/', '__')}_{items_key}{'_floor' if args.floor else ''}.json")
 
     if not all(os.path.isfile(cache_path(repo)) for repo in args.models):
         check_packages()
@@ -318,6 +327,7 @@ def main():
                 print(f"{repo}: SKIPPED on the CPU - needs {n_params * 4 / 2 ** 30:.1f} GiB in float32, "
                       f"{free / 2 ** 30:.1f} GiB free. Rerun later, or with --device cuda (or mps) when no training "
                       "is running.")
+                skipped.append(repo)
                 del model
                 continue
             model.float()
@@ -328,6 +338,9 @@ def main():
         if loss > 5.0:
             print(f"{repo}: SKIPPED - reads ordinary English at {loss:.2f} nats/token (expected about 1-3.5), "
                   "so the conversion is wrong for this model")
+            skipped.append(repo)
+            del model
+            tiny_gpt.free_device_memory(device)
             continue
         acc, results = tiny_gpt.score_probes(model, tok, probes, device, None, batch_size=args.batch,
                                              floor=args.floor)
@@ -336,7 +349,7 @@ def main():
         print(f"{repo}: {n_params / 1e6:,.0f}M parameters | sanity loss {loss:.2f} nats/token | accuracy {acc:.1%}"
               + (f" | floor {floor:.1%}" if floor is not None else "") + f" | {secs:.0f} s")
         per_model[repo] = {"params": n_params, "acc": acc, "floor": floor, "results": results, "loss": loss}
-        os.makedirs(cache_dir, exist_ok=True)
+        os.makedirs(CACHE_DIR, exist_ok=True)
         with open(cache + ".tmp", "w", encoding="utf-8") as handle:  # then renamed: a cut-off write leaves no cache
             json.dump(per_model[repo], handle)
         os.replace(cache + ".tmp", cache)
@@ -350,6 +363,10 @@ def main():
         tiny_gpt.free_device_memory(device)
     if len(per_model) < 2:
         raise SystemExit("Fewer than 2 reference models scored; difficulty labels not changed.")
+    if skipped and not args.allow_partial:
+        raise SystemExit(f"Not scored: {', '.join(skipped)}. Labels from only some of the reference models differ "
+                         "from the full set's, so nothing was written (no report, no labels). Rerun when RAM or "
+                         "the GPU is free (the models scored now are cached), or pass --allow-partial.")
 
     repos = list(per_model)
     strongest = max(repos, key=lambda r: per_model[r]["acc"])
@@ -381,6 +398,8 @@ def main():
         m = per_model[r]
         lines.append(f"| {r} | {m['params'] / 1e6:,.0f}M | {m['acc']:.1%} | "
                      + (f"{m['floor']:.1%}" if m["floor"] is not None else "-") + f" | {m['loss']:.2f} |")
+    if skipped:
+        lines += ["", f"Partial reference set (--allow-partial): not scored: {', '.join(skipped)}."]
     lines += ["", f"Labels: easy {counts['easy']}, medium {counts['medium']}, hard {counts['hard']}.", "",
               "## Accuracy by category", "", "| Category | " + " | ".join(r.split("/")[-1] for r in repos) + " |",
               "|---|" + "---|" * len(repos)]
