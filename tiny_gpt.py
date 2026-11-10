@@ -2357,7 +2357,7 @@ def watermark_green(key, prev_token, vocab_size, gamma=0.25, _cache={}):
         perm = torch.randperm(vocab_size, generator=torch.Generator().manual_seed(seed))
         mask = torch.zeros(vocab_size, dtype=torch.bool)
         mask[perm[: int(gamma * vocab_size)]] = True
-        if len(_cache) > 50_000:
+        if len(_cache) >= max(256, 64 * 2 ** 20 // vocab_size):  # at most about 64 MiB of masks (1 byte per token)
             _cache.clear()
         _cache[k] = mask
     return _cache[k]

@@ -282,6 +282,26 @@ class Audit2TinyGptA(unittest.TestCase):
         self.assertGreaterEqual(meter.wh["gpu"] - before, 80.0 * 10 / 3600)
         self.assertLess(meter.wh["gpu"] - before, 80.0 * 12 / 3600)
 
+    def test_watermark_cache_is_capped_by_memory(self):
+        """F371: the green-list cache holds at most max(256, 64 MiB / vocabulary size) masks (it kept up to
+        50,000 whatever their size), and a mask computed after the cache was emptied is the same mask."""
+        vocab, cache = 2 ** 18, {}
+        cap = max(256, 64 * 2 ** 20 // vocab)
+        self.assertEqual(cap, 256)
+        first = tiny_gpt.watermark_green("k", 0, vocab, _cache=cache).clone()
+        for prev in range(1, cap + 40):
+            tiny_gpt.watermark_green("k", prev, vocab, _cache=cache)
+            self.assertLessEqual(len(cache), cap)
+        self.assertNotIn(("k", 0, vocab, 0.25), cache, "the cache was emptied on the way")
+        again = tiny_gpt.watermark_green("k", 0, vocab, _cache=cache)
+        self.assertTrue(torch.equal(first, again))
+        self.assertEqual(int(again.sum()), int(0.25 * vocab))
+        self.assertTrue(torch.equal(again, tiny_gpt.watermark_green("k", 0, vocab, _cache={})))
+        small = {}
+        for prev in range(300):  # a small vocabulary keeps every mask: 64 MiB / 50 is far more than 300
+            tiny_gpt.watermark_green("k", prev, 50, _cache=small)
+        self.assertEqual(len(small), 300)
+
 
 if __name__ == "__main__":
     unittest.main()
