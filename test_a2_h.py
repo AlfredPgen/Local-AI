@@ -409,20 +409,21 @@ class Audit2PipelineTools(unittest.TestCase):
         import kw_covered
 
         def every_pair(terms, nested):
+            """The rule itself: a term with the shape of an earlier term is covered by the first of them; any
+            other term by the first term in sorted order, itself not covered, whose shape covers its shape."""
             shapes = {t: kw_covered.shape(t) for t in terms}
-            covered, seen = {}, {}
+            covered = {}
             for t in terms:
-                sa = shapes[t]
-                if not sa:
+                if shapes[t] is None:
                     continue
-                key = (tuple(sa[0]), sa[1])
-                if seen.get(key, t) != t:
-                    covered[t] = seen[key]
+                first = next(u for u in terms if shapes[u] == shapes[t])
+                if first != t:
+                    covered[t] = first
                     continue
-                seen[key] = t
                 for u in sorted(terms):
                     su = shapes[u]
-                    if u != t and u not in covered and su and su != sa and kw_covered.covers(su, sa, nested) \
+                    if u != t and u not in covered and su and su != shapes[t] \
+                            and kw_covered.covers(su, shapes[t], nested) \
                             and not any(kind == "suffix" for _, kind in su[0]):
                         covered[t] = u
                         break
