@@ -160,6 +160,20 @@ def stop_log():
     handle.close()
 
 
+def log_only(text):
+    """A line for log.txt only: detail that makes a run reproducible but that nobody reads on screen.
+    Without an open log file it is printed, so nothing is ever lost."""
+    handle = _LOG_STATE.get("handle")
+    if handle is None or handle.closed:
+        print(text)
+        return
+    try:
+        handle.write(text + "\n")
+        handle.flush()
+    except (OSError, ValueError):
+        pass
+
+
 def now_iso():
     return datetime.datetime.now().astimezone().isoformat(timespec="seconds")
 
@@ -2108,9 +2122,6 @@ class EvalSet:
         if not self.windows:
             raise SystemExit(f"No validation source has at least ctx+1 = {ctx + 1} tokens; "
                              "rebuild the dataset with a larger --val-fraction or lower --ctx.")
-
-    def describe(self):
-        return ", ".join(f"{n} {w.shape[0]} x {w.shape[1] - 1}" for n, w in self.windows.items())
 
 
 @torch.no_grad()
@@ -4541,33 +4552,48 @@ def _train(args):
 
     # ---------------- run header ----------------
     print(f"\n{'=' * 100}\nRUN {run_id} started {now_iso()} | {resume_note}")
-    print(f"command: {' '.join(sys.argv)}")
-    print(f"python {platform.python_version()} | torch {torch.__version__} | backend {backend_label(device)} | "
-          f"{platform.platform()} | tiny_gpt.py sha256 {file_sha256(__file__)[:12]}")
-    print(f"device: {device_label(device)} | precision: {amp_name} | attention: SDPA {attn_impl} ({attn_why}) | "
-          f"optimizer: {opt_name} ({opt_note}) | "
+    # print: the screen and log.txt. log_only: what makes the run reproducible but nobody reads on screen.
+    log_only(f"command: {' '.join(sys.argv)}")
+    log_only(f"python {platform.python_version()} | torch {torch.__version__} | backend {backend_label(device)} | "
+             f"{platform.platform()} | tiny_gpt.py sha256 {file_sha256(__file__)[:12]}")
+    print(f"device: {device_label(device)} | {amp_name} | {opt_name} | "
           f"compile: {'on' if train_model is not model else 'off (eager)'}")
+    log_only(f"device detail: attention: SDPA {attn_impl} ({attn_why}) | optimizer: {opt_name} ({opt_note})")
     if device.type == "mps":
         for note in mps_env_notes():
             print(f"environment: {note}")
-    print(f"dataset: {dataset_dir} | fingerprint {manifest['fingerprint'][:12]} | tokenizer "
-          f"{tok.vocab_size:,} pieces ({tok.encode_mode}) | train "
-          + ", ".join(f"{n} {len(a):,}" for n, a in arrays["train"].items())
-          + " | val " + ", ".join(f"{n} {len(a):,}" for n, a in arrays["val"].items()))
-    print("sampling share per source: " + ", ".join(f"{n} {p:.1%}" for n, p in batcher.share().items())
-          + f" | validation windows (fixed): {evalset.describe()}"
+    share = batcher.share()
+    n_windows = sum(w.shape[0] for w in evalset.windows.values())
+    print(f"data: {dataset_dir} ({manifest['fingerprint'][:12]}) | {unique:,} training tokens in "
+          f"{len(arrays['train'])} sources | validation: {n_windows:,} fixed windows of {cfg.ctx:,} tokens from "
+          f"{len(evalset.windows)} sources"
           + (f" | skipped (too small): {evalset.skipped}" if evalset.skipped else ""))
-    print("model: " + json.dumps(dataclasses.asdict(cfg)))
+    log_only(f"dataset: {dataset_dir} | fingerprint {manifest['fingerprint'][:12]} | tokenizer "
+             f"{tok.vocab_size:,} pieces ({tok.encode_mode}) | per source (training tokens, sampling share; "
+             "validation tokens, fixed windows): "
+             + "; ".join(f"{n} {len(a):,} {share.get(n, 0.0):.1%}"
+                         + (f", {len(arrays['val'][n]):,}" if n in arrays["val"] else ", no validation")
+                         + (f" {evalset.windows[n].shape[0]} x {cfg.ctx}" if n in evalset.windows else "")
+                         for n, a in sorted(arrays["train"].items())))
+    print(f"model: d_model {cfg.d_model}, {cfg.n_layers} layers, {cfg.n_heads} heads / {cfg.n_kv_heads} KV, ctx "
+          f"{cfg.ctx:,}, vocabulary {cfg.vocab_size:,}")
+    log_only("model: " + json.dumps(dataclasses.asdict(cfg)))
     print(f"parameters: {n_total:,} total, {n_nonembed:,} non-embedding"
           + (f", {n_active:,} active per token" if moe else ""))
-    print("train: " + json.dumps({k: v for k, v in settings.items()}))
+    log_only("train: " + json.dumps({k: v for k, v in settings.items()}))
+    train_tokens_total = total_steps * settings["tokens_per_step"]
+    print(f"budget: {total_steps:,} steps x {settings['tokens_per_step']:,} tokens ({micro} x {accum} x {cfg.ctx}) "
+          f"= {train_tokens_total:,} tokens = {train_tokens_total / n_total:,.1f} tokens/parameter, "
+          f"{train_tokens_total / max(unique, 1):,.2f} epochs")
     print(f"schedule: {schedule.describe()}")
-    print(f"weights: {ema_note}"
-          + (f"; updated every {EMA_EVERY} steps with decay {ema_decay ** EMA_EVERY:.4f} per update, scored beside "
-             "the raw weights at each evaluation while the learning rate is above 5% of peak; the better of the two "
-             f"is saved as {os.path.basename(best_path)} (its 'weights' field says which)" if ema is not None else "")
-          + ("; document mask on: attention stays within each document of a window" if model.doc_sep_id is not None
-             else ""))
+    if ema is not None or model.doc_sep_id is not None:
+        print(f"weights: {ema_note}"
+              + (f"; updated every {EMA_EVERY} steps with decay {ema_decay ** EMA_EVERY:.4f} per update, scored "
+                 "beside the raw weights at each evaluation while the learning rate is above 5% of peak; the better "
+                 f"of the two is saved as {os.path.basename(best_path)} (its 'weights' field says which)"
+                 if ema is not None else "")
+              + ("; document mask on: attention stays within each document of a window"
+                 if model.doc_sep_id is not None else ""))
     if moe:
         print(f"experts: {cfg.n_experts} per MoE block ({cfg.n_moe_blocks} of {cfg.n_layers} blocks), "
               f"{cfg.experts_per_token} per token, hidden {cfg.expert_hidden}, {cfg.router} router; balance "
@@ -4576,23 +4602,23 @@ def _train(args):
               "= even routing), moe_z, moe_load_max (busiest expert / mean) and dead_experts")
     for line in plan_lines:
         print(f"plan: {line}")
-    train_tokens_total = total_steps * settings["tokens_per_step"]
-    print(f"budget: {total_steps:,} steps x {settings['tokens_per_step']:,} tokens = {train_tokens_total:,} tokens "
-          f"= {train_tokens_total / n_total:,.1f} tokens/parameter, {train_tokens_total / max(unique, 1):,.2f} epochs")
-    print(f"every {args.eval_every} steps: metrics line (train = mean training loss since the previous line; "
-          f"val = balanced mean over sources of the validation loss on fixed windows (drives NEW BEST), "
-          f"val X @S was measured at step S; val(mix) weights sources as training samples them: compare it with "
-          f"train; ppl = exp(val)), then a sample"
-          + (f"; fact probes: {len(probes)} from {os.path.basename(args.probes)}" if probes else "")
-          + "; lines starting with '...' in between are progress only (train loss since the previous line, "
-          "no validation)")
     meter = EnergyMeter(device, args.cpu_watts, args.grid_intensity, energy_before,
                         tariff=Tariff(args.tariff, args.region))
-    print(meter.describe() + (f" Earlier sessions of this run: {meter.short()}." if meter.kwh() else ""))
+    if meter.kwh():
+        print(f"Earlier sessions of this run: {fmt_hms(run_seconds_before)}, {meter.short()}")
+    log_only(meter.describe())
+    log_only(f"evaluation: every {args.eval_every} steps on the fixed validation windows"
+             + (f"; fact probes: {len(probes)} from {os.path.basename(args.probes)}" if probes else ""))
     save_when = f"every {args.save_every} steps" + (f" and every {args.save_minutes:g} min" if args.save_minutes > 0
                                                      else "")
-    print(f"checkpoints: {ckpt_path} {save_when} (training state), {best_path} on NEW BEST "
-          f"(inference only); metrics: {metrics_path}\n{'=' * 100}")
+    print(f"output: validation every {args.eval_every} steps"
+          + (f" with {len(probes)} fact probes" if probes else "")
+          + f" | {os.path.basename(ckpt_path)} {save_when}, {os.path.basename(best_path)} on NEW BEST, in "
+          f"{os.path.dirname(os.path.abspath(ckpt_path))}"
+          + (f" | full settings: {os.path.basename(_LOG_STATE['path'])}" if _LOG_STATE.get("path") else ""))
+    log_only(f"checkpoints: {ckpt_path} {save_when} (training state), {best_path} on NEW BEST "
+             f"(inference only); metrics: {metrics_path}")
+    print("=" * 100)
     if start_step >= total_steps:
         print(f"Checkpoint already reached step {start_step:,} of {total_steps:,}; nothing to train. "
               "Extend with --resume --steps N.")
@@ -4651,7 +4677,7 @@ def _train(args):
 
     # ---------------- baseline evaluation ----------------
     if not resumed and not history:
-        print(f"measuring the untrained model on the fixed validation windows ({evalset.describe()}) ...")
+        print("measuring the untrained model on the fixed validation windows ...")
         ev = evaluate_retrying()
         history.append({"step": start_step, "tokens": tokens_seen, "train_loss": None, "val_loss": ev["loss"],
                         "val_mix": ev["loss_mix"], "bpb": ev["bpb"], "bpb_mix": ev["bpb_mix"],

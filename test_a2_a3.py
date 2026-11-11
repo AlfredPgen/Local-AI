@@ -7,7 +7,6 @@ as child processes, TestFixes for the unit tests.
 import io
 import json
 import os
-import re
 import shutil
 import sys
 import tempfile
@@ -129,6 +128,92 @@ class Audit2TinyGptC(unittest.TestCase):
         self.assertEqual(sorted(last["val_per_source"]), ["md", "pes2o", "wiki"])
         self.assertEqual(sorted(last["bpb_per_source"]), ["md", "pes2o", "wiki"])
         self.assertFalse(hasattr(tiny_gpt, "_per_source"))
+
+    def test_run_header_is_short_on_screen_and_whole_in_the_log(self):
+        """F243 (with F264, F256): the screen gets a short start-up block; the command, the versions, the attention
+        and optimizer notes, the model and training settings as JSON, one per-source list, the energy method and
+        the full checkpoint paths go to log.txt alone, which still holds every line of the screen."""
+        import view_pt
+        out, tail, out_r, tail_r = self.console_runs()
+        for text in (out, out_r):
+            head = self.header(text)
+            joined = "\n".join(head)
+            for gone in ("command: ", "train: {", "model: {", "metrics line (train = mean", "sampling share per source",
+                         "attention: SDPA", "energy: ", "checkpoints: ", "weights: "):
+                self.assertNotIn(gone, "".join(line for line in head if not line.startswith("plan: ")))
+            starts = [line.split(":")[0] for line in head if not line.startswith("plan: ")]
+            self.assertEqual([s for s in starts if s != "Earlier sessions of this run"],
+                             ["device", "data", "model", "parameters", "budget", "schedule", "output"], joined)
+            self.assertRegex(joined, r"(?m)^device: .* \| FP32 \| AdamW \| compile: off \(eager\)$")
+            self.assertRegex(joined, r"(?m)^data: .*dataset \([0-9a-f]{12}\) \| [\d,]+ training tokens in 5 sources \| "
+                                     r"validation: \d+ fixed windows of 64 tokens from 3 sources$")
+            self.assertIn("model: d_model 64, 2 layers, 4 heads / 2 KV, ctx 64, vocabulary 700", head)
+            self.assertRegex(joined, r"(?m)^parameters: [\d,]+ total, [\d,]+ non-embedding$")
+            self.assertRegex(joined, r"(?m)^budget: 8 steps x 512 tokens \(8 x 1 x 64\) = 4,096 tokens = [\d.]+ "
+                                     r"tokens/parameter, [\d.]+ epochs$")
+            self.assertRegex(joined, r"(?m)^output: validation every 4 steps with 24 fact probes \| C\.pt every 1000 "
+                                     r"steps and every 30 min, C_best\.pt on NEW BEST, in .*runs \| full settings: "
+                                     r"log\.txt$")
+        self.assertLessEqual(len(self.header(out_r)), 12, out_r)
+        self.assertEqual(sum(line.startswith("Earlier sessions of this run: ") for line in self.header(out_r)), 1)
+        self.assertNotIn("Earlier sessions", out)
+        self.assertIn("measuring the untrained model on the fixed validation windows ...\n", out)
+        self.assertFalse(hasattr(tiny_gpt.EvalSet, "describe"))
+        for log_part, screen in ((tail, out), (tail_r, out_r)):
+            for needle in ("command: ", "python ", " | tiny_gpt.py sha256 ", "device detail: attention: SDPA ",
+                           " | optimizer: AdamW (", "model: {", "train: {", "energy: ", "checkpoints: ",
+                           "per source (training tokens, sampling share; validation tokens, fixed windows): ",
+                           "evaluation: every 4 steps on the fixed validation windows; fact probes: 24 from "
+                           "probes24.tsv"):
+                self.assertIn(needle, log_part)
+            self.assertRegex(log_part, r"(?m)^checkpoints: .*[\\/]C\.pt every 1000 steps and every 30 min \(training "
+                                       r"state\), .*C_best\.pt on NEW BEST \(inference only\); metrics: .*C_metrics\.jsonl$")
+            self.assertRegex(log_part, r"per source \(training tokens, sampling share; validation tokens, fixed windows\): "
+                                       r"md [\d,]+ [\d.]+%, [\d,]+ \d+ x 64; notes [\d,]+ [\d.]+%, no validation; ")
+            self.assertRegex(log_part, r"={20,}\nRUN ")  # view_pt splits the sessions of a log here
+            logged = set(log_part.splitlines())
+            missing = [line for line in screen.splitlines() if line.strip() and line not in logged]
+            self.assertEqual(missing, [], "log.txt holds every line of the screen")
+        history, note = view_pt.history_from_log(self.log, os.path.join(self.runs, "C.pt"))
+        self.assertEqual([row["step"] for row in history], [4, 8], note)
+
+    def test_a_line_before_the_header_says_what_the_wait_is_for(self):
+        """F224: one line before the dataset is checked and the model compiled, ahead of the header's bar."""
+        out, tail, out_r, tail_r = self.console_runs()
+        fresh, resumed = ("checking the dataset and compiling the model ...",
+                          "loading C.pt, checking the dataset and compiling the model ...")
+        self.assertIn(fresh, out.splitlines())
+        self.assertIn(resumed, out_r.splitlines())
+        self.assertNotIn("loading ", out[:out.index("=" * 100)])
+        for text, line in ((out, fresh), (out_r, resumed), (tail, fresh), (tail_r, resumed)):
+            self.assertLess(text.index(line), text.index("=" * 100))
+            self.assertRegex(text, r"={20,}\nRUN ")
+
+    def test_header_hash_of_the_script_ignores_line_endings(self):
+        """F263: the 'tiny_gpt.py sha256' of the run header is the same for a checkout with LF and with CRLF line
+        ends; file_sha256 (dataset and probe files, the stored probes_sha) still hashes the bytes."""
+        lf, crlf = os.path.join(self.tmp, "lf.py"), os.path.join(self.tmp, "crlf.py")
+        with open(lf, "wb") as handle:
+            handle.write(b"a = 1\nb = 2\n")
+        with open(crlf, "wb") as handle:
+            handle.write(b"a = 1\r\nb = 2\r\n")
+        self.assertEqual(tiny_gpt.source_sha256(lf), tiny_gpt.source_sha256(crlf))
+        self.assertEqual(tiny_gpt.source_sha256(lf), tiny_gpt.file_sha256(lf))
+        self.assertNotEqual(tiny_gpt.file_sha256(lf), tiny_gpt.file_sha256(crlf))
+        self.assertEqual(tiny_gpt.source_sha256(os.path.join(self.tmp, "missing.py")), "?")
+        _, tail, _, _ = self.console_runs()
+        self.assertIn(f" | tiny_gpt.py sha256 {tiny_gpt.source_sha256(tiny_gpt.__file__)[:12]}\n", tail)
+
+    def test_plan_lines_of_a_run_header_are_the_compact_ones(self):
+        """F336 (call sites): a new run prints the planner's lines without what its header already says."""
+        out, _, out_r, _ = self.console_runs()
+        plan = [line for line in self.header(out) if line.startswith("plan: ")]
+        self.assertTrue(any(line.startswith("plan: unique training tokens U = ") for line in plan), plan)
+        self.assertTrue(any(line.startswith("plan: token budget D = ") for line in plan), plan)
+        for line in plan:
+            self.assertNotRegex(line, r"^plan: (batch:|weights:|ctx |ratios:)")
+        self.assertNotRegex(out, r"plan: unique training tokens U = [\d,]+ \(")  # no per-source list
+        self.assertEqual([line for line in self.header(out_r) if line.startswith("plan: ")], [])
 
 
 if __name__ == "__main__":

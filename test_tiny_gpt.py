@@ -499,12 +499,28 @@ class TestPipeline(unittest.TestCase):
         code, out_b = run(self.common + ["--name", "B", "--steps", "24", "--stop-after-steps", "16", "--no-probes"])
         self.assertEqual(code, 0, out_b)
         self.assertIn("Stopped after 16 steps", out_b)
+        log_size = os.path.getsize(os.path.join(self.runs, "log.txt"))  # the log is cumulative
         code, out_r = run(["tiny_gpt.py", "--name", "B", "--out-dir", self.runs, "--log-file",
                            os.path.join(self.runs, "log.txt"), "--device", "cpu", "--resume", "--eval-every", "8",
                            "--eval-tokens", "2048", "--sample-tokens", "8", "--no-probes"])
         self.assertEqual(code, 0, out_r)
         self.assertIn("RESUMED", out_r)
         self.assertIn("val(mix)", out_r)
+        # the start-up block of the resumed session: short on screen, the full settings in log.txt only
+        lines_r = out_r.splitlines()
+        first = next(i for i, line in enumerate(lines_r) if line.startswith("RUN "))
+        header = lines_r[first + 1:lines_r.index("=" * 100, first)]
+        self.assertLessEqual(len(header), 12, out_r)
+        for gone in ("command: ", "train: {", "metrics line (train = mean"):
+            self.assertNotIn(gone, "\n".join(header))
+        with open(os.path.join(self.runs, "log.txt"), "rb") as handle:
+            handle.seek(log_size)
+            log_r = handle.read().decode("utf-8")
+        for needle in ("command: ", "model: {", "train: {", "checkpoints: ", "per source (training tokens"):
+            self.assertIn(needle, log_r)
+        import view_pt  # the viewer still finds the run's sessions and evaluation lines in the log
+        from_log, _ = view_pt.history_from_log(os.path.join(self.runs, "log.txt"), os.path.join(self.runs, "B.pt"))
+        self.assertEqual([row["step"] for row in from_log], [8, 16, 24])
         # extending a run needs at least one step after its warmup
         warmup = torch.load(os.path.join(self.runs, "B.pt"), map_location="cpu",
                             weights_only=True)["train_config"]["warmup_steps"]
@@ -1292,9 +1308,14 @@ class TestPipeline(unittest.TestCase):
         import csv
         log = os.path.join(self.runs, "log.txt")
         muon = self.common + ["--optimizer", "muon", "--no-probes"]
+        log_size = os.path.getsize(log) if os.path.exists(log) else 0  # the log is cumulative: read this run's part
         code, out = run(muon + ["--name", "M", "--steps", "16"])
         self.assertEqual(code, 0, out)
-        self.assertIn("optimizer: Muon + AdamW (Muon for 14 block matrices", out)
+        with open(log, "rb") as handle:  # the optimizer note is in log.txt only; the screen names the optimizer
+            handle.seek(log_size)
+            log_part = handle.read().decode("utf-8")
+        self.assertIn("optimizer: Muon + AdamW (Muon for 14 block matrices", log_part)
+        self.assertIn(" | Muon + AdamW | compile: ", out)
         code, out_s = run(muon + ["--name", "N", "--steps", "16", "--stop-after-steps", "8"])
         self.assertEqual(code, 0, out_s)
         code, out_r = run(["tiny_gpt.py", "--name", "N", "--out-dir", self.runs, "--log-file", log, "--device", "cpu",
@@ -1343,11 +1364,15 @@ class TestPipeline(unittest.TestCase):
         import csv
         log = os.path.join(self.runs, "log.txt")
         moe = self.common + ["--optimizer", "muon", "--no-probes", "--experts", "4"]
+        log_size = os.path.getsize(log) if os.path.exists(log) else 0  # the log is cumulative: read this run's part
         code, out = run(moe + ["--name", "X", "--steps", "16"])
         self.assertEqual(code, 0, out)
+        with open(log, "rb") as handle:  # the optimizer note is in log.txt only
+            handle.seek(log_size)
+            log_part = handle.read().decode("utf-8")
         # 2 blocks x (4 attention projections + 4 experts x 2 matrices) on Muon; the embedding and the 2 routers on AdamW
-        self.assertIn("Muon for 24 block matrices", out)
-        self.assertIn("AdamW for the embedding (3 matrices)", out)
+        self.assertIn("Muon for 24 block matrices", log_part)
+        self.assertIn("AdamW for the embedding (3 matrices)", log_part)
         self.assertIn("experts: 4 per MoE block (2 of 2 blocks), 2 per token, hidden 128", out)
         self.assertRegex(out, r"parameters: [\d,]+ total, [\d,]+ non-embedding, [\d,]+ active per token")
         self.assertRegex(out, r"step +16/16 \| train .*\| moe lb [\d.]+ z [\d.]+ load max [\d.]+ dead \d+ \|")
