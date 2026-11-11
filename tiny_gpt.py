@@ -5007,8 +5007,11 @@ def _train(args):
             stop_now = bool(args.stop_after_steps) and step - start_step >= args.stop_after_steps
             do_save = (step % args.save_every == 0 or step == total_steps or stop_now
                        or (args.save_minutes > 0 and time.perf_counter() - last_save >= args.save_minutes * 60))
+            # one after the first completed step of a session (the run is seen to train), then one whenever
+            # nothing was printed for --heartbeat-seconds
             heartbeat = (args.heartbeat_seconds > 0 and not (do_eval or do_progress)
-                         and time.perf_counter() - last_print >= args.heartbeat_seconds)
+                         and (step == start_step + 1
+                              or time.perf_counter() - last_print >= args.heartbeat_seconds))
             if not (do_eval or do_progress or do_save or heartbeat):
                 continue
 
@@ -5022,14 +5025,11 @@ def _train(args):
                 ptrain = (progress_loss / max(progress_micro, 1)).item()
                 per_step = interval_train_time / max(step - interval_start_step, 1)
                 next_eval = min(total_steps, (step // args.eval_every + 1) * args.eval_every)
-                # progress only: the latest validation (with the step it was measured at), the share done and the
-                # tokens seen so far; learning rate, whole-run time and ETA are on the validation lines
-                val_text = f"val {last_eval['loss']:.3f} @{last_eval['step']}" if last_eval else "val -"
+                # progress only: the share done, the training loss since the previous line, the speed and the clock
+                # time; validation, learning rate, energy and ETA are on the evaluation lines
                 print(f"{'  ... ' if heartbeat else ''}step {step:>6}/{total_steps} | {step / total_steps:5.1%} | "
-                      f"train {ptrain:.3f} | {val_text} | "
-                      f"{interval_tokens / max(interval_train_time, 1e-9):,.0f} tok/s | {per_step:.2f} s/step | "
-                      f"{tokens_seen:,} tokens | elapsed {fmt_hms(now - t_run)} | "
-                      f"next val in {fmt_dur(per_step * (next_eval - step))}")
+                      f"train {ptrain:.3f} | {interval_tokens / max(interval_train_time, 1e-9):,.0f} tok/s | "
+                      f"{clock()} | next val in {fmt_dur(per_step * (next_eval - step))}")
                 progress_loss.zero_()
                 progress_micro = 0
                 last_print = time.perf_counter()
