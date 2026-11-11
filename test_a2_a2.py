@@ -779,3 +779,27 @@ class Audit2TinyGptB(unittest.TestCase):
             tiny_gpt.cmd_benchmark(self._args(runs, "--benchmark", "--probes", probes))
         self.assertEqual(str(caught.exception), f"{probes}: no probes found")
         self.assertEqual(sorted(os.listdir(runs)), ["A_best.pt", "empty.tsv"])
+
+    def test_generate_header_without_a_step(self):
+        """F286: the --generate header of a checkpoint that has a best validation loss but no step count prints
+        'step ?' instead of raising; with a step it is written with thousands separators in both forms."""
+        runs = os.path.join(self.tmp, "no_step")
+        best = self._toy_checkpoint(runs, step=None)
+        obj = torch.load(best, map_location="cpu", weights_only=True)
+
+        def header(**change):
+            for key, value in change.items():
+                if value is None:
+                    obj.pop(key, None)
+                else:
+                    obj[key] = value
+            torch.save(obj, best)
+            out = self._quiet(tiny_gpt.cmd_generate, self._args(runs, "--generate", "genetic", "--length", "2"))
+            return out.splitlines()[0]
+
+        start = f"Checkpoint {best} (tinygpt, inference) | step "
+        self.assertTrue(header().startswith(start + "? | best validation loss 5.5000 @6 | "), header())
+        self.assertTrue(header(step=None).startswith(start + "? | best validation loss 5.5000 @6 | "))
+        self.assertTrue(header(step=12345).startswith(start + "12,345 | best validation loss 5.5000 @6 | "))
+        self.assertEqual(header(metrics={}), start + "12,345")
+        self.assertEqual(header(step=None), start + "?")

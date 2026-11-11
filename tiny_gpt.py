@@ -4003,9 +4003,11 @@ def cmd_generate(args):
     metrics = obj.get("metrics", {}) if family == "tinygpt" else {}
     best = metrics.get("best_val", obj.get("best_val"))
     best_step = metrics.get("best_step", obj.get("best_val_step"))
-    print(f"Checkpoint {path} ({family}, {kind}) | step {obj.get('step', '?'):,} | best validation loss "
+    step = obj.get("step")
+    step_s = f"{step:,}" if isinstance(step, int) else "?"
+    print(f"Checkpoint {path} ({family}, {kind}) | step {step_s} | best validation loss "
           f"{best:.4f} @{best_step} | {device_label(device)} | {amp_name}" if best is not None else
-          f"Checkpoint {path} ({family}, {kind}) | step {obj.get('step', '?')}")
+          f"Checkpoint {path} ({family}, {kind}) | step {step_s}")
     if family != "tinygpt":
         print("Note: legacy checkpoints use the old tokenizer (runs of spaces collapse; no end-of-document token).")
     gen = torch.Generator().manual_seed(args.seed)
