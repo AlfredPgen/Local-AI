@@ -937,6 +937,8 @@ class KeywordFilter:
 
     def evaluate(self, title, text):
         """Return (keep, reason, weighted_hits, Counter(term -> hits))."""
+        # A change of the scoring here must raise download_pmc.MATCH_VERSION: otherwise download_pmc.py reuses the
+        # matches it scored by the old rule (its metadata/matches.tsv) instead of scoring them again.
         body = text[: self.scan_chars]
         if self._exclude is not None:
             found = self._exclude.count(body, self._exclude.count(title or "", collections.Counter()))
