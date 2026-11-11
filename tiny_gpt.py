@@ -4169,25 +4169,9 @@ def acquire_run_lock(args):
     same run's checkpoints. A lock whose process has ended is stale and replaced."""
     os.makedirs(args.out_dir, exist_ok=True)
     lock = os.path.join(args.out_dir, f"{args.name}.train.lock")
-    for attempt in (1, 2):
-        try:
-            fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-            break
-        except FileExistsError:
-            if attempt == 2 or data_prep._lock_owner_alive(lock):
-                raise SystemExit(f"Run {args.name!r} in {args.out_dir} is being trained by another process (see "
-                                 f"{lock}). Wait for it to finish or stop it first; delete the lock file only if "
-                                 "no training is running.")
-            os.remove(lock)  # stale: its run ended without removing it
-    started = None
-    try:
-        import psutil
-        started = psutil.Process().create_time()
-    except Exception:  # noqa: BLE001 - without psutil only the process id is checked
-        pass
-    with os.fdopen(fd, "w", encoding="utf-8") as handle:
-        json.dump({"pid": os.getpid(), "started": started}, handle)
-    return lock
+    return data_prep._acquire_lock(lock, busy=(
+        f"Run {args.name!r} in {args.out_dir} is being trained by another process (see {lock}). Wait for it to "
+        "finish or stop it first; delete the lock file only if no training is running."))
 
 
 def release_run_lock(lock):

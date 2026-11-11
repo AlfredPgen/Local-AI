@@ -271,6 +271,40 @@ class Audit2Followers(unittest.TestCase):
         self.assertEqual((budget[-2], half_budget[-2]), ("1.0", "1.0"))
         self.assertNotEqual(budget, half_budget, "half the efficiency: a smaller model fits the hour")
 
+    # ---------------- X5: the run lock is data_prep's lock with the run's message ----------------
+    def test_run_lock_is_the_build_lock_with_the_message_of_the_run(self):
+        """X5 (F266, F265): tiny_gpt.acquire_run_lock makes the folder and calls data_prep._acquire_lock, so a
+        lock another trainer has created but not written yet counts as alive (the copy of the loop in
+        tiny_gpt removed it as stale); the refusal names the run, not a data_prep.py build."""
+        import time
+        import data_prep
+        import tiny_gpt
+        args = types_ns(out_dir=os.path.join(self.tmp, "x5", "runs"), name="R")
+        lock = os.path.join(args.out_dir, "R.train.lock")
+        os.makedirs(args.out_dir)
+        open(lock, "w").close()  # another start, between creating the lock and writing it
+        with self.assertRaises(SystemExit) as stop:
+            tiny_gpt.acquire_run_lock(args)
+        said = str(stop.exception)
+        self.assertEqual(said, f"Run 'R' in {args.out_dir} is being trained by another process (see {lock}). Wait "
+                               "for it to finish or stop it first; delete the lock file only if no training is "
+                               "running.")
+        self.assertNotIn("data_prep.py run", said)
+        self.assertEqual(os.path.getsize(lock), 0, "the other trainer's lock was not touched")
+        old = time.time() - 60  # the same empty file left by a crash: stale after ten seconds
+        os.utime(lock, (old, old))
+        with unittest.mock.patch.object(data_prep, "_acquire_lock", wraps=data_prep._acquire_lock) as shared:
+            self.assertEqual(tiny_gpt.acquire_run_lock(args), lock)
+        shared.assert_called_once_with(lock, busy=said)
+        with open(lock, encoding="utf-8") as f:
+            self.assertEqual(sorted(json.load(f)), ["pid", "started"], "the lock file's format is unchanged")
+        tiny_gpt.release_run_lock(lock)
+        self.assertFalse(os.path.exists(lock))
+        # a folder that does not exist yet is made
+        fresh = types_ns(out_dir=os.path.join(self.tmp, "x5", "new", "runs"), name="R")
+        tiny_gpt.release_run_lock(tiny_gpt.acquire_run_lock(fresh))
+        self.assertEqual(os.listdir(fresh.out_dir), [])
+
 
 if __name__ == "__main__":
     unittest.main()
