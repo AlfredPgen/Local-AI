@@ -613,6 +613,17 @@ class Audit2TinyGptC(unittest.TestCase):
         self.assertNotEqual(windows(65_536), windows(1024), "the toy sources must be long enough to tell")
         self.assertIn(f"| validation: {windows(65_536)} fixed windows of 64 tokens from 3 sources", out)
 
+    def test_probe_file_hash_short_in_the_settings_and_whole_in_the_report(self):
+        """F254 (guard: same values before and after): the probe file is hashed once; the settings keep the
+        first 16 characters, the probe report of an evaluation the whole digest."""
+        self.console_runs()
+        state = self.load("C.pt")
+        digest = tiny_gpt.file_sha256(self.probes)
+        self.assertEqual(state["train_config"]["probes_sha"], digest[:16])
+        self.assertEqual(state["metrics"]["last_eval"]["probes"]["file_sha256"], digest)
+        self.notes_runs()
+        self.assertIsNone(self.load("N.pt")["train_config"]["probes_sha"])  # --no-probes
+
 
 if __name__ == "__main__":
     unittest.main()

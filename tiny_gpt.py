@@ -4431,7 +4431,9 @@ def _train(args):
                                           65_536 if resume_obj is not None else args.eval_tokens or 65_536))
     if resume_obj is not None and args.eval_tokens is not None and eval_tokens != args.eval_tokens:
         print(f"Note: --eval-tokens ignored on --resume; this run keeps {eval_tokens:,} (its validation windows).")
-    probes_sha = file_sha256(args.probes)[:16] if args.probes else None
+    # hashed once: the settings keep the first 16 characters, the probe report of each evaluation the whole digest
+    probes_full = file_sha256(args.probes) if args.probes else None
+    probes_sha = probes_full[:16] if probes_full else None
     if resume_obj is not None and settings.get("probes_sha") and probes_sha and settings["probes_sha"] != probes_sha:
         print(f"Note: {os.path.basename(args.probes)} has changed since this run started: fact-probe accuracies "
               "from now on are not comparable with the earlier ones.")
@@ -4503,7 +4505,6 @@ def _train(args):
         finally:
             model.train(was_training)
     probes = read_probes(args.probes) if args.probes else []
-    probes_sha = file_sha256(args.probes) if probes else None
 
     start_step, tokens_seen, train_seconds = 0, 0, 0.0
     run_seconds_before = 0.0  # wall-clock time of earlier sessions of this run (before --resume)
@@ -5117,7 +5118,7 @@ def _train(args):
                     probe_acc, probe_results = score_probes(model, tok, probes, device, amp_dtype)
                     probe_floor_acc = probe_floor(probe_results)
                     probe_by_category = {k: round(v["accuracy"], 4) for k, v in probe_summary(probe_results).items()}
-                    ev["probes"] = probe_report(probe_results, probes_sha)  # kept in the checkpoint for view_pt
+                    ev["probes"] = probe_report(probe_results, probes_full)  # kept in the checkpoint for view_pt
                 prev_best, prev_step = best_val, best_step
                 # the best model is whichever weights score lower, the raw ones or the average; the best file
                 # records which it holds ("weights": "raw" | "ema")
