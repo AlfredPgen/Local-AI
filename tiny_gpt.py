@@ -5557,6 +5557,9 @@ def maybe_compile(model, mode, device, return_hidden=False, amp_dtype=None, micr
         return model
     compiled, failure = None, None
     try:
+        # the compiled graphs are kept beside the script, not in the temp folder (which gets emptied: every graph
+        # is then compiled again at the next start); a TORCHINDUCTOR_CACHE_DIR that is already set wins
+        os.environ.setdefault("TORCHINDUCTOR_CACHE_DIR", os.path.join(HERE, ".compile_cache"))
         # dynamic=False: a new shape (a halved micro-batch after an out-of-memory error) gets its own static graph
         # instead of turning the training graph into a slower dynamic-shape one
         compiled = torch.compile(model, dynamic=False)

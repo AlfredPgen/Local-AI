@@ -838,6 +838,23 @@ class Audit2TinyGptC(unittest.TestCase):
         self.assertEqual(shown.returncode, 0, shown.stderr)
         self.assertEqual(shown.stdout, data, "the committed table is the file")
 
+    # ---------------- torch.compile ----------------
+    def test_compile_cache_stays_beside_the_script(self):
+        """F326: maybe_compile points torch.compile's cache at .compile_cache beside the script (the default is
+        the temp folder, which gets emptied) unless TORCHINDUCTOR_CACHE_DIR is already set."""
+        cpu, model = torch.device("cpu"), base.TestFixes.small_model(self)
+        with unittest.mock.patch.dict(os.environ), \
+                unittest.mock.patch.object(tiny_gpt.torch, "compile", lambda module, **kwargs: module):
+            os.environ.pop("TORCHINDUCTOR_CACHE_DIR", None)
+            self.assertIs(tiny_gpt.maybe_compile(model, "off", cpu), model)
+            self.assertNotIn("TORCHINDUCTOR_CACHE_DIR", os.environ, "nothing is compiled: nothing is set")
+            self.assertIs(tiny_gpt.maybe_compile(model, "on", cpu, micro=2), model)
+            self.assertEqual(os.environ["TORCHINDUCTOR_CACHE_DIR"], os.path.join(tiny_gpt.HERE, ".compile_cache"))
+            os.environ["TORCHINDUCTOR_CACHE_DIR"] = "elsewhere"
+            tiny_gpt.maybe_compile(model, "on", cpu, micro=2)
+            self.assertEqual(os.environ["TORCHINDUCTOR_CACHE_DIR"], "elsewhere", "a setting of the user's wins")
+        self.assertFalse(os.path.exists(os.path.join(HERE, ".compile_cache")), "this test compiles nothing")
+
 
 if __name__ == "__main__":
     unittest.main()
