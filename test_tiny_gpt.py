@@ -4507,10 +4507,24 @@ class TestOtherScripts(unittest.TestCase):
                 BatchTok.calls += 1
                 return [self.encode(t) for t in texts]
         for tok in (CharTok(), BatchTok()):
-            for prompt, answer, ctx in (("What is drift?", "Random change.", 64), ("Q" * 50, "A" * 30, 32)):
+            marker = tok.encode("### Answer:\n")
+            for prompt, answer, ctx, cut in (("What is drift?", "Random change.", 64, False),
+                                             ("Q" * 50, "A" * 30, 32, True)):
                 question = tok.encode(finetune.TEMPLATE.format(prompt=prompt.strip()))
-                self.assertEqual(finetune.pair_from_ids(tok, question, tok.encode(answer), ctx),
-                                 finetune.encode_pair(tok, prompt, answer, ctx))
+                whole = tok.encode(answer) + ([tok.eos_id] if tok.eos_id >= 0 else [])
+                ids, n_prompt, truncated = finetune.pair_from_ids(tok, question, tok.encode(answer), ctx)
+                self.assertEqual(truncated, cut)
+                self.assertLessEqual(len(ids), ctx + 1)
+                self.assertEqual(len(ids), ctx + 1 if cut else 1 + len(question) + len(whole))
+                self.assertEqual(ids[0], tok.bos_id)
+                # the question is cut from the left: the template's answer marker stays next to the answer
+                self.assertEqual(ids[n_prompt - len(marker):n_prompt], marker)
+                self.assertEqual(ids[1:n_prompt], question[-(n_prompt - 1):])
+                # then the end of the answer: training always covers answer tokens, from the answer's start
+                self.assertLess(n_prompt, len(ids))
+                self.assertEqual(ids[n_prompt:], whole[:len(ids) - n_prompt])
+                if not cut and tok.eos_id >= 0:
+                    self.assertEqual(ids[-1], tok.eos_id)
             self.assertEqual(finetune.encode_texts(tok, ["ab", "c"]), [tok.encode("ab"), tok.encode("c")])
         self.assertEqual(BatchTok.calls, 1)
 
@@ -4607,6 +4621,7 @@ class TestOtherScripts(unittest.TestCase):
 
     # ---------------- posttrain (other-scripts-19) ----------------
     def test_posttrain_evaluate_on_ten_questions(self):
+        import finetune
         import posttrain
         data = os.path.join(self.tmp, "posttrain")
         os.makedirs(data, exist_ok=True)
@@ -4617,11 +4632,25 @@ class TestOtherScripts(unittest.TestCase):
         path = self.save_checkpoint(self.model(seed=9, ctx=64), "P.pt")
         args = types_ns(device="cpu", data_dir=data, probes=os.path.join(self.tmp, "no_probes.tsv"),
                         trust_checkpoint=False, max_new_tokens=8)
+        real, calls = tiny_gpt.score_probes, []
+
+        def recorded(model, tok, probes, device, amp_dtype, **kw):
+            scored = real(model, tok, probes, device, amp_dtype, **kw)
+            calls.append((kw, probes, scored))
+            return scored
         with unittest.mock.patch.object(tiny_gpt, "tokenizer_from_checkpoint", return_value=CharTok()), \
+                unittest.mock.patch.object(tiny_gpt, "score_probes", recorded), \
                 redirect_stdout(io.StringIO()) as out:
             posttrain.evaluate([path], args)
         with open(os.path.join(data, "posttrain_report.md"), encoding="utf-8") as handle:
             report = handle.read()
+        # the questions and their shuffled-question floor in one call; the template wraps after the shuffling
+        self.assertEqual(len(calls), 1)
+        kw, probes, (acc, results) = calls[0]
+        self.assertTrue(kw.get("floor", True))
+        self.assertEqual(kw.get("template"), finetune.TEMPLATE)
+        self.assertEqual(probes[0]["prompt"], "Which gene number 0?")
+        self.assertIn(f"| P.pt | {acc:.3f} | {tiny_gpt.probe_floor(results):.3f} |", report)
         self.assertIn("| P.pt |", report)
         self.assertIn("cat0", report)
         self.assertIn("multiple choice", out.getvalue())

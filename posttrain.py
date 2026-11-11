@@ -18,7 +18,8 @@ finetune.py one after the other, and measures what each step changed.
            UltraFeedback (MIT)        rated answer pairs that match the keyword list (DPO)
            MMLU (MIT), PubMedQA expert-labelled set: evaluation only
   run    SFT from a pre-trained checkpoint, DPO from the SFT model, then `eval` of
-         all three (base, SFT, DPO).
+         all three (base, SFT, DPO). --reuse-sft: keep an existing <name>_sft.pt made
+         from this --base (after a failed DPO) and start at DPO.
   eval   for any checkpoints: multiple-choice accuracy on the held-out questions
          against its shuffled-question floor (as in the fact benchmark), the fact
          benchmark itself, and answers to fixed example questions; written to
@@ -143,9 +144,12 @@ def medmcqa(cap_sft, cap_dpo, rng):
         if len(sft) < cap_sft and len(exp) >= 40:
             sft.append({"prompt": prompt, "response": f"{LETTERS[k]}. {opts[k]}. {exp[:1500]}", "source": "medmcqa"})
         elif len(dpo) < cap_dpo:
-            wrong = rng.choice([i for i in range(4) if i != k])
-            dpo.append({"prompt": prompt, "chosen": f"{LETTERS[k]}. {opts[k]}",
-                        "rejected": f"{LETTERS[wrong]}. {opts[wrong]}", "source": "medmcqa"})
+            # an option with the same text as the right one is no worse answer
+            others = [i for i in range(4) if i != k and opts[i].strip().lower() != opts[k].strip().lower()]
+            if others:
+                wrong = rng.choice(others)
+                dpo.append({"prompt": prompt, "chosen": f"{LETTERS[k]}. {opts[k]}",
+                            "rejected": f"{LETTERS[wrong]}. {opts[wrong]}", "source": "medmcqa"})
         if len(sft) >= cap_sft and len(dpo) >= cap_dpo:
             break
     return sft, dpo, {"cop_base": base, "cop_check": score}
@@ -155,7 +159,7 @@ def sciq(cap_dpo, rng):
     sft, dpo = [], []
     for r in _stream("allenai/sciq"):
         q, a = _flat(r["question"]), _flat(r["correct_answer"])
-        wrong = [_flat(r[f"distractor{i}"]) for i in (1, 2, 3) if _flat(r[f"distractor{i}"])]
+        wrong = [d for d in (_flat(r[f"distractor{i}"]) for i in (1, 2, 3)) if d and d.lower() != a.lower()]
         if not q or not a:
             continue
         support = _text(r.get("support"))
@@ -288,29 +292,26 @@ def build_data(args):
 # eval
 # ---------------------------------------------------------------------------
 def evaluate(checkpoints, args):
+    path = os.path.join(args.data_dir, "eval_mcq.jsonl")
+    if not os.path.isfile(path):
+        raise SystemExit(f"{path} is missing: run `python posttrain.py data` first.")
     import finetune
     import tiny_gpt
     device = tiny_gpt.select_device(args.device)
     amp_dtype, amp_name, _ = tiny_gpt.choose_precision(device, "auto", training=False)  # scoring only
-    evals = [json.loads(line) for line in open(os.path.join(args.data_dir, "eval_mcq.jsonl"), encoding="utf-8")]
-    mcq = [{"category": r["category"].split(":")[0], "difficulty": "unrated",
-            "prompt": finetune.TEMPLATE.format(prompt=r["prompt"]), "answer": r["answer"],
-            "distractors": r["distractors"]} for r in evals]
-    # The floor shuffles the question's words only, then puts them back in the template: shuffling the whole
-    # prompt would scatter '### Question:' / '### Answer:' too, an unfamiliar context for the fine-tuned models.
-    # The same word orders as the fact benchmark's floor (shuffled_prompt of the question).
-    floor_sets = [[dict(p, prompt=finetune.TEMPLATE.format(prompt=tiny_gpt.shuffled_prompt(r["prompt"], v)))
-                   for p, r in zip(mcq, evals)] for v in range(1, tiny_gpt.FLOOR_SHUFFLES + 1)]
+    with open(path, encoding="utf-8") as handle:
+        evals = [json.loads(line) for line in handle]
+    mcq = [{"category": r["category"].split(":")[0], "difficulty": "unrated", "prompt": r["prompt"],
+            "answer": r["answer"], "distractors": r["distractors"]} for r in evals]
     facts = tiny_gpt.read_probes(args.probes) if os.path.isfile(args.probes) else []
     rows, answers = [], {}
     for path in checkpoints:
         t0 = time.time()
         model, tok, cfg, _ = tiny_gpt.load_for_inference(path, device, args.trust_checkpoint)
         model.eval()
-        acc, results = tiny_gpt.score_probes(model, tok, mcq, device, amp_dtype, floor=False)
-        shuffled = [tiny_gpt.score_probes(model, tok, fs, device, amp_dtype, floor=False)[1] for fs in floor_sets]
-        for k, row in enumerate(results):
-            row["floor_correct"] = sum(s[k]["correct"] for s in shuffled) / len(shuffled)
+        # the floor shuffles the question's words only: the template wraps each question after the shuffling
+        acc, results = tiny_gpt.score_probes(model, tok, mcq, device, amp_dtype, floor=True,
+                                             template=finetune.TEMPLATE)
         floor = tiny_gpt.probe_floor(results)
         by_cat = {k: v["accuracy"] for k, v in tiny_gpt.probe_summary(results).items()}
         fact_acc = fact_floor = None
@@ -352,38 +353,46 @@ def evaluate(checkpoints, args):
 # ---------------------------------------------------------------------------
 # run
 # ---------------------------------------------------------------------------
-def gpu_busy():
-    """Another training job on this machine, on any device (tiny_gpt.gpu_busy)."""
-    try:
-        import tiny_gpt
-        return tiny_gpt.gpu_busy()
-    except Exception:  # noqa: BLE001
-        return False
-
-
-def _busy_message(extra=""):
-    try:
-        import tiny_gpt
-        return tiny_gpt.GPU_BUSY_MESSAGE + extra
-    except Exception:  # noqa: BLE001
-        return "The GPU is busy (another training run?); wait for the other job or stop it first." + extra
+def reusable_sft(args):
+    """<out-dir>/<name>_sft.pt for --reuse-sft: only an SFT checkpoint made from this --base (by its path);
+    anything else ends the run with a message."""
+    import tiny_gpt
+    path = os.path.join(args.out_dir, args.name + "_sft.pt")
+    if not os.path.isfile(path):
+        raise SystemExit(f"--reuse-sft: {path} does not exist; run without --reuse-sft.")
+    obj = tiny_gpt.safe_load(path, args.trust_checkpoint, mmap=True)
+    info = obj.get("finetune") if isinstance(obj, dict) else None
+    info = info if isinstance(info, dict) else {}
+    same_base = os.path.normcase(str(info.get("base", ""))) == os.path.normcase(os.path.abspath(args.base))
+    if info.get("method") != "sft" or not same_base:
+        raise SystemExit(f"--reuse-sft: {path} is not an SFT checkpoint made from {args.base} (method "
+                         f"{info.get('method')}, base {info.get('base')}); run without --reuse-sft, adding "
+                         "--overwrite to replace the file.")
+    print(f"reusing {path}: SFT of {info.get('base')} on {info.get('data')} ({info.get('examples')} examples, "
+          f"{info.get('epochs')} epochs, created {obj.get('created')})")
+    return path
 
 
 def run(args):
     import finetune
+    import tiny_gpt
     for f in ("sft.jsonl", "dpo.jsonl", "eval_mcq.jsonl"):
         if not os.path.isfile(os.path.join(args.data_dir, f)):
             raise SystemExit(f"{os.path.join(args.data_dir, f)} is missing: run `python posttrain.py data` first.")
-    if args.device != "cpu" and gpu_busy():
-        raise SystemExit(_busy_message())
+    # the device that will be used, not the --device text: `auto` without a usable GPU is a CPU job
+    if tiny_gpt.select_device(args.device).type != "cpu" and finetune.gpu_busy(args.out_dir):
+        raise SystemExit(tiny_gpt.GPU_BUSY_MESSAGE)
     # --force: the GPU was checked above; this process's own cached memory from SFT must not count as busy for DPO
-    common = ["--out-dir", args.out_dir, "--device", args.device, "--force"] \
+    common = ["--out-dir", args.out_dir, "--device", args.device, "--force", "--seed", str(args.seed)] \
         + (["--overwrite"] if args.overwrite else []) + (["--trust-checkpoint"] if args.trust_checkpoint else [])
     # finetune returns the file it wrote: a locked target is saved under another name, and DPO and the
     # evaluation must use that new file, not the old one
-    sft_path = finetune.main(["sft", "--base", args.base, "--data", os.path.join(args.data_dir, "sft.jsonl"),
-                              "--name", args.name + "_sft", "--epochs", str(args.sft_epochs), "--batch",
-                              str(args.batch), "--val-fraction", "0.02"] + common)
+    if args.reuse_sft:
+        sft_path = reusable_sft(args)
+    else:
+        sft_path = finetune.main(["sft", "--base", args.base, "--data", os.path.join(args.data_dir, "sft.jsonl"),
+                                  "--name", args.name + "_sft", "--epochs", str(args.sft_epochs), "--batch",
+                                  str(args.batch), "--val-fraction", "0.02"] + common)
     dpo_path = finetune.main(["dpo", "--base", sft_path, "--data", os.path.join(args.data_dir, "dpo.jsonl"),
                               "--name", args.name + "_dpo", "--epochs", str(args.dpo_epochs), "--batch",
                               str(args.batch), "--val-fraction", "0.02"] + common)
@@ -408,11 +417,14 @@ def parse_args(argv=None):
     r.add_argument("--dpo-epochs", type=int, default=1)
     r.add_argument("--batch", type=int, default=16)
     r.add_argument("--overwrite", action="store_true")
+    r.add_argument("--reuse-sft", action="store_true",
+                   help="use an existing <name>_sft.pt made from this --base and start at DPO")
     e = sub.add_parser("eval", help="evaluate checkpoints")
     e.add_argument("checkpoints", nargs="+")
     e.add_argument("--force", action="store_true", help="use the GPU even if another job seems to be using it")
     for s in (d, r, e):
         s.add_argument("--data-dir", default=DEFAULT_DATA)
+    for s in (d, r):
         s.add_argument("--seed", type=int, default=0)
     for s in (r, e):
         s.add_argument("--probes", default=os.path.join(HERE, "probes_biology.tsv"))
@@ -434,8 +446,10 @@ def main(argv=None):
     elif args.cmd == "run":
         run(args)
     else:
-        if args.device != "cpu" and not args.force and gpu_busy():
-            raise SystemExit(_busy_message(" (Or use --device cpu, or pass --force.)"))
+        import finetune
+        import tiny_gpt
+        if tiny_gpt.select_device(args.device).type != "cpu" and not args.force and finetune.gpu_busy():
+            raise SystemExit(tiny_gpt.GPU_BUSY_MESSAGE + " (Or use --device cpu, or pass --force.)")
         evaluate(args.checkpoints, args)
 
 

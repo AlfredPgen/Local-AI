@@ -44,10 +44,13 @@ import data_prep  # noqa: E402
 import tiny_gpt  # noqa: E402
 
 
-def validation_documents(dataset_dir, per_source, max_chars, layout=None):
+def validation_documents(dataset_dir, per_source, max_chars, layout=None, parity=None):
     """Evenly spaced validation documents per source, as text. With a dict as
     `layout`, layout[source] = (segments found, offset): segment k is the
-    (k + offset)-th validation document of that source (offset None: unknown)."""
+    (k + offset)-th validation document of that source (offset None: unknown).
+    parity 0 / 1: only documents with an even / odd index within their source,
+    so two callers with different parities never share a document (a source
+    with no such document is left out)."""
     manifest, arrays = data_prep.open_token_files(dataset_dir, verify=False)
     meta = manifest["tokenizer"]
     tok = data_prep.Tokenizer.from_file(os.path.join(dataset_dir, meta["file"]), meta.get("encode_mode", "lines"))
@@ -60,7 +63,10 @@ def validation_documents(dataset_dir, per_source, max_chars, layout=None):
         ends = np.append(starts[1:], len(arr))
         if layout is not None:  # a segment starts at a document's start token, or after its end token
             layout[source] = (len(starts), 0 if tok.bos_id >= 0 else 1 if boundary >= 0 else None)
-        chosen = np.unique(np.linspace(0, len(starts) - 1, min(per_source, len(starts))).astype(int))
+        pool = np.arange(len(starts)) if parity is None else np.arange(parity, len(starts), 2)
+        if len(pool) == 0:
+            continue
+        chosen = pool[np.unique(np.linspace(0, len(pool) - 1, min(per_source, len(pool))).astype(int))]
         for k in chosen:
             text = tok.decode(np.asarray(arr[starts[k]:ends[k]]).tolist()).strip()
             if len(text) >= 200:
@@ -244,8 +250,11 @@ def bootstrap(nll_a, nll_b, bytes_a, bytes_b, reps, seed):
     n = len(nll_a)
     ln2 = math.log(2)
     point = nll_a.sum() / (ln2 * bytes_a.sum()) - nll_b.sum() / (ln2 * bytes_b.sum())
-    idx = rng.integers(0, n, (reps, n))
-    stats = nll_a[idx].sum(1) / (ln2 * bytes_a[idx].sum(1)) - nll_b[idx].sum(1) / (ln2 * bytes_b[idx].sum(1))
+    stats = []
+    for start in range(0, reps, 250):  # in blocks: one reps x documents index matrix and its four gathers are large
+        idx = rng.integers(0, n, (min(250, reps - start), n))
+        stats.append(nll_a[idx].sum(1) / (ln2 * bytes_a[idx].sum(1)) - nll_b[idx].sum(1) / (ln2 * bytes_b[idx].sum(1)))
+    stats = np.concatenate(stats)
     low, high = np.percentile(stats, [2.5, 97.5])
     p = min(1.0, 2 * min((stats <= 0).mean(), (stats >= 0).mean()))
     return point, low, high, p
@@ -297,8 +306,9 @@ def main():
     trained_on["B"] = obj_b.get("dataset") if isinstance(obj_b.get("dataset"), dict) else None
     del obj_b
     gc.collect()
-    # A's dataset on this machine (by its stored path, else datasets/<same name> with the same fingerprint)
-    dataset = args.dataset or tiny_gpt.resolve_dataset({"dataset": trained_on["A"]})
+    # A's dataset on this machine (by its stored path, else datasets/<same name> with the same fingerprint); B's
+    # when A's checkpoint records none
+    dataset = args.dataset or tiny_gpt.resolve_dataset({"dataset": trained_on["A"] or trained_on["B"]})
     if not os.path.isdir(dataset):
         p.error(f"--dataset not found: {dataset}")
     layout = {}
@@ -338,18 +348,19 @@ def main():
         raise SystemExit("No documents could be scored.")
     sources = sorted({r[0] for r in rows})
     print(f"\n{'documents':<14} {'n':>5} {'BPB A':>8} {'BPB B':>8} {'A - B':>9} {'95% interval':>21} {'p':>7}  A better on")
+    overall = None  # the first line's result (all documents): a source may itself be named "all"
     for label, sel in [("all", rows)] + [(s, [r for r in rows if r[0] == s]) for s in sources]:
         na, nbb = np.array([r[3] for r in sel]), np.array([r[4] for r in sel])
         ba, bb = np.array([r[5] for r in sel], dtype=float), np.array([r[6] for r in sel], dtype=float)
         point, low, high, pval = bootstrap(na, nbb, ba, bb, args.reps, args.seed)
+        if overall is None:
+            overall = (point, low, high, pval)
         bpb_a, bpb_b = na.sum() / (math.log(2) * ba.sum()), nbb.sum() / (math.log(2) * bb.sum())
         wins = int(((na / ba) < (nbb / bb)).sum())
         print(f"{label:<14} {len(sel):>5} {bpb_a:>8.4f} {bpb_b:>8.4f} {point:>+9.4f} [{low:>+9.4f}, {high:>+9.4f}] "
               f"{fmt_p(pval, args.reps):>7}  {wins}/{len(sel)} docs" + ("  (too few for a verdict)"
                                                                           if len(sel) < MIN_DOCS else ""))
-    point, low, high, pval = bootstrap(np.array([r[3] for r in rows]), np.array([r[4] for r in rows]),
-                                       np.array([r[5] for r in rows], dtype=float),
-                                       np.array([r[6] for r in rows], dtype=float), args.reps, args.seed)
+    point, low, high, pval = overall
     if len(rows) < MIN_DOCS:
         verdict = f"too few documents ({len(rows)}) for a verdict; use at least {MIN_DOCS}"
     elif unchecked and not args.allow_different_datasets:

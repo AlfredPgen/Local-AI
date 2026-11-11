@@ -49,10 +49,6 @@ sys.path.insert(0, HERE)
 import tiny_gpt  # noqa: E402
 
 
-def _hms(seconds):
-    seconds = int(max(seconds, 0))
-    return f"{seconds // 3600}:{seconds % 3600 // 60:02d}:{seconds % 60:02d}"
-
 TEMPLATE = "### Question:\n{prompt}\n\n### Answer:\n"
 
 
@@ -66,6 +62,8 @@ def read_jsonl(path, fields):
                 row = json.loads(line)
             except json.JSONDecodeError as exc:
                 raise SystemExit(f"{path}:{line_no}: invalid JSON ({exc})")
+            if not isinstance(row, dict):
+                raise SystemExit(f"{path}:{line_no}: expected a JSON object")
             missing = [f for f in fields if not isinstance(row.get(f), str) or not row[f].strip()]
             if missing:
                 raise SystemExit(f"{path}:{line_no}: missing text field(s) {missing}")
@@ -73,14 +71,6 @@ def read_jsonl(path, fields):
     if len(rows) < 2:
         raise SystemExit(f"{path}: need at least 2 examples")
     return rows
-
-
-def encode_pair(tok, prompt, response, ctx):
-    """(ids, number of prompt tokens, truncated?); the response ends with EOS so the
-    model learns to stop. If the pair is longer than the context, the question is
-    cut from the left (keeping the template's '### Answer:' next to the answer) and
-    then the end of the answer, so training always covers answer tokens."""
-    return pair_from_ids(tok, tok.encode(TEMPLATE.format(prompt=prompt.strip())), tok.encode(response.strip()), ctx)
 
 
 def encode_texts(tok, texts):
@@ -95,8 +85,12 @@ def encode_texts(tok, texts):
 
 
 def pair_from_ids(tok, question, response_ids, ctx):
-    """encode_pair from already tokenised parts: `question` is the template with
-    the prompt, `response_ids` the answer without its end token."""
+    """(ids, number of prompt tokens, truncated?) from already tokenised parts:
+    `question` is the template with the prompt, `response_ids` the answer without
+    its end token. The response ends with EOS so the model learns to stop. If the
+    pair is longer than the context, the question is cut from the left (keeping
+    the template's '### Answer:' next to the answer) and then the end of the
+    answer, so training always covers answer tokens."""
     bos = [tok.bos_id] if tok.bos_id >= 0 else []
     question = list(question)
     answer = list(response_ids) + ([tok.eos_id] if tok.eos_id >= 0 else [])
@@ -203,7 +197,8 @@ def save(model, tok, cfg, base_obj, path, info, history):
         "model_config": dataclasses.asdict(cfg), "model": tiny_gpt.cpu_state_dict(model),
         "tokenizer": {"proto": tok.proto, **tok.meta()}, "dataset": base_obj.get("dataset"),
         "step": base_obj.get("step"), "train_config": base_obj.get("train_config"),
-        "finetune": {**info, "history": history},
+        "finetune": {**info, "history": history,
+                     **({"previous": base_obj["finetune"]} if base_obj.get("finetune") else {})},
         "metrics": {"history": base_metrics.get("history", []), "best_val": base_metrics.get("best_val"),
                     "best_step": base_metrics.get("best_step"), "last_eval": None,
                     "base_last_eval": base_metrics.get("last_eval") or base_metrics.get("base_last_eval")},
@@ -218,12 +213,32 @@ def train(args):
     scaler = torch.amp.GradScaler(device.type) if need_scaler else None  # fp16 needs loss scaling
     model, tok, cfg, base_obj = tiny_gpt.load_for_inference(args.base, device, args.trust_checkpoint)
     # keep only what save() needs: the raw weights (and any optimizer state) would sit in RAM until the end
-    base_obj = {k: base_obj.get(k) for k in ("dataset", "step", "train_config", "metrics")}
+    base_obj = {k: base_obj.get(k) for k in ("dataset", "step", "train_config", "metrics", "finetune")}
     gc.collect()
     model.set_attention_impl(tiny_gpt.choose_attention(device, cfg, amp_dtype, "auto")[0])
     out_path = os.path.join(args.out_dir, args.name + ".pt")
     if os.path.exists(out_path) and not args.overwrite:
         raise SystemExit(f"{out_path} exists; choose a new --name or pass --overwrite.")
+    # each finished epoch but the last is kept in <name>_partial.pt, so an interruption loses at most one epoch;
+    # <name>.pt is written only by a finished run. The partial file is replaced by a rerun and removed at the end:
+    # without --overwrite only an interrupted fine-tune's own file (it records epochs_done), not a checkpoint that
+    # was given this name
+    partial_path = os.path.join(args.out_dir, args.name + "_partial.pt")
+    if os.path.normcase(os.path.abspath(args.base)) == os.path.normcase(os.path.abspath(partial_path)):
+        raise SystemExit(f"--base {args.base} is the epoch file of --name {args.name} (this run would replace and "
+                         "then delete its own base); choose another --name, or copy the file and start from the "
+                         "copy.")
+    if os.path.exists(partial_path) and not args.overwrite:
+        try:
+            # never with --trust-checkpoint: an epoch file written by save() loads safely, and a file the user did
+            # not name is not unpickled
+            old = tiny_gpt.safe_load(partial_path, False, mmap=True)
+            old = old.get("finetune") if isinstance(old, dict) else None
+        except (SystemExit, Exception):  # noqa: BLE001 - not readable: not known to be an epoch file
+            old = None
+        if not (isinstance(old, dict) and "epochs_done" in old):
+            raise SystemExit(f"{partial_path} exists and is not the epoch file of an interrupted fine-tune (this "
+                             "run would replace and then delete it); choose a new --name or pass --overwrite.")
     fields = ["prompt", "response"] if args.mode == "sft" else ["prompt", "chosen", "rejected"]
     rows = read_jsonl(args.data, fields)
     random.Random(args.seed).shuffle(rows)
@@ -278,11 +293,8 @@ def train(args):
               "the left, then the end of the answer")
 
     if args.mode == "dpo":
-        # The reference is the starting model and never changes: score every pair once with the model itself
-        # before its first update (log ref(c), log ref(r): two numbers per pair, exactly what a frozen copy would
-        # give), so no copy of the weights is kept and no reference forward runs per step.
+        # the reference is the starting model; score every pair once before the first update
         model.eval()
-        reference = model
         with torch.no_grad():
             for items in (train_items, val_items):
                 i = 0
@@ -292,8 +304,8 @@ def train(args):
                     try:
                         xc, yc = batch_tensors([c for c, *_ in chunk], device)
                         xr, yr = batch_tensors([r for _, r, *_ in chunk], device)
-                        rc = sequence_logp(reference, xc, yc, amp_dtype, device).tolist()
-                        rr = sequence_logp(reference, xr, yr, amp_dtype, device).tolist()
+                        rc = sequence_logp(model, xc, yc, amp_dtype, device).tolist()
+                        rr = sequence_logp(model, xr, yr, amp_dtype, device).tolist()
                     except RuntimeError as exc:
                         if not is_oom(exc) or mem["micro"] == 1:
                             raise
@@ -305,7 +317,6 @@ def train(args):
                         continue
                     items[i:i + len(chunk)] = [(c, r, a, b) for (c, r, *_), a, b in zip(chunk, rc, rr)]
                     i += len(chunk)
-        del reference
         model.train()
         free_memory(device)
     val_items.sort(key=item_length)  # held-out batches of similar length: less padding, same averages
@@ -380,7 +391,11 @@ def train(args):
         pairs = len(items)
         return total / max(units, 1), {k: v / max(pairs, 1) for k, v in extra.items()}
 
+    info = {"method": args.mode, "base": os.path.abspath(args.base), "data": os.path.abspath(args.data),
+            "examples": len(rows), "epochs": args.epochs, "lr": args.lr, "template": TEMPLATE,
+            **({"beta": args.beta} if args.mode == "dpo" else {})}
     history, step, t0 = [], 0, time.time()
+    epoch_files = {partial_path}  # plus the other names atomic_save used while <name>_partial.pt was locked
     val_loss, val_info = evaluate_items(val_items)
     print(f"epoch 0 | held-out loss {val_loss:.4f}" + "".join(f" | {k} {v:.3f}" for k, v in val_info.items()))
     t_train = last_beat = time.time()  # the rate excludes the initial evaluation
@@ -412,21 +427,28 @@ def train(args):
                 recent = running[-50:]
                 print(f"  ... step {step:,}/{total:,} | epoch {epoch} | train loss {sum(recent) / len(recent):.4f} "
                       f"(last {len(recent)} steps) | lr {schedule.lr_at(step):.2e} | {rate:.2f} s/step | "
-                      f"elapsed {_hms(now - t0)} | left {_hms(rate * (total - step))}", flush=True)
+                      f"elapsed {tiny_gpt.fmt_hms(now - t0)} | left {tiny_gpt.fmt_hms(rate * (total - step))}",
+                      flush=True)
                 last_beat = now
         val_loss, val_info = evaluate_items(val_items)
         history.append({"epoch": epoch, "step": step, "train_loss": sum(running) / len(running),
                         "val_loss": val_loss, **val_info})
         print(f"epoch {epoch} | train loss {history[-1]['train_loss']:.4f} | held-out loss {val_loss:.4f}"
               + "".join(f" | {k} {v:.3f}" for k, v in val_info.items()) + f" | {time.time() - t0:,.0f} s")
+        if epoch < args.epochs:
+            kept = save(model, tok, cfg, base_obj, partial_path, {**info, "epochs_done": epoch}, history)
+            epoch_files.add(kept)
+            print(f"saved {kept} (epoch {epoch} of {args.epochs}; a rerun starts again from the base)")
     prompt = val_rows[0]["prompt"]
     answer = answer_question(model, tok, prompt, device, amp_dtype, args.max_new_tokens)
     print(f"held-out question: {prompt}\nanswer: {answer}")
-    info = {"method": args.mode, "base": os.path.abspath(args.base), "data": os.path.abspath(args.data),
-            "examples": len(rows), "epochs": args.epochs, "lr": args.lr, "template": TEMPLATE,
-            **({"beta": args.beta} if args.mode == "dpo" else {})}
     saved = save(model, tok, cfg, base_obj, out_path, info, history)
     print(f"saved {saved}")
+    for path in sorted(epoch_files - {saved}):
+        try:
+            os.remove(path)
+        except OSError:
+            pass
     tiny_gpt.record_experiment(args.out_dir, {
         "event": f"fine-tune ({args.mode})", "name": args.name, "status": "completed", "checkpoint": saved,
         "notes": f"base {os.path.basename(args.base)}; {len(rows)} examples; held-out loss {val_loss:.4f}"
@@ -451,8 +473,10 @@ def ask(args):
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else list(argv)
     log = tiny_gpt._log_path_from(argv)  # understands both "--log-file PATH" and "--log-file=PATH"
-    tiny_gpt.start_log(log)
-    print(f"\n--- finetune {tiny_gpt.now_iso()} | {' '.join(argv)} ---")
+    # --help is no run: its usage text is printed, not written to the log (argument errors are still logged)
+    if not any(a in ("-h", "--help") for a in argv):
+        tiny_gpt.start_log(log)
+        print(f"\n--- finetune {tiny_gpt.now_iso()} | {' '.join(argv)} ---")
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="mode", required=True)
     for mode in ("sft", "dpo"):
