@@ -230,9 +230,11 @@ def train(args):
                          "copy.")
     if os.path.exists(partial_path) and not args.overwrite:
         try:
-            old = tiny_gpt.safe_load(partial_path, args.trust_checkpoint, mmap=True)
+            # never with --trust-checkpoint: an epoch file written by save() loads safely, and a file the user did
+            # not name is not unpickled
+            old = tiny_gpt.safe_load(partial_path, False, mmap=True)
             old = old.get("finetune") if isinstance(old, dict) else None
-        except SystemExit:  # not readable: not known to be an epoch file
+        except (SystemExit, Exception):  # noqa: BLE001 - not readable: not known to be an epoch file
             old = None
         if not (isinstance(old, dict) and "epochs_done" in old):
             raise SystemExit(f"{partial_path} exists and is not the epoch file of an interrupted fine-tune (this "

@@ -360,6 +360,30 @@ class Audit2FinetuneTools(unittest.TestCase):
         self.assertEqual(record["base"], os.path.abspath(partial))
         self.assertEqual(record["previous"]["epochs_done"], 1)
 
+    def test_finetune_partial_check_reads_the_file_safely(self):
+        """F163: the start-up check of <name>_partial.pt ends with its own message when that file is unreadable,
+        also with --trust-checkpoint: a file the user did not name is never fully unpickled."""
+        folder = os.path.join(self.tmp, "unreadable_partial")
+        os.makedirs(folder)
+        base = self.finetune_base("ft_base_unreadable.pt")
+        kept = os.path.join(folder, "G_partial.pt")
+        with open(kept, "wb") as f:
+            f.write(b"not a checkpoint" * 100)
+        real, loads = torch.load, []
+
+        def load(f, *a, **k):
+            loads.append((os.path.basename(f) if isinstance(f, str) else None, k.get("weights_only")))
+            return real(f, *a, **k)
+        for extra in ((), ("--trust-checkpoint",)):
+            with unittest.mock.patch.object(torch, "load", load), self.assertRaises(SystemExit) as caught:
+                self.finetune(folder, "sft", base, "G", extra=extra)
+            message = str(caught.exception.code)
+            self.assertIn("G_partial.pt", message)
+            self.assertIn("not the epoch file", message)
+            with open(kept, "rb") as f:
+                self.assertEqual(f.read(), b"not a checkpoint" * 100)
+        self.assertEqual({safe for name, safe in loads if name == "G_partial.pt"}, {True})
+
     def test_finetune_help_is_not_written_to_the_log(self):
         """F323 (finetune half): --help prints the usage text and neither creates nor appends to the log; an
         argument error is still logged."""
