@@ -528,6 +528,56 @@ class Audit2DocsYoutubeConvert(unittest.TestCase):
             self.assertEqual(report.count("(fast layout)"), 1 if mode == "fast" else 0, report)  # the PDF's row only
         self.assertIn("Genetic drift in small populations", want["fast"])
 
+    def test_pdf_layout_modes_share_the_heavy_page_and_ocr_paths(self):
+        """F031 (guard): a plot-heavy page is read as plain text and a scanned page by --ocr in the same way with
+        --pdf-layout model and fast; only the ordinary pages go through pymupdf4llm."""
+        import argparse
+        import contextlib
+        import io
+        import pymupdf
+        import pymupdf4llm
+        import convert_to_markdown as conv
+        folder = os.path.join(self.tmp, "f031pages")
+        os.makedirs(folder)
+        path = os.path.join(folder, "mixed.pdf")
+        pdf = pymupdf.open()
+        page = pdf.new_page()  # 1: a plot of 600 shapes with a long caption
+        for k in range(6):
+            page.insert_text((72, 40 + 14 * k), f"Figure {k + 1}. Posterior draws of the heritability, sample {k + 1}.")
+        for k in range(600):
+            page.draw_rect(pymupdf.Rect(20 + (k % 40) * 13, 200 + (k // 40) * 13, 30 + (k % 40) * 13,
+                                        210 + (k // 40) * 13), fill=(0.2, 0.4, 0.8))
+        page = pdf.new_page()  # 2: an ordinary page of text
+        for k in range(12):
+            page.insert_text((72, 80 + 16 * k), f"Sentence {k + 1}: linkage disequilibrium decays with recombination.")
+        page = pdf.new_page()  # 3: a scan (no text layer, one image over the whole page)
+        pixmap = pymupdf.Pixmap(pymupdf.csRGB, pymupdf.IRect(0, 0, 40, 40))
+        pixmap.clear_with(200)
+        page.insert_image(page.rect, pixmap=pixmap)
+        pdf.save(path)
+        with pymupdf.open(path) as saved:
+            self.assertEqual([conv._heavy_page(p) for p in saved], [True, False, False])
+            caption = saved[0].get_text("text").strip()
+        read = "Text of the scanned page as the OCR reads it. " * 8
+        before, got = pymupdf4llm._use_layout, {}
+        try:
+            with unittest.mock.patch.object(conv, "find_tessdata", lambda: folder), \
+                    unittest.mock.patch.object(conv, "_ocr_page", lambda page, tessdata, dpi=300: read.strip()):
+                for mode in ("model", "fast"):
+                    info, progress = {}, io.StringIO()
+                    with contextlib.redirect_stderr(progress):
+                        text = conv.convert_pdf(path, argparse.Namespace(pdf_layout=mode, ocr=True), info=info)
+                    got[mode] = (text, info, progress.getvalue())
+                    self.assertEqual(pymupdf4llm._use_layout, before and mode == "model", mode)
+        finally:
+            pymupdf4llm.use_layout(before)
+        for mode, (text, info, progress) in got.items():
+            self.assertEqual(info, {"pages": 3, "scan_pages": 1, "ocr_pages": 1}, mode)
+            self.assertTrue(text.startswith(caption + "\n\n"), (mode, text[:200]))
+            self.assertTrue(text.endswith("\n\n" + read.strip()), (mode, text[-200:]))
+            self.assertIn("Sentence 12: linkage disequilibrium decays with recombination.", text, mode)
+            self.assertEqual(progress, "  OCR mixed.pdf: 1 of 1 scanned pages\n", mode)
+
 
 if __name__ == "__main__":
     unittest.main()
