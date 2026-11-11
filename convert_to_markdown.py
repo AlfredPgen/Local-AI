@@ -212,7 +212,7 @@ OCR_SECONDS_PER_PAGE = 15   # --ocr: a child process gets at least this long per
 # 3 cores; --pdf-layout fast needs about a quarter of that CPU time)
 PDF_SECONDS_PER_PAGE = 5
 _PDF_LAYOUT = []  # [pymupdf4llm's layout switch as the first convert_pdf of this process found it]
-_PICTURE_TEXT =re.compile(r"(?:<!--|-----) Start of picture text (?:-->|-----).*?(?:<!--|-----) End of picture "
+_PICTURE_TEXT = re.compile(r"(?:<!--|-----) Start of picture text (?:-->|-----).*?(?:<!--|-----) End of picture "
                            r"text (?:-->|-----)\n?", re.S)
 # pymupdf4llm writes each image link on a line of its own ('\n![](path)\n'): matching the whole line lets
 # the path run to the last ')', so names like 'paper (1).pdf-0001-03.png' stay whole
