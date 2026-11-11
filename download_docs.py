@@ -29,9 +29,10 @@ What each kind fetches:
   site    a documentation site, crawled breadth-first from the URL: same host, under the URL's
           path prefix only (give the folder that holds the manual, e.g.
           https://www.cog-genomics.org/plink/2.0/), robots.txt obeyed, at most --max-pages
-          pages. Linked PDFs inside the prefix are converted too and plain-text pages kept as
-          .txt; other files are skipped. A start page that redirects to a folder above its own
-          (a removed manual sent to the home page) is an error, not a crawl of the whole site.
+          pages. Linked PDFs inside the prefix are converted too; the start page and
+          extensionless plain-text pages are kept as .txt; other files (linked .txt and .md
+          files too) are skipped. A start page that redirects to a folder above its own (a
+          removed manual sent to the home page) is an error, not a crawl of the whole site.
   rtd     a Read the Docs project (https://PROJECT.readthedocs.io/en/latest/): the project's HTML
           zip (/_/downloads/<lang>/<version>/htmlzip/), at most --max-pages pages of it; if the
           project offers none, the site is crawled as above.
@@ -186,11 +187,13 @@ _AI_TRAIN_NO = re.compile(r"^\s*content-signal\s*:.*\bai-train\s*=\s*no\b", re.I
 
 
 def parse_robots(rp, text):
-    """robotparser.parse with three fixes: a rule 'Disallow: //' (paths starting
+    """robotparser.parse with four fixes: a rule 'Disallow: //' (paths starting
     with '//') is not read as 'disallow everything'; '*' and '$' in rules work as
     wildcards (as Google and Bing read them) instead of literally, matched against
     the rule as written ('Disallow: /*?' keeps its '?', which robotparser's own
-    normalising drops); and a fractional Crawl-delay (2.5) counts, rounded up."""
+    normalising drops); a fractional Crawl-delay (2.5) counts, rounded up; and the
+    longest matching rule wins, Allow on a tie (RFC 9309), not the first one in
+    the file ('Allow: /' above 'Disallow: /private/' still refuses /private/)."""
     lines, wild = [], {}
     for line in text.splitlines():
         line = _ROBOTS_DOUBLE_SLASH.sub(r"\1//*", line)
@@ -205,6 +208,7 @@ def parse_robots(rp, text):
         lines.append(line)
     rp.parse(lines)
     for entry in rp.entries + ([rp.default_entry] if rp.default_entry else []):
+        length = {}  # of each rule as written (never of the placeholder path of a wildcard rule)
         for rule in entry.rulelines:
             raw = wild.get(rule.path)
             if raw is not None:
@@ -213,6 +217,12 @@ def parse_robots(rp, text):
                 rx = re.compile("^" + ".*".join(re.escape(p) for p in raw.rstrip("$").split("*"))
                                 + ("$" if anchored else ""))
                 rule.applies_to = lambda filename, rx=rx: bool(rx.match(urllib.parse.unquote(filename)))
+                length[id(rule)] = len(raw)
+            else:
+                length[id(rule)] = len(urllib.parse.unquote(rule.path))
+        # robotparser takes the first rule that matches: longest first, Allow before Disallow at equal length
+        # (an empty 'Disallow:' is an allow rule of length 0 and goes last)
+        entry.rulelines.sort(key=lambda rule: (-length[id(rule)], not rule.allowance))
 
 
 class Fetched:
@@ -363,7 +373,8 @@ class Http:
     def allowed(self, url):
         """True if robots.txt lets this script fetch url (fetched once per host:
         401/403 forbid everything and other 4xx allow everything, as
-        urllib.robotparser does; Crawl-delay is honoured, up to 60 s)."""
+        urllib.robotparser does, except 429, which is raised like a 5xx and not
+        remembered; Crawl-delay is honoured, up to 60 s)."""
         parts = urllib.parse.urlsplit(url)
         key = f"{parts.scheme}://{parts.netloc}"
         rp = self.robots.get(key)
@@ -375,7 +386,7 @@ class Http:
                 if exc.code in (401, 403):
                     rp.disallow_all = True
                     rp.refused = exc.code
-                elif exc.code < 500:
+                elif exc.code < 500 and exc.code != 429:
                     rp.allow_all = True
                 else:
                     raise
@@ -738,7 +749,9 @@ def check_pdf_route():
 def _script(mark):
     def sub(m):
         inner = " ".join(re.sub(r"<[^>]*>", "", m.group(1)).split())
-        return f"{mark}{inner}" if len(inner) <= 1 else f"{mark}{{{inner}}}" if inner else ""
+        if not inner:
+            return ""
+        return f"{mark}{inner}" if len(inner) == 1 else f"{mark}{{{inner}}}"
     return sub
 
 
@@ -1038,7 +1051,7 @@ _RD_NAME = re.compile(r"[A-Za-z][A-Za-z0-9]*")
 _RD_RAW = {"eqn", "deqn", "Sexpr", "newcommand", "renewcommand", "out"}  # arguments kept as source text
 _RD_DROP = {"name", "alias", "docType", "keyword", "concept", "encoding", "Rdversion", "RdOpts", "Sexpr",
             "newcommand", "renewcommand", "dontshow", "testonly", "figure", "author", "references", "title",
-            "concept", "keyword", "md"}
+            "md"}
 _RD_SECTIONS = {"description": "Description", "usage": "Usage", "format": "Format", "arguments": "Arguments",
                 "details": "Details", "value": "Value", "note": "Note", "source": "Source", "seealso": "See also",
                 "examples": "Examples", "slot": "Slots"}
@@ -1121,7 +1134,7 @@ def _rd_parse(text, i=0, nested=False):
     return nodes, i
 
 
-def _rd_list(nodes, kind, mode):
+def _rd_list(nodes, kind):
     """\\itemize / \\enumerate / \\describe (and \\arguments, kind 'arguments') as a Markdown list."""
     items, cur = [], None
     for node in nodes:
@@ -1209,7 +1222,7 @@ def _rd_render(nodes, mode="text"):
         elif name == "tab":
             out.append("\x1f" if mode == "table" else "  ")
         elif name in ("itemize", "enumerate", "describe"):
-            out.append(_rd_list(args[0] if args and isinstance(args[0], list) else [], name, mode))
+            out.append(_rd_list(args[0] if args and isinstance(args[0], list) else [], name))
         elif name == "tabular":
             out.append(_rd_table(args[1]) if len(args) > 1 and isinstance(args[1], list) else "")
         elif name == "preformatted":
@@ -1224,6 +1237,8 @@ def _rd_render(nodes, mode="text"):
             out.append(arg(0))
         elif name in _RD_DROP:
             continue
+        elif mode == "code" and not args:  # no Rd macro: an escape inside an R string ("\t", "\n", "\d"), as written
+            out.append("\\" + name)
         else:  # \link, \pkg, \var, \acronym, \method, \S4method, \enc, \url, unknown macros: their first argument
             out.append(arg(0))
     return "".join(out)
@@ -1260,7 +1275,7 @@ def rd_markdown(text):
                 if code.strip():
                     parts.append(f"## {_RD_SECTIONS[name]}\n\n" + ctm._fence(code, "r"))
             elif name == "arguments":
-                text_ = _rd_list(body, "arguments", "text").strip()
+                text_ = _rd_list(body, "arguments").strip()
                 if text_:
                     parts.append(f"## Arguments\n\n{text_}")
             else:
@@ -1800,7 +1815,7 @@ def repo_document(ctx, rel, data, action):
 
 
 def github_api_files(ctx, owner, repo, ref):
-    """(entries, reader, notes) from the GitHub API's file list and raw.githubusercontent.com."""
+    """(entries, reader, branch, notes) from the GitHub API's file list and raw.githubusercontent.com."""
     api = f"https://api.github.com/repos/{owner}/{repo}"
     headers = {"Accept": "application/vnd.github+json"}
     got = ctx.http.get(api, 5 << 20, headers=headers)
@@ -1856,13 +1871,13 @@ def do_github(ctx, row, writer):
             # a docs generator's config: its HTML output (pkgdown, mkdocs, Sphinx, Jekyll ...) duplicates sources
             # that are taken anyway
             html_ok = not any(_GENERATOR_RE.search(n) for n in names)
-            theme_dirs = {n.rsplit("/", 1)[0] + "/" for n in names if n.endswith(("mkdocs_theme.yml", "theme.toml",
-                                                                                   "_config.yml"))}
+            theme_dirs = {n.rsplit("/", 1)[0] + "/" for n in names
+                          if "/" in n and n.endswith(("mkdocs_theme.yml", "theme.toml", "_config.yml"))}
             chosen = []
             for rel, size in entries:
                 if sub and not rel.startswith(sub.rstrip("/") + "/"):
                     continue
-                if any(rel.lower().startswith(d) for d in theme_dirs if d != "/") and rel.lower().endswith(
+                if any(rel.lower().startswith(d) for d in theme_dirs) and rel.lower().endswith(
                         (".html", ".htm")):
                     continue
                 action = repo_action(rel, size, html_ok)
@@ -2340,7 +2355,7 @@ def run_row(ctx, row, label):
     return status, files, chars
 
 
-def print_list(rows, manifest, labels):
+def print_list(rows, manifest):
     print(f"{'tool':<16} {'kind':<6} {'files':>6} {'chars':>12}  {'status':<10} url")
     for row in rows:
         entry = manifest.get((row["tool"], row["kind"], row["url"])) or {}
@@ -2413,7 +2428,7 @@ def main(argv=None):
     manifest_path = os.path.join(args.out, "_manifest.tsv")
     if args.list:
         manifest = read_manifest(manifest_path)
-        print_list(rows, manifest, row_labels(rows, manifest))
+        print_list(rows, manifest)
         return
     PANDOC["path"] = ax.pandoc_path()
     if not PANDOC["path"]:

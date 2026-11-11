@@ -39,16 +39,23 @@ records which input made each output, so a rerun keeps every name, never takes
 an earlier output for a new input and never converts its own outputs. Each PDF
 is converted in its own process, so a PDF that crashes MuPDF or hangs (--timeout)
 costs only that file; the report and manifest are saved as the batch goes. Starting
-that process costs about 1.6 s per PDF (loading pymupdf4llm), about 1.2 hours over
-2,760 PDFs; --workers N spreads it over N processes.
+that process costs about 1.8 s per PDF (loading pymupdf4llm), about 1.4 hours over
+2,760 PDFs; --workers N spreads it over N processes. The timings here are for
+--pdf-layout model (the default): pymupdf4llm's layout model uses about 3 cores per
+process, so --workers above a third of the cores only adds contention. --pdf-layout
+fast reads the pages without the model (about a quarter of the CPU time; headings,
+tables and figure text come out differently, so do not mix the two in one corpus).
 """
 
 import argparse
 import bisect
+import collections
 import csv
+import functools
 import gzip
 import html.parser
 import io
+import itertools
 import json
 import math
 import os
@@ -155,7 +162,8 @@ def text_encoding(path):
             return "utf-16-be"
     decoded = codecs.getincrementaldecoder("utf-8")(errors="replace").decode(sample, final=False)  # cut tail ignored
     invalid = decoded.count("\ufffd") - sample.count(b"\xef\xbf\xbd")
-    valid = sum(1 for ch in decoded if ord(ch) > 127) - decoded.count("\ufffd")
+    # the non-ASCII characters, counted in C: this runs on every .txt and .gz while a --by-type batch is planned
+    valid = len(decoded) - len(decoded.encode("ascii", "ignore")) - decoded.count("\ufffd")
     return "cp1252" if invalid > 0 and invalid > valid else "utf-8-sig"
 
 
@@ -181,8 +189,9 @@ def inner_ext(path):
 # PDF
 # ---------------------------------------------------------------------------
 # pymupdf4llm's layout analysis slows down with the number of vector shapes on a page
-# (about 30-40 s for a plot of a few hundred to thousands of paths). Such pages are read as
-# plain text; get_cdrawings() also sees shapes inside embedded figures (Form XObjects).
+# (about 30-40 s for a plot of a few hundred to thousands of paths, with --pdf-layout model).
+# Such pages are read as plain text; get_cdrawings() also sees shapes inside embedded figures
+# (Form XObjects).
 HEAVY_PDF_PAGE_DRAWINGS = 500
 HEAVY_PDF_PAGE_BYTES = 200_000
 
@@ -199,7 +208,10 @@ def _heavy_page(page):
 SCAN_CHARS_PER_PAGE = 200   # a page of text has 2,000-4,000 characters; a page with fewer may be a scan
 SCAN_IMAGE_COVER = 0.8      # ... when images cover at least this share of it (a scan fills the page)
 OCR_SECONDS_PER_PAGE = 15   # --ocr: a child process gets at least this long per page before it is stopped
-PDF_SECONDS_PER_PAGE = 5    # without --ocr (layout analysis of a page takes well under a second on a CPU)
+# without --ocr (layout analysis of a page takes well under a second on a CPU with --pdf-layout model, on about
+# 3 cores; --pdf-layout fast needs about a quarter of that CPU time)
+PDF_SECONDS_PER_PAGE = 5
+_PDF_LAYOUT = []  # [pymupdf4llm's layout switch as the first convert_pdf of this process found it]
 _PICTURE_TEXT = re.compile(r"(?:<!--|-----) Start of picture text (?:-->|-----).*?(?:<!--|-----) End of picture "
                            r"text (?:-->|-----)\n?", re.S)
 # pymupdf4llm writes each image link on a line of its own ('\n![](path)\n'): matching the whole line lets
@@ -249,7 +261,17 @@ def convert_pdf(path, args, image_dir=None, info=None):
         import pymupdf4llm
     except ImportError:
         raise RuntimeError("PDF conversion needs pymupdf4llm: python -m pip install pymupdf4llm")
-    kwargs = {"use_ocr": False}  # OCR only when --ocr asks for it (else it runs whenever Tesseract is on PATH)
+    if not _PDF_LAYOUT:
+        _PDF_LAYOUT.append(getattr(pymupdf4llm, "_use_layout", False))
+    if getattr(args, "pdf_layout", "model") == "fast":
+        pymupdf4llm.use_layout(False)  # pymupdf4llm's switch is one per process: off until a call asks for the model
+        kwargs = {}  # no use_ocr: without the layout model there is no OCR, and the argument is refused with a warning
+    else:
+        if getattr(pymupdf4llm, "_use_layout", False) != _PDF_LAYOUT[0]:
+            # a fast conversion earlier in this process switched the model off (not on the command line, where
+            # every PDF has a process of its own): back on only now, because that loads the model again
+            pymupdf4llm.use_layout(_PDF_LAYOUT[0])
+        kwargs = {"use_ocr": False}  # OCR only when --ocr asks for it (else it runs whenever Tesseract is on PATH)
     if getattr(args, "extract_images", False):
         if image_dir is None:
             folder = getattr(args, "out", None) or os.path.dirname(os.path.abspath(path))
@@ -321,25 +343,24 @@ def _split_page_number(s):
     return s.strip(" |·•-"), None
 
 
-def _stepping(pairs, pages):
+def _offset_counts(pairs):
+    """{number - page index: how many of the (page index, number) pairs have it}."""
+    return collections.Counter(number - page for page, number in pairs)
+
+
+def _stepping(pairs):
     """True if the numbers step with the page index like page numbers: one
     (number - page index) offset accounts for most occurrences."""
     if len(pairs) < 3:
         return False
-    offsets = {}
-    for page, number in pairs:
-        offsets[number - page] = offsets.get(number - page, 0) + 1
-    return max(offsets.values()) >= max(3, 0.6 * len(pairs))
+    return max(_offset_counts(pairs).values()) >= max(3, 0.6 * len(pairs))
 
 
 def _step_offsets(pairs, n_pages=3):
     """{number - page index} offsets shared by 3 or more (page, number) pairs (every
     page of a shorter document): the numbering a run of page labels follows ('ii',
     'iii', 'iv' or '3 of 9', '4 of 9')."""
-    offsets = {}
-    for page, number in pairs:
-        offsets[number - page] = offsets.get(number - page, 0) + 1
-    return {k for k, n in offsets.items() if n >= min(3, max(n_pages, 2))}
+    return {k for k, n in _offset_counts(pairs).items() if n >= min(3, max(n_pages, 2))}
 
 
 def _page_label(plain):
@@ -388,10 +409,8 @@ def strip_page_furniture(pages, edge=4):
             text, number = _split_page_number(_normal(raw))
             if number is not None:
                 numbered.setdefault(text, []).append((page, number))
-    stepping_text = {t for t, pairs in numbered.items() if _stepping(pairs, len(pages))}
-    bare_offsets = {}
-    for page, number in bare:
-        bare_offsets[number - page] = bare_offsets.get(number - page, 0) + 1
+    stepping_text = {t for t, pairs in numbered.items() if _stepping(pairs)}
+    bare_offsets = _offset_counts(bare)
     page_offsets = set()
     if bare_offsets:
         best = max(bare_offsets, key=bare_offsets.get)
@@ -847,7 +866,9 @@ def _neglog10(text):
     value = float(text)
     if value > 0:
         return -math.log10(value)
-    if value == 0:  # underflowed: the strongest hits ('0' in PLINK output), as in _gwas_fast
+    # underflowed: the strongest hits ('0' in PLINK output). Only this slow reader can do it: the fast (pyarrow)
+    # reader gets floats, so it prints '< 1e-300' for anything below about 1e-308
+    if value == 0:
         if "e" in text.lower():
             from decimal import Decimal, InvalidOperation
             try:
@@ -869,14 +890,28 @@ def _fmt_p(neglog):
     return f"{mantissa:.2f}e{exponent:+03d}"
 
 
+def _lambda_gc(neglogs):
+    """Genomic inflation factor from -log10 p values (capped at 300): the median
+    chi-square (1 df) / 0.4549. chi2.isf is monotone, so the median is taken
+    first and only the one or two middle values are converted (converting every
+    variant took about 95 % of the time of a GWAS summary)."""
+    import numpy as np
+    from scipy.stats import chi2 as chi2_dist
+    count = len(neglogs)
+    if not count:
+        return float("nan")
+    middle = [(count - 1) // 2, count // 2]  # the same index twice for an odd count
+    mids = np.partition(neglogs, middle)[middle]
+    return float(np.mean(chi2_dist.isf(np.power(10.0, -mids), 1)) / 0.4549)
+
+
 def _gwas_fast(path, header, delim, cols, neglog):
     """pyarrow's multi-threaded C++ CSV reader (gzip/bgzip handled natively) plus
-    vectorised statistics: a few seconds for a 500 MB compressed file."""
+    vectorised statistics: about a second per million variants."""
     import numpy as np
     import pyarrow as pa
     import pyarrow.compute as pc
     import pyarrow.csv as pacsv
-    from scipy.stats import chi2 as chi2_dist
     names = {k: header[i].strip() for k, i in cols.items()}
     strings = {names[k]: pa.string() for k in ("chr", "snp", "allele") if k in names}
     reader = pacsv.open_csv(
@@ -885,39 +920,35 @@ def _gwas_fast(path, header, delim, cols, neglog):
         convert_options=pacsv.ConvertOptions(
             include_columns=list(dict.fromkeys(names.values())), null_values=["NA", "nan", "NaN", "", ".", "-"],
             column_types={**strings, names["p"]: pa.float64(), names["pos"]: pa.float64()}))
-    n, chisq, top, per_chr = 0, [], [], {}
+    n, capped, top, per_chr = 0, [], [], {}
     for batch in reader:
         pv = batch.column(names["p"]).to_numpy(zero_copy_only=False).astype(float)
         with np.errstate(divide="ignore", invalid="ignore"):
             nl = pv if neglog else np.where(pv > 0, -np.log10(pv), np.where(pv == 0, np.inf, np.nan))
-        chrom = pc.fill_null(pc.replace_substring(batch.column(names["chr"]), "chr", ""), "?").to_numpy(
-            zero_copy_only=False)
+        chrom = pc.fill_null(pc.replace_substring(batch.column(names["chr"]), "chr", ""), "?")  # before the filter
         pos = batch.column(names["pos"]).to_numpy(zero_copy_only=False)
         ok = ~np.isnan(nl) & (nl >= 0) & np.isfinite(pos)
         n += int(ok.sum())
-        p = np.power(10.0, -np.minimum(nl[ok], 300.0))
-        chisq.append(chi2_dist.isf(p, 1).astype(np.float32))
-        values, counts = np.unique(chrom[ok], return_counts=True)
-        for v, c in zip(values, counts):
-            per_chr[v] = per_chr.get(v, 0) + int(c)
+        capped.append(np.minimum(nl[ok], 300.0))
+        for found in pc.value_counts(chrom.filter(pa.array(ok))).to_pylist():
+            per_chr[found["values"]] = per_chr.get(found["values"], 0) + found["counts"]
         sig = np.flatnonzero(ok & (nl > -math.log10(5e-8)))
-        if len(sig):
-            snps = batch.column(names["snp"]).to_pylist() if "snp" in names else None
-            betas = batch.column(names["beta"]).to_pylist() if "beta" in names else None
-            alleles = batch.column(names["allele"]).to_pylist() if "allele" in names else None
-            for i in sig:
-                top.append((float(nl[i]), chrom[i], int(pos[i]), snps[i] if snps else f"{chrom[i]}:{int(pos[i])}",
-                            betas[i] if betas else "?", alleles[i] if alleles else None))
-    all_chi = np.concatenate(chisq) if chisq else np.zeros(0)
-    lam = float(np.median(all_chi) / 0.4549) if len(all_chi) else float("nan")
-    return n, top, per_chr, lam
+        if len(sig):  # only the significant rows become Python objects, not the whole 64 MB block
+            rows = pa.array(sig)
+            chroms = chrom.take(rows).to_pylist()
+            snps = batch.column(names["snp"]).take(rows).to_pylist() if "snp" in names else None
+            betas = batch.column(names["beta"]).take(rows).to_pylist() if "beta" in names else None
+            alleles = batch.column(names["allele"]).take(rows).to_pylist() if "allele" in names else None
+            for k, i in enumerate(sig):
+                top.append((float(nl[i]), chroms[k], int(pos[i]), snps[k] if snps else f"{chroms[k]}:{int(pos[i])}",
+                            betas[k] if betas else "?", alleles[k] if alleles else None))
+    return n, top, per_chr, _lambda_gc(np.concatenate(capped) if capped else np.zeros(0))
 
 
 def _gwas_slow(path, delim, cols, neglog):
     """Forgiving line-by-line reader: ragged rows, odd missing-value codes, runs of spaces."""
     import array
     import numpy as np
-    from scipy.stats import chi2 as chi2_dist
     n, top, per_chr, neglogs = 0, [], {}, array.array("d")
     decimal_comma = delim == ";"  # EU-locale CSV: '0,5' means 0.5
     with open_text(path) as handle:
@@ -951,9 +982,7 @@ def _gwas_slow(path, delim, cols, neglog):
                 beta = field("beta") if "beta" in cols and cols["beta"] < len(row) else "?"
                 allele = field("allele") if "allele" in cols and cols["allele"] < len(row) else None
                 top.append((nl, chrom, pos, snp, beta, allele))
-    values = np.frombuffer(neglogs, dtype=np.float64)
-    lam = float(np.median(chi2_dist.isf(np.power(10.0, -values), 1)) / 0.4549) if len(values) else float("nan")
-    return n, top, per_chr, lam
+    return n, top, per_chr, _lambda_gc(np.frombuffer(neglogs, dtype=np.float64))
 
 
 def convert_gwas(path, args, header, delim, cols):
@@ -1009,23 +1038,37 @@ def _gz_size(path, limit):
     return size
 
 
-def convert_table_or_text(path, args):
-    ext = inner_ext(path)
-    gz = path.lower().endswith(".gz")
-    if gz and ext in NOT_TEXT_GZ:
-        raise RuntimeError(f"not converted: a compressed {ext} file is data, not text")
+def _text_sample(path, args):
+    """What decides how a text file is converted, from its first 20 lines: (the lines,
+    the delimiter of the first one, its fields and their GWAS columns when it is a
+    header of summary statistics, otherwise None and None)."""
     with open_text(path) as handle:
         # at most 1 MB per line: a huge file without newlines is not read whole here (the size check refuses it)
         sample = [line for line in (handle.readline(1 << 20) for _ in range(20)) if line]
     first = sample[0] if sample else ""
     delim = sniff_delimiter(first)
-    if not args.no_gwas:
+    if not getattr(args, "no_gwas", False):
         header = next(csv.reader([first], delimiter=delim)) if delim else first.split()
         cols = gwas_columns(header)
         if cols and (delim or len(header) >= 3):
-            return convert_gwas(path, args, header, delim, cols), "gwas"
-    # commas in a .txt are nearly always prose; a .txt counts as a table only when consistently tab-separated
-    if ext in (".csv", ".tsv", ".tab") or (delim == "\t" and _looks_tabular(sample, "\t")):
+            return sample, delim, header, cols
+    return sample, delim, None, None
+
+
+def _tab_table(sample, delim):
+    """Commas in a .txt are nearly always prose; a .txt counts as a table only when consistently tab-separated."""
+    return delim == "\t" and _looks_tabular(sample, "\t")
+
+
+def convert_table_or_text(path, args):
+    ext = inner_ext(path)
+    gz = path.lower().endswith(".gz")
+    if gz and ext in NOT_TEXT_GZ:
+        raise RuntimeError(f"not converted: a compressed {ext} file is data, not text")
+    sample, delim, header, cols = _text_sample(path, args)
+    if cols:
+        return convert_gwas(path, args, header, delim, cols), "gwas"
+    if ext in (".csv", ".tsv", ".tab") or _tab_table(sample, delim):
         delim = delim or ("\t" if ext in (".tsv", ".tab") else ",")
         rows, total = [], 0
         with open_text(path) as handle:
@@ -1157,25 +1200,20 @@ def parse_args():
                         f"--workers > 1); a PDF gets at least {PDF_SECONDS_PER_PAGE} s per page "
                         f"({OCR_SECONDS_PER_PAGE} s with --ocr)")
     p.add_argument("--target", help=argparse.SUPPRESS)
-    p.add_argument("--image-dir", help=argparse.SUPPRESS)
     p.add_argument("--overwrite", action="store_true", help="replace existing .md outputs")
     p.add_argument("--max-rows", type=int, default=200, help="table rows kept per table/sheet")
     p.add_argument("--max-cols", type=int, default=30,
                    help=".csv/.tsv/.xlsx: table columns kept (a wide matrix would be megabytes of numbers)")
     p.add_argument("--no-gwas", action="store_true", help="treat summary-statistics files as plain tables")
     p.add_argument("--extract-images", action="store_true", help="PDF only: also save embedded images")
+    p.add_argument("--pdf-layout", choices=("model", "fast"), default="model",
+                   help="PDF only: model (default) reads pages with pymupdf4llm's layout model, about 3 cores per "
+                        "process; fast reads them without it (about a quarter of the CPU time; headings, tables "
+                        "and figure text differ, so keep one mode per corpus)")
     p.add_argument("--ocr", action="store_true",
                    help="scanned PDF pages (no text layer, page covered by an image): read them with Tesseract OCR "
                         "(slow: seconds per page); other pages keep their text layer")
-    # options of the old pdf_to_markdown.py
-    p.add_argument("--input-folder", "-i", help=argparse.SUPPRESS)
-    p.add_argument("--input-name", "-n", help=argparse.SUPPRESS)
-    p.add_argument("--output-folder", "-o", help=argparse.SUPPRESS)
-    p.add_argument("--output-name", "-O", help=argparse.SUPPRESS)
     args = p.parse_args()
-    if args.input_name:
-        args.input = os.path.join(args.input_folder or ".", args.input_name)
-        args.out = args.out or args.output_folder
     if not args.input:
         p.error("give a file or folder to convert")
     if not os.path.exists(args.input):
@@ -1191,7 +1229,10 @@ def parse_args():
     return args
 
 
-def pdf_pages(path):
+@functools.lru_cache(maxsize=None)
+def page_count(path):
+    """Pages of a PDF, 0 if it cannot be opened. Remembered: a PDF is opened once
+    for its --by-type folder, its candidate names and its time limit."""
     try:
         import pymupdf
         with pymupdf.open(path) as document:
@@ -1200,7 +1241,26 @@ def pdf_pages(path):
         return 0
 
 
-def plan_target(path, args, n_files):
+def _sniffed_type(path):
+    """True for the inputs whose --by-type folder depends on their first lines: a
+    .txt, and a .gz of anything but .csv/.tsv/.tab."""
+    return os.path.splitext(path)[1].lower() in (".txt", ".gz") and inner_ext(path) not in (".csv", ".tsv", ".tab")
+
+
+def _table_text(path, args):
+    """True if a .txt or .gz goes with the tables of --by-type: summary statistics
+    (convert_table_or_text's own test, on the first lines only), and a .gz that is a
+    tab-separated table. Every .gz went to tables before the first lines were looked
+    at, so a .gz table stays there; a tab-separated .txt that is not summary
+    statistics stays with the articles, where every .txt went."""
+    try:
+        sample, delim, _, cols = _text_sample(path, args)
+    except Exception:  # noqa: BLE001 - unreadable here: the conversion reports why
+        return False
+    return bool(cols) or (path.lower().endswith(".gz") and _tab_table(sample, delim))
+
+
+def plan_target(path, args):
     """Output path decided before converting, so existing outputs are skipped cheaply."""
     base = os.path.basename(path)
     base = re.sub(r"(\.gz)$", "", base, flags=re.IGNORECASE)
@@ -1209,20 +1269,21 @@ def plan_target(path, args, n_files):
     if args.by_type and args.out:
         ext = os.path.splitext(path)[1].lower()
         if ext == ".pdf":
-            kind = "book" if pdf_pages(path) >= args.book_pages else "article"
+            kind = "book" if page_count(path) >= args.book_pages else "article"
         elif ext in CODE_EXT or ext == ".ipynb":
             kind = "code"
         elif ext in (".docx", ".pptx", ".xlsx"):
             kind = ext[1:]
         elif ext in (".html", ".htm"):
             kind = "html"
-        elif inner_ext(path) in (".csv", ".tsv", ".tab") or ext == ".gz":
+        elif inner_ext(path) in (".csv", ".tsv", ".tab"):
             kind = "table"
+        elif _sniffed_type(path):  # summary statistics (and a .gz table) go with the tables, prose with the articles
+            kind = "table" if _table_text(path, args) else "text"
         else:
             kind = "text"
         folder = os.path.join(args.out, TYPE_FOLDER.get(kind, "articles"))
-    name = args.output_name if (n_files == 1 and args.output_name) else base + ".md"
-    return os.path.join(folder, name)
+    return os.path.join(folder, base + ".md")
 
 
 def _norm(path):
@@ -1274,16 +1335,21 @@ def save_manifest(path, owners):
     os.replace(path + ".part", path)
 
 
-def _name_candidates(path, args, n_files):
+def _name_candidates(path, args):
     """Output names for one input, best first: its plain name, then (for a clash) its
     source extension (notes.docx.md, not for Markdown), its folder name (media__p2.md)
-    and a number."""
-    target = plan_target(path, args, n_files)
+    and a number (__2 to __999). A generator: the first name is nearly always the one
+    used, and 22 are enough to recognise a name an earlier run gave."""
+    target = plan_target(path, args)
     stem = target[:-3] if target.lower().endswith(".md") else target
     ext = os.path.basename(path).lower().replace(".gz", "").rsplit(".", 1)[-1]
     parent = re.sub(r"[^\w.-]+", "_", os.path.basename(os.path.dirname(os.path.abspath(path)))) or "folder"
-    candidates = [target] + ([] if _is_md(path) else [f"{stem}.{ext}.md"]) + [f"{stem}__{parent}.md"]
-    return candidates + [f"{stem}__{k}.md" for k in range(2, 1000)]
+    yield target
+    if not _is_md(path):
+        yield f"{stem}.{ext}.md"
+    yield f"{stem}__{parent}.md"
+    for k in range(2, 1000):
+        yield f"{stem}__{k}.md"
 
 
 def _is_md(path):
@@ -1300,11 +1366,37 @@ def legacy_outputs(files, args):
     for path in files:
         if _is_md(path):
             continue
-        for candidate in _name_candidates(path, args, len(files))[1:22]:
+        for candidate in itertools.islice(_name_candidates(path, args), 1, 22):
             key = _norm(candidate)
             if key in names and key not in owners:
                 owners[key] = (names[key], os.path.abspath(path))
     return owners
+
+
+def _kept_type_folder(path, mine, candidates, args):
+    """True if the output an earlier run recorded for a .txt/.gz input is one of its
+    candidate names in the other folder --by-type can give it (articles or tables).
+    It stays there: a file sorted before its header was looked at is not converted
+    a second time into the other folder."""
+    if not (args.by_type and args.out and _sniffed_type(path)):
+        return False
+    folders = {_norm(os.path.join(args.out, TYPE_FOLDER[kind])) for kind in ("table", "text")}
+    names = {os.path.normcase(os.path.basename(c)) for c in candidates}
+    return _norm(os.path.dirname(mine)) in folders and os.path.normcase(os.path.basename(mine)) in names
+
+
+def _earlier_type_output(path, candidates, free, args):
+    """The output of a .txt/.gz input of which no record is left (a lost manifest, a
+    run made before manifests existed), in the folder --by-type gave it before it
+    looked at the first lines (.txt: articles, .gz: tables): the first free
+    candidate name there, as that run chose it, if the file exists; else None."""
+    if not (args.by_type and args.out and _sniffed_type(path)):
+        return None
+    folder = os.path.join(args.out, TYPE_FOLDER["table" if path.lower().endswith(".gz") else "text"])
+    if _norm(folder) == _norm(os.path.dirname(candidates[0])):
+        return None
+    earlier = next(filter(free, (os.path.join(folder, os.path.basename(c)) for c in candidates)), None)
+    return earlier if earlier and os.path.exists(earlier) else None
 
 
 def plan_targets(files, args, owners=None):
@@ -1320,17 +1412,25 @@ def plan_targets(files, args, owners=None):
     # every recorded name is reserved, even one whose output was deleted: its owner makes it again
     claimed = set(owners)
     chosen = {}
+
+    def free(target):
+        return _norm(target) not in claimed and _norm(target) not in inputs
     for path in sorted(files, key=lambda f: not _is_md(f)):  # stable: keeps sorted order within each group
-        candidates = _name_candidates(path, args, len(files))
+        later = _name_candidates(path, args)
+        candidates = list(itertools.islice(later, 22))  # `later` goes on from the 23rd name
         if _norm(candidates[0]) == _norm(path):
             chosen[path] = candidates[0]  # reported as "would overwrite the input"
             continue
         mine = recorded.get(_norm(path))
-        if mine and _norm(mine) in {_norm(c) for c in candidates[:22]} and _norm(mine) not in inputs:
+        if mine and _norm(mine) not in inputs and (_norm(mine) in {_norm(c) for c in candidates}
+                                                   or _kept_type_folder(path, mine, candidates, args)):
             target = mine  # the name an earlier run gave it (same folder and options)
         else:
-            target = next((c for c in candidates if _norm(c) not in claimed and _norm(c) not in inputs),
-                          candidates[-1])
+            for target in itertools.chain(candidates, later):  # the first free name, else the last one (__999)
+                if free(target):
+                    break
+            if not mine and not os.path.exists(target):  # no second copy beside an unrecorded earlier one
+                target = _earlier_type_output(path, candidates, free, args) or target
         claimed.add(_norm(target))
         chosen[path] = target
     return [(path, chosen[path]) for path in files]
@@ -1349,15 +1449,6 @@ def _lower_priority():
             proc.nice(10)
     except Exception:  # noqa: BLE001
         pass
-
-
-def _pdf_page_count(path):
-    try:
-        import pymupdf
-        with pymupdf.open(path) as doc:
-            return max(doc.page_count, 1)
-    except Exception:  # noqa: BLE001
-        return 1
 
 
 def find_tessdata():
@@ -1391,16 +1482,6 @@ def _ocr_page(page, tessdata, dpi=300):
     textpage = page.get_textpage_ocr(language="eng", dpi=dpi, full=True, tessdata=tessdata)
     blocks = [_reflow(b[4]) for b in page.get_text("blocks", textpage=textpage, sort=True) if b[6] == 0]
     return "\n\n".join(b for b in blocks if b)
-
-
-def ocr_pdf(path, dpi=300):
-    """Text of a scanned PDF: every page read by OCR, then running headers and
-    page numbers removed as for ordinary PDFs."""
-    import pymupdf
-    tessdata = _tessdata_or_fail()
-    with pymupdf.open(path) as doc:
-        pages = [_ocr_page(page, tessdata, dpi) for page in doc]
-    return "\n\n".join(p for p in strip_page_furniture(pages) if p.strip())
 
 
 def _reflow(block):
@@ -1450,7 +1531,8 @@ def convert_to_file(path, target, args):
     with open(tmp, "w", encoding="utf-8", newline="\n") as handle:
         handle.write(text + "\n")
     os.replace(tmp, target)
-    return f"converted ({kind})", f"{target} ({len(text) + 1:,} characters){ocr_note}"
+    layout_note = " (fast layout)" if kind == "pdf" and getattr(args, "pdf_layout", "model") == "fast" else ""
+    return f"converted ({kind})", f"{target} ({len(text) + 1:,} characters){ocr_note}{layout_note}"
 
 
 def _reason(exc):
@@ -1614,10 +1696,12 @@ def main():
             cmd.append("--overwrite")
         if args.extract_images:
             cmd.append("--extract-images")
+        if getattr(args, "pdf_layout", "model") == "fast":
+            cmd += ["--pdf-layout", "fast"]
         timeout = args.timeout
         if path.lower().endswith(".pdf"):  # a long book needs longer (OCR takes seconds per page)
-            timeout = max(timeout, _pdf_page_count(path) * (OCR_SECONDS_PER_PAGE if getattr(args, "ocr", False)
-                                                             else PDF_SECONDS_PER_PAGE))
+            timeout = max(timeout, max(page_count(path), 1) * (OCR_SECONDS_PER_PAGE if getattr(args, "ocr", False)
+                                                               else PDF_SECONDS_PER_PAGE))
         code, stdout, stderr = _run_child(cmd, timeout)
         if code is None:
             return path, "skipped", f"timed out after {timeout} s (raise --timeout to allow longer)"

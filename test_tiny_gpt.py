@@ -1962,6 +1962,32 @@ class TestFixes(unittest.TestCase):
         self.assertFalse(rp.can_fetch("tinyGPT-docs", "https://a.org/docs/manual.html?x=1"))
         self.assertFalse(rp.can_fetch("tinyGPT-docs", "https://a.org/private/x.html"))
         self.assertEqual(rp.crawl_delay("tinyGPT-docs"), 3)
+        # RFC 9309: the longest matching rule wins, Allow on a tie, whatever the order of the lines
+        for text, path, want in (
+                ("User-agent: *\nAllow: /\nDisallow: /private/\n", "/private/x", False),
+                ("User-agent: *\nDisallow: /\nAllow: /docs/\n", "/docs/a", True),
+                ("User-agent: *\nDisallow: /page\nAllow: /page\n", "/page", True),
+                ("User-agent: *\nDisallow:\nDisallow: /x\n", "/x/y", False),
+                ("User-agent: *\nDisallow:\nDisallow: /x\n", "/y", True),
+                ("User-agent: *\nAllow: /*.html$\nDisallow: /api/\n", "/api/x.html", True),
+                ("User-agent: *\nAllow: /*.html$\nDisallow: /api/\n", "/api/x.json", False),
+                ("User-agent: *\nDisallow: /*?\nAllow: /docs/\n", "/docs/a?x=1", True),
+                ("User-agent: *\nDisallow: /*?\nAllow: /d\n", "/d?x=1", False),
+                ("User-agent: *\nDisallow: *\n", "/a", False),
+                ("User-agent: *\nDisallow: /\n", "/", False),
+                ("User-agent: *\nAllow: /$\nDisallow: /\n", "/", True),
+                ("User-agent: *\nAllow: /$\nDisallow: /\n", "/a", False),
+                ("User-agent: tinyGPT-docs\nDisallow: /a\n\nUser-agent: *\nDisallow: /\n", "/b", True),
+                ("User-agent: *\nDisallow: /\n\nUser-agent: tinyGPT-docs\nAllow: /\nDisallow: /a\n", "/a/b", False),
+                ("User-agent: *\nDisallow: //\n", "/a", True),
+                ("User-agent: *\nDisallow: //\n", "//a", False),
+                ("User-agent: *\nDisallow: /caf%C3%A9/\nAllow: /\n", "/caf%C3%A9/x", False),
+                ("", "/a", True),
+                ("User-agent: *\nCrawl-delay: 2.5\n", "/a", True)):
+            with self.subTest(robots=text, path=path):
+                rp = urllib.robotparser.RobotFileParser()
+                d.parse_robots(rp, text)
+                self.assertEqual(rp.can_fetch(d.ROBOTS_AGENT, "http://x" + path), want)
         self.assertEqual(d.decode_text("don’t – café".encode("cp1252")), "don’t – café")
         md = d.rd_markdown(r"\name{f}\title{F}\usage{f(fun = function(v) { v + 1 })}" "\n"
                            r"\examples{for (i in 1:3) {" "\n  print(i)\n}\n}")
@@ -2567,7 +2593,8 @@ class TestFixes(unittest.TestCase):
                     "a\tunavailable\tRequested format is not available\n"
                     "b\tunavailable\tPrivate video\n"
                     "c\tunavailable\tPremieres in 2 days\n")
-        self.assertEqual(yt.read_status(report), {"a": "error", "b": "unavailable", "c": "error"})
+        # the status column is read as written (the one-off reclassification of old reports is gone)
+        self.assertEqual(yt.read_status(report), {"a": "unavailable", "b": "unavailable", "c": "unavailable"})
 
     def test_arxiv_cache_and_main_file(self):
         import gzip

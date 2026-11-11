@@ -45,6 +45,8 @@ videos are Creative Commons, and --creative-commons-only keeps only those.
 """
 
 import argparse
+import collections
+import glob
 import html
 import json
 import os
@@ -57,25 +59,28 @@ import tempfile
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)  # the project's own modules, also when started from another folder
+from download_pmc import safe_name  # noqa: E402 - one file-name rule for every downloader
 DEFAULT_OUT = os.path.join(os.path.expanduser("~"), "ai_training_data", "lectures")
 DEFAULT_KEYWORDS = os.path.join(HERE, "keywords.txt")
 # statuses not retried on a rerun ("live" and "upcoming" are: once aired they are ordinary videos)
 FINAL = {"ok", "not_english", "too_short", "unavailable", "not_cc", "empty", "off_topic"}
 TSV_COLUMNS = ["video_id", "status", "source", "title", "date", "duration_s", "words", "keyword_hits", "licence",
                "file"]
+# "Sign in to confirm your age": one video, not a bot block (error_status tests it before BOT_CHECK)
+AGE_LIMITED = ("confirm your age", "age-restricted", "inappropriate for some users")
 BOT_CHECK = ("confirm you", "not a bot", "sign in to confirm")
 # YouTube limiting this session ("Video unavailable. This content isn't available, try again later. The current
 # session has been rate-limited"): every further video would fail the same way, so the run stops
 RATE_LIMITED = ("rate-limited", "rate limited", "content isn't available, try again later")
-# failures of this run, not of the video (the JavaScript challenge failed, an old yt-dlp): retried later
 # the page loaded but no audio/video format could be read (no "try again later" here: that is also YouTube's
 # rate-limit message, which must stop the run instead of being retried)
 FORMAT_FAILURE = ("requested format is not available", "not available on this app", "only images are available")
+# failures of this run, not of the video (the JavaScript challenge failed, an old yt-dlp): retried later
 TRANSIENT = FORMAT_FAILURE + ("try again later",)
 UPCOMING = ("premieres in", "live event will begin")
 UNAVAILABLE = ("private video", "members-only", "join this channel", "video unavailable", "has been removed",
-               "is not available", "please sign in",
-               "age-restricted", "confirm your age", "copyright", "this live event")
+               "is not available", "please sign in", "copyright", "this live event")
 
 
 class BotCheck(Exception):
@@ -95,14 +100,11 @@ def ydl(cookies=None, **extra):
     return yt_dlp.YoutubeDL(opts)
 
 
-AGE_LIMITED = ("confirm your age", "age-restricted", "inappropriate for some users")
-
-
 def error_status(text):
     """'unavailable' (final), 'upcoming', 'error' (both retried later) or
     'blocked' (YouTube is blocking or limiting this session) for an error text."""
     text = text.lower()
-    if any(a in text for a in AGE_LIMITED):  # "Sign in to confirm your age": one video, not a bot block
+    if any(a in text for a in AGE_LIMITED):
         return "unavailable"
     if any(b in text for b in BOT_CHECK + RATE_LIMITED):
         return "blocked"
@@ -120,16 +122,29 @@ def classify_error(exc):
     return status
 
 
+_ITEM_URL_RE = re.compile(r"(watch\?v=|youtu\.be/|[?&]list=|/shorts/)")  # one video or one playlist
+_TAB_URL_RE = re.compile(r"/(videos|streams|playlists|featured)$")  # a channel URL that names its tab
+
+
 def source_url(spec, tab="videos"):
     s = spec.strip()
     if s.startswith("http"):
-        if re.search(r"(watch\?v=|youtu\.be/|[?&]list=|/shorts/)", s):
+        if _ITEM_URL_RE.search(s):
             return s
         s = s.rstrip("/")
-        return s if re.search(r"/(videos|streams|playlists|featured)$", s) else f"{s}/{tab}"
+        return s if _TAB_URL_RE.search(s) else f"{s}/{tab}"
     if re.fullmatch(r"UC[\w-]{22}", s):
         return f"https://www.youtube.com/channel/{s}/{tab}"
     return f"https://www.youtube.com/@{s.lstrip('@').replace(' ', '')}/{tab}"
+
+
+def plain_channel(spec):
+    """True for a whole channel (@handle, name, channel ID, or channel URL with or
+    without /videos): only such a spec is listed through its remembered channel
+    address. A video, a playlist or another tab (/streams) is listed as given."""
+    s = spec.strip()
+    tab = _TAB_URL_RE.search(s.rstrip("/"))
+    return not _ITEM_URL_RE.search(s) and not (tab and tab.group(1) != "videos")
 
 
 def list_videos(spec, cookies, max_videos):
@@ -145,11 +160,11 @@ def list_videos(spec, cookies, max_videos):
             raise
         info = _find_channel_by_name(spec.lstrip("@"), cookies)  # "StatQuest with Josh Starmer" -> its channel
     entries = []
-    stack = [info] if not info.get("entries") else list(info["entries"])
+    stack = collections.deque([info] if not info.get("entries") else info["entries"])
     while stack:
-        e = stack.pop(0)
+        e = stack.popleft()
         if e.get("entries"):
-            stack[:0] = list(e["entries"])
+            stack.extendleft(reversed(list(e["entries"])))  # in front, in their own order
         elif e.get("id") and len(e["id"]) == 11:
             entries.append(e)
     seen, unique = set(), []
@@ -246,18 +261,18 @@ def punctuated(text):
     return words < 60 or len(re.findall(r"[.!?](?:\s|$)", text)) * 40 >= words
 
 
-def safe_name(text, limit=90):
-    name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', " ", text or "untitled")
-    return " ".join(name.split())[:limit].rstrip(" .") or "untitled"
-
-
 # ---------------------------------------------------------------------------
 # Whisper
 # ---------------------------------------------------------------------------
 def gpu_busy():
-    """True if another job uses the GPU (a training run holds GBs of memory);
-    None without an NVIDIA GPU. Three samples, so a moment of desktop use does
-    not count."""
+    """True if another job uses the GPU (a training run holds GBs of memory, and
+    its <name>.train.lock beside this script counts even before it does); None
+    without an NVIDIA GPU. Three samples, so a moment of desktop use does not
+    count."""
+    sys.path.insert(0, HERE)
+    import data_prep  # not tiny_gpt: that would load torch
+    if any(data_prep._lock_owner_alive(lock) for lock in glob.glob(os.path.join(HERE, "*.train.lock"))):
+        return True
     samples = []
     try:
         for k in range(3):
@@ -514,12 +529,7 @@ def read_status(path):
             head = handle.readline().rstrip("\n").split("\t")
             for line in handle:
                 row = dict(zip(head, line.rstrip("\n").split("\t")))
-                found = row.get("status")
-                # rows written before rate limits, format failures and premieres were told apart from
-                # unavailable videos: the error text (source column) shows which to try again
-                if found == "unavailable" and error_status(row.get("source") or "") != "unavailable":
-                    found = "error"
-                status[row.get("video_id")] = found
+                status[row.get("video_id")] = row.get("status")
     return status
 
 
@@ -590,11 +600,8 @@ def main(argv=None):
         pass
     args = parse_args(argv)
     import yt_dlp
-    try:
-        import psutil
-        psutil.Process().nice(psutil.BELOW_NORMAL_PRIORITY_CLASS if sys.platform == "win32" else 10)
-    except Exception:  # noqa: BLE001 - a courtesy only
-        pass
+    import data_prep
+    data_prep._lower_priority()  # a courtesy; a run started at idle priority stays idle
     os.makedirs(args.meta, exist_ok=True)
     # channels.json remembers each channel's exact address (no @handle guessing and search on later runs) and
     # when it was last processed to the end, so channels finished within --recheck-days are not listed again
@@ -622,21 +629,21 @@ def main(argv=None):
                     and time.time() - known["finished"] < args.recheck_days * 86400):
                 skipped_recent.append(known.get("name") or spec)
                 continue
+            plain = plain_channel(spec)  # a video or playlist URL must not be replaced by its whole channel
             try:
-                channel, entries = list_videos(known.get("url") or spec, args.cookies_from_browser, args.max_videos)
+                channel, entries = list_videos((known.get("url") if plain else None) or spec,
+                                               args.cookies_from_browser, args.max_videos)
             except (LookupError, yt_dlp.utils.DownloadError) as exc:
                 print(f"[{spec}] skipped: {str(exc).splitlines()[0][:200]}", flush=True)
                 continue
             if channel.get("id"):
-                remember(spec, url=f"https://www.youtube.com/channel/{channel['id']}", name=channel["name"])
+                remember(spec, name=channel["name"],
+                         **({"url": f"https://www.youtube.com/channel/{channel['id']}"} if plain else {}))
             hours = sum(e.get("duration") or 0 for e in entries) / 3600
             if args.list_only:
                 print(f"[{channel['name']}] {len(entries):,} videos, {hours:,.0f} hours", flush=True)
                 continue
             tsv = os.path.join(args.meta, f"{channel['key']}_report.tsv")
-            old_name = os.path.join(args.meta, f"{channel['key']}.tsv")  # name used until 30 September 2026
-            if os.path.isfile(old_name) and not os.path.exists(tsv):
-                os.replace(old_name, tsv)
             status = read_status(tsv)
             final = FINAL if args.whisper else FINAL | {"queued_whisper"}
             if args.recheck_off_topic:
