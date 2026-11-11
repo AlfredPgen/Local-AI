@@ -672,6 +672,16 @@ class Audit2TinyGptC(unittest.TestCase):
         self.assertRegex("\n".join(head), r"(?m)^schedule: cosine: ")
         self.assertRegex("\n".join(head), r"(?m)^budget: 2 steps x 512 tokens \(8 x 1 x 64\) = 1,024 tokens = ")
         self.assertFalse([line for line in head if line.startswith("plan: WARNING: ") and "decay" in line], head)
+        # a continued cosine schedule falls from the end of its warm-up on by design: no warning either, although
+        # this run starts at step 9 of 10, after the warm-up (--steps could not change that)
+        code, out_cos = base.run(self.common + ["--eval-every", "2", "--no-probes", "--name", "I3", "--init-from",
+                                                os.path.join(self.runs, "N.pt"), "--train-tokens", "1024",
+                                                "--schedule", "cosine", "--warmup-steps", "1"])
+        self.assertEqual(code, 0, out_cos)
+        head = self.header(out_cos)
+        self.assertIn("budget: 2 steps (9-10) x 512 tokens (8 x 1 x 64) = 1,024 tokens = ", "\n".join(head))
+        self.assertRegex("\n".join(head), r"(?m)^schedule: cosine: warmup 1-1, cosine to \S+ at 10$")
+        self.assertFalse([line for line in head if line.startswith("plan: WARNING: ") and "decay" in line], head)
         # a resumed run keeps the whole run's count
         out_flags, _ = self.notes_runs()
         self.assertRegex(out_flags, r"(?m)^budget: 8 steps x 512 tokens \(8 x 1 x 64\) = 4,096 tokens = ")

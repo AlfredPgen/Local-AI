@@ -4614,9 +4614,10 @@ def _train(args):
         resume_note = note + "; best/last validation reset because the validation set is new"
         if start_step >= total_steps:
             raise SystemExit(f"--init-from checkpoint is at step {start_step:,}; set --steps above that.")
-        if start_step and schedule.phase(start_step + 1) == "decay":
+        if start_step and schedule.kind == "wsd" and schedule.phase(start_step + 1) == "decay":
             # the schedule of a training state is continued over the old and the new steps together, so its decay
-            # (a share of that total) can begin before the first step of this run
+            # (a share of that total) can begin before the first step of this run. WSD only: a cosine schedule
+            # falls from the end of its warm-up on, wherever --steps puts its end
             plan_lines.append(f"WARNING: this run starts at step {start_step + 1:,}, inside the decay of the "
                               f"schedule it continues (steps {schedule.decay_start + 1:,}-{total_steps:,}): the "
                               f"learning rate begins at {schedule.lr_at(start_step + 1):.2e}, below the peak "
