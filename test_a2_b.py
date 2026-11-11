@@ -1582,6 +1582,35 @@ class Audit2DataPrep(unittest.TestCase):
                 self.assertEqual(docs[("one", "a1.md")]["status"], "val")
                 self.assertIn("0 documents stay in training and 1 in validation as before", report)
 
+    # ---------------- F045 (+F085): a document moved with another row's group is marked as moved ----------------
+    def test_both_members_of_a_leaking_group_are_marked_as_moved(self):
+        docs = [["md", "a", "A", 1000, 0, 0, None, None], ["md", "b", "B", 2000, 0, 0, None, None],
+                ["md", "c", "C", 300, 0, 0, None, None], ["web", "e", "E", 500, 0, 0, None, None]]
+        roots = np.asarray([0, 1, 1, 3], dtype=np.int32)  # b and c are one near-duplicate group
+        split_of = np.asarray([1, 2, 2, 2], dtype=np.int8)  # a train; b, c, e validation
+        sources = {"md": {"val_chars": 2300, "train_chars": 1000}, "web": {"val_chars": 500, "train_chars": 0}}
+        forced = collections.Counter()
+        rows = [(0.9, "md", "b", "B", 20, 1), (0.8, "md", "c", "C", 12, 2), (0.7, "web", "e", "E", 9, 3)]
+        out = data_prep._move_leaks_to_train(rows, docs, roots, {1: [1, 2]}, split_of, np.zeros(4, dtype=bool), {3},
+                                             sources, forced)
+        self.assertEqual([r[6] for r in out], [1, 1, 0], "c moved with b's group; e is fixed as validation")
+        self.assertEqual([r[:6] for r in out], rows)
+        self.assertEqual(split_of.tolist(), [1, 1, 1, 2])
+        self.assertEqual(sources["md"], {"val_chars": 0, "train_chars": 3300})
+        self.assertEqual(forced["leaks_into_train"], 2)
+
+    def test_leakage_sentence_blames_keep_split_from_only_for_documents_that_stayed(self):
+        """Every build of the toy corpus that has a leakage audit: nothing stayed, so the report does not
+        say that anything was fixed by --keep-split-from, and it no longer says 'has none left'."""
+        report = read_file(os.path.join(self.plain(), "report.md"))
+        if "## Train/validation leakage audit" not in report:
+            self.skipTest("this build has no leakage audit")
+        sentence = [ln for ln in report.splitlines() if "validation documents checked" in ln][0]
+        self.assertNotIn("has none left", sentence)
+        self.assertNotIn("stayed: fixed as validation", sentence)
+        self.assertIn("of them were moved to training (with their groups), so no checked validation document "
+                      "with >= 50% overlap stays in validation, except those fixed by --keep-split-from.", sentence)
+
 
 if __name__ == "__main__":
     unittest.main()

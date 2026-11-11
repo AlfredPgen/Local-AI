@@ -3957,11 +3957,11 @@ def _move_leaks_to_train(leakage, docs, roots, clusters, split_of, dropped, sett
     split). Documents whose split --keep-split-from fixed as validation stay
     (settled_val: the roots of those groups). Updates split_of, the sources'
     val_chars / train_chars and forced_train["leaks_into_train"]; returns the
-    rows with a 7th field, 1 when the row's document was moved."""
-    out = []
+    rows with a 7th field, 1 when the row's document was moved (for its own
+    overlap or with the group of another row)."""
+    moved_docs = set()
     for row in leakage:
         overlap, i = row[0], row[5]
-        moved = 0
         if overlap >= threshold and split_of[i] == SPLIT_VAL and int(roots[i]) not in settled_val:
             members = clusters.get(int(roots[i]), [i])
             for j in members:
@@ -3972,9 +3972,8 @@ def _move_leaks_to_train(leakage, docs, roots, clusters, split_of, dropped, sett
                 info["val_chars"] = int(info.get("val_chars", 0) - chars)
                 info["train_chars"] = int(info.get("train_chars", 0) + chars)
                 forced_train["leaks_into_train"] += 1
-            moved = 1
-        out.append(row[:5] + (i, moved))
-    return out
+                moved_docs.add(j)
+    return [row[:5] + (row[5], int(row[5] in moved_docs)) for row in leakage]
 
 
 def _cleanup(work, spool_dir, keep):
@@ -4168,12 +4167,15 @@ def _write_report(out, args, sources, duplicates, removed_lines, line_examples, 
     if leakage:
         flagged = [r for r in leakage if r[0] >= LEAK_MOVE_OVERLAP]
         moved = [r for r in flagged if len(r) > 6 and r[6]]
+        stayed = len(flagged) - len(moved)
         L.append("\n## Train/validation leakage audit\n")
         L.append(f"Share of each validation document's sampled word 13-grams (1 in 16) that also occurred in "
                  f"training documents, measured after the split and before the tokenizer. {len(leakage):,} "
                  f"validation documents checked; {len(flagged):,} had >= {LEAK_MOVE_OVERLAP:.0%} overlap and "
-                 f"{len(moved):,} of them were moved to training (with their groups; the others were fixed as "
-                 f"validation by --keep-split-from), so the validation set written has none left. All rows in "
+                 f"{len(moved):,} of them were moved to training (with their groups)"
+                 + (f" ({stayed:,} stayed: fixed as validation by --keep-split-from)" if stayed else "")
+                 + f", so no checked validation document with >= {LEAK_MOVE_OVERLAP:.0%} overlap stays in "
+                 f"validation, except those fixed by --keep-split-from. All rows in "
                  f"leakage.tsv. Median overlap {np.median([r[0] for r in leakage]):.1%}.\n")
         for r in leakage[:10]:
             L.append(f"- {r[0]:.0%} `{r[1]}:{r[3] or r[2]}` ({r[4]} sampled 13-grams"

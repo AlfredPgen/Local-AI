@@ -2228,7 +2228,7 @@ class TestFixes(unittest.TestCase):
         rows = [(0.9, "md", "c", "C", 20, 2), (0.6, "md", "d", "D", 12, 3), (0.7, "web", "e", "E", 9, 4),
                 (0.1, "md", "b", "B", 30, 1)]
         out = data_prep._move_leaks_to_train(rows, docs, roots, clusters, split_of, dropped, {4}, sources, forced)
-        self.assertEqual([r[6] for r in out], [1, 1, 0, 0], "e is fixed as validation by --keep-split-from")
+        self.assertEqual([r[6] for r in out], [1, 1, 0, 1], "e is fixed as validation by --keep-split-from")
         self.assertEqual(split_of.tolist(), [1, 1, 1, 1, 2], "c's whole group (b, c) moved with it")
         self.assertEqual(sources["md"], {"val_chars": 0, "train_chars": 3700})
         self.assertEqual(sources["web"], {"val_chars": 500, "train_chars": 0})
