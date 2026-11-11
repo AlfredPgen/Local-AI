@@ -286,9 +286,10 @@ class Audit2DocsYoutubeConvert(unittest.TestCase):
             self.assertTrue(np.isnan(lam))
 
     def test_by_type_sorts_txt_and_gz_by_their_header(self):
-        """F039: with --by-type a .txt or .gz goes where its conversion belongs: summary statistics and
-        tab-separated tables to tables, prose to articles; an input an earlier run recorded in the other folder
-        stays there (it is not converted a second time)."""
+        """F039: with --by-type summary statistics go to tables as a .txt too, and a prose .gz goes to articles;
+        a tab-separated table that is not summary statistics stays where it went before (.gz: tables, .txt:
+        articles); an input an earlier run recorded in the other folder stays there (it is not converted a
+        second time)."""
         import gzip
         import json
         import subprocess
@@ -308,9 +309,9 @@ class Audit2DocsYoutubeConvert(unittest.TestCase):
             handle.write(prose)
         counts = ["gene\tsample1\tsample2\tsample3"] + [f"g{k}\t{k}\t{k + 1}\t{k + 2}" for k in range(40)]
         with gzip.open(os.path.join(src, "counts.txt.gz"), "wt", encoding="utf-8", newline="\n") as handle:
-            handle.write("\n".join(counts) + "\n")  # a table that is not GWAS: converted as a table, filed as one
+            handle.write("\n".join(counts) + "\n")  # a table that is not GWAS: a .gz is filed as a table, as before
         with open(os.path.join(src, "matrix.txt"), "w", encoding="utf-8", newline="\n") as handle:
-            handle.write("\n".join(counts) + "\n")
+            handle.write("\n".join(counts) + "\n")  # the same table as a .txt: with the articles, as before
         os.makedirs(os.path.join(out, "articles"))  # old.txt was converted before, into articles
         with open(os.path.join(out, "articles", "old.md"), "w", encoding="utf-8") as handle:
             handle.write("# GWAS summary statistics: old\n")
@@ -330,14 +331,16 @@ class Audit2DocsYoutubeConvert(unittest.TestCase):
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         found = sorted(os.path.relpath(os.path.join(folder, name), out).replace(os.sep, "/")
                        for folder, _, names in os.walk(out) for name in names if name.endswith(".md"))
-        self.assertEqual(found, ["articles/lost.md", "articles/notes.md", "articles/old.md", "articles/prose.md",
-                                 "tables/a.md", "tables/counts.md", "tables/lostprose.md", "tables/matrix.md",
+        self.assertEqual(found, ["articles/lost.md", "articles/matrix.md", "articles/notes.md", "articles/old.md",
+                                 "articles/prose.md", "tables/a.md", "tables/counts.md", "tables/lostprose.md",
                                  "tables/sumstats.md"], done.stdout + done.stderr)
         with open(os.path.join(out, "tables", "a.md"), encoding="utf-8") as handle:
             self.assertIn("30 genetic variants", handle.read())
-        with open(os.path.join(out, "tables", "counts.md"), encoding="utf-8") as handle:
-            self.assertIn("| gene | sample1 |", handle.read())
-        # --no-gwas: summary statistics are a plain file again, a table when tab-separated and text otherwise
+        for name in ("tables/counts.md", "articles/matrix.md"):  # both converted as a table, each filed as before
+            with open(os.path.join(out, *name.split("/")), encoding="utf-8") as handle:
+                self.assertIn("| gene | sample1 |", handle.read(), name)
+        # --no-gwas: summary statistics are a plain file again and go where they went before: a .txt to articles,
+        # a tab-separated .gz to tables
         import convert_to_markdown as conv
         import argparse
         spaced = os.path.join(self.tmp, "f039", "spaced.txt")
@@ -348,10 +351,14 @@ class Audit2DocsYoutubeConvert(unittest.TestCase):
         def folder(path):
             return os.path.basename(os.path.dirname(conv.plan_target(path, args)))
 
-        self.assertEqual([folder(os.path.join(src, "a.txt")), folder(spaced)], ["tables", "articles"])
+        others = [os.path.join(src, name)
+                  for name in ("sumstats.tsv.gz", "counts.txt.gz", "prose.txt.gz", "matrix.txt")]
+        self.assertEqual([folder(os.path.join(src, "a.txt")), folder(spaced)], ["articles", "articles"])
+        self.assertEqual([folder(path) for path in others], ["tables", "tables", "articles", "articles"])
         self.assertEqual(conv.convert_table_or_text(spaced, args)[1], "text")
         args.no_gwas = False
         self.assertEqual([folder(os.path.join(src, "a.txt")), folder(spaced)], ["tables", "tables"])
+        self.assertEqual([folder(path) for path in others], ["tables", "tables", "articles", "articles"])
         # the unrecorded earlier output is kept only while it is nobody else's and nothing is at the new place
         lost, files = os.path.join(src, "lost.txt"), sorted(os.path.join(src, name) for name in os.listdir(src))
 

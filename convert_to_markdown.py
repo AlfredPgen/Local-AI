@@ -1240,13 +1240,16 @@ def _sniffed_type(path):
 
 
 def _table_text(path, args):
-    """True if convert_table_or_text makes a table of a .txt or .gz (summary statistics,
-    or consistently tab-separated lines): its own tests, on the first lines only."""
+    """True if a .txt or .gz goes with the tables of --by-type: summary statistics
+    (convert_table_or_text's own test, on the first lines only), and a .gz that is a
+    tab-separated table. Every .gz went to tables before the first lines were looked
+    at, so a .gz table stays there; a tab-separated .txt that is not summary
+    statistics stays with the articles, where every .txt went."""
     try:
         sample, delim, _, cols = _text_sample(path, args)
     except Exception:  # noqa: BLE001 - unreadable here: the conversion reports why
         return False
-    return bool(cols) or _tab_table(sample, delim)
+    return bool(cols) or (path.lower().endswith(".gz") and _tab_table(sample, delim))
 
 
 def plan_target(path, args):
@@ -1267,7 +1270,7 @@ def plan_target(path, args):
             kind = "html"
         elif inner_ext(path) in (".csv", ".tsv", ".tab"):
             kind = "table"
-        elif _sniffed_type(path):  # a .txt or .gz converted as a table goes with the tables, prose with the articles
+        elif _sniffed_type(path):  # summary statistics (and a .gz table) go with the tables, prose with the articles
             kind = "table" if _table_text(path, args) else "text"
         else:
             kind = "text"
