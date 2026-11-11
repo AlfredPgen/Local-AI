@@ -648,8 +648,16 @@ class Audit2Viewer(unittest.TestCase):
                          ["attn_norm", "ffn_norm", "q_norm", "k_norm"])
         self.assertLessEqual(len([t for t in ax.get_xticklabels() if t.get_text()]), 20)
         self.assertIn("final norm", said(ax))
+        self.assertEqual(ax.get_ylim()[0], 0, "the gains are read from zero")
+        label = next(t for t in ax.texts if t.get_text() == "final norm")
+        self.assertLess(label.get_window_extent().y1, ax.get_window_extent().y1, "the label stays inside the axes")
         profile = view_pt.norm_gain_profiles(ck)
         self.assertEqual([len(profile[k]) for k in ("attn_norm", "ffn_norm", "q_norm", "k_norm")], [18] * 4)
+        ck.weights["blocks.3.ffn_norm.weight"] = ck.weights["blocks.3.ffn_norm.weight"] - 1.5
+        fig, ax = one_axes()
+        view_pt.panel_norm_gains(ax, ck)
+        self.assertLess(ax.get_ylim()[0], -0.5, "a gain below zero is still inside the picture")
+        ck.weights["blocks.3.ffn_norm.weight"] = ck.weights["blocks.3.ffn_norm.weight"] + 1.5
         # calibration: the run's own evaluation of this step wins over the 16-window forward pass
         cal = {"confidence": [0.1, 0.9], "accuracy": [0.1, 0.8], "count": [10.0, 30.0]}
         fstats = {"calibration": {"confidence": [0.2, 0.7], "accuracy": [0.2, 0.7], "count": [5.0, 5.0]}, "ece": 0.111,

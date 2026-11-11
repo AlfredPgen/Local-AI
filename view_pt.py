@@ -1994,6 +1994,9 @@ def panel_norm_gains(ax, ck):
         ax.scatter([x], [y], s=36, color=INK2, zorder=4)
         ax.annotate("final norm", (x, y), xytext=(0, 6), textcoords="offset points", ha="center",
                     fontsize=_SIZE["note"], color=INK2)
+    low, high = ax.get_ylim()
+    low = min(0.0, low)  # from zero: a gain's size is read off the axis, not only its spread
+    ax.set_ylim(low, high + 0.1 * (high - low))  # room above the highest gain for the final norm's label
     ax.xaxis.set_major_locator(MaxNLocator(nbins=12, integer=True))
     ax.set_xlabel("block")
     ax.set_ylabel("gain per channel (1.0 at initialisation)")
