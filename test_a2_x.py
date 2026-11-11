@@ -178,7 +178,9 @@ class Audit2Followers(unittest.TestCase):
                     tallies[name] = real_source(name, *a, **k)
                     return tallies[name]
 
-                with unittest.mock.patch.object(dp, "PREFILTER_MAX_PATTERNS", limit),                         unittest.mock.patch.object(dp, "_vector_scores", recorded),                         unittest.mock.patch.object(estimate_dataset, "table_source", source):
+                with unittest.mock.patch.object(dp, "PREFILTER_MAX_PATTERNS", limit), \
+                        unittest.mock.patch.object(dp, "_vector_scores", recorded), \
+                        unittest.mock.patch.object(estimate_dataset, "table_source", source):
                     self.run_estimate(["--sample", "1", "--tflops", "1", "--hours", "1", "--tokenizer-from", model,
                                        "--wiki-max-docs", wiki_max] + common)
                 if limit:
@@ -194,6 +196,55 @@ class Audit2Followers(unittest.TestCase):
                                      (mode, limit, name))
             self.assertEqual(sources["wiki"]["skipped"]["keyword_min_hits"], 20)
             self.assertEqual(sources["web"]["skipped"], {"score_below_min": 12, "keyword_min_hits": 9})
+
+    # ---------------- X3: the estimate trains its tokenizer with data_prep's options ----------------
+    def test_estimate_tokenizer_is_trained_with_the_options_of_the_build(self):
+        """X3 (F075, F154): estimate_dataset.train_tokenizer passes data_prep.SPM_TRAIN_OPTIONS (it had its own
+        copy of the sixteen values) and adds only the five options that are the caller's; the SuperBPE share
+        is data_prep.superbpe_extra's."""
+        import sentencepiece as spm
+        import data_prep as dp
+        import estimate_dataset
+        tally = estimate_dataset.Tally("md", "markdown")
+        for i in range(6):
+            tally.keep(T.paragraphs(40 + i, 30))
+        real, calls = spm.SentencePieceTrainer.train, []
+
+        def train(**options):
+            calls.append(options)
+            return real(**options)
+
+        def trained(tag, superbpe, **patches):
+            work = os.path.join(self.tmp, "x3_" + tag)
+            os.makedirs(work)
+            patches.setdefault("SPM_TRAIN_OPTIONS", dp.SPM_TRAIN_OPTIONS)  # patch.multiple wants one name
+            args = types_ns(superbpe=superbpe, superbpe_fraction=0.1, superbpe_max_words=4, seed=7,
+                            tokenizer_weights=None)
+            with unittest.mock.patch.object(spm.SentencePieceTrainer, "train", train), \
+                    unittest.mock.patch.multiple(dp, **patches):
+                tok = estimate_dataset.train_tokenizer([tally], 600, work, args, {"md": tally.estimate()})
+            return work, tok, calls[-1]
+
+        work, tok, options = trained("plain", False)
+        own = dict(input=os.path.join(work, "corpus.txt"), model_prefix=os.path.join(work, "spm"), vocab_size=600,
+                   input_sentence_size=3_000_000, num_threads=os.cpu_count() or 4)
+        self.assertEqual(options, dict(dp.SPM_TRAIN_OPTIONS, **own))
+        self.assertEqual(len(options), 21)
+        self.assertGreater(tok.vocab_size, 100)
+        # the constant is what is passed, not a copy of today's values
+        marked = dict(dp.SPM_TRAIN_OPTIONS, max_sentence_length=8192)
+        self.assertEqual(trained("marked", False, SPM_TRAIN_OPTIONS=marked)[2]["max_sentence_length"], 8192)
+        # SuperBPE: the first stage gets the vocabulary less the share of the second, both from data_prep
+        extended = []
+
+        def extend(proto, corpus, extra, max_words, **kwargs):
+            extended.append(extra)
+            return proto, []
+
+        self.assertEqual(trained("superbpe", True, superbpe_extend=extend)[2]["vocab_size"], 540)
+        self.assertEqual(trained("share", True, superbpe_extend=extend,
+                                 superbpe_extra=lambda vocab, args: 7)[2]["vocab_size"], 593)
+        self.assertEqual(extended, [60, 7])
 
 
 if __name__ == "__main__":

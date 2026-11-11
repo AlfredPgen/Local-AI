@@ -281,7 +281,7 @@ def train_tokenizer(tallies, vocab, work, args, estimates):
     token measured here match a real build's. The texts split_texts holds out
     are not in its text: main measures on them."""
     import sentencepiece as spm
-    extra = max(1, round(vocab * args.superbpe_fraction)) if args.superbpe else 0
+    extra = dp.superbpe_extra(vocab, args)
     probs = sample_probabilities(tallies, estimates, args)
     seed = args.seed
     corpus = os.path.join(work, "corpus.txt")
@@ -290,12 +290,9 @@ def train_tokenizer(tallies, vocab, work, args, estimates):
             for k, text in enumerate(split_texts(t.texts)[0]):
                 for piece in dp.tokenizer_sample_lines(text, t.name, k, seed, probs[t.name]):
                     out.write(piece + "\n")
-    spm.SentencePieceTrainer.train(
-        input=corpus, model_prefix=os.path.join(work, "spm"), model_type="bpe", vocab_size=vocab - extra,
-        character_coverage=0.9995, byte_fallback=True, split_digits=True, unk_id=0, bos_id=1, eos_id=2, pad_id=-1,
-        user_defined_symbols=["\n", "\t"], remove_extra_whitespaces=False, allow_whitespace_only_pieces=True,
-        normalization_rule_name="identity", max_sentence_length=16384, hard_vocab_limit=False,
-        input_sentence_size=3_000_000, shuffle_input_sentence=True, num_threads=os.cpu_count() or 4, minloglevel=2)
+    spm.SentencePieceTrainer.train(input=corpus, model_prefix=os.path.join(work, "spm"), vocab_size=vocab - extra,
+                                   input_sentence_size=3_000_000, num_threads=os.cpu_count() or 4,
+                                   **dp.SPM_TRAIN_OPTIONS)
     tok = dp.Tokenizer.from_file(os.path.join(work, "spm.model"), "lines")
     if extra:
         proto, _ = dp.superbpe_extend(tok.proto, corpus, extra, args.superbpe_max_words, seed=seed,
