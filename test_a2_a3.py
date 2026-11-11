@@ -855,6 +855,49 @@ class Audit2TinyGptC(unittest.TestCase):
             self.assertEqual(os.environ["TORCHINDUCTOR_CACHE_DIR"], "elsewhere", "a setting of the user's wins")
         self.assertFalse(os.path.exists(os.path.join(HERE, ".compile_cache")), "this test compiles nothing")
 
+    def test_compile_warm_up_has_the_layout_of_a_training_batch(self):
+        """F328: the warm-up call of maybe_compile gets an input with the shape, strides and type of the batches
+        TokenBatcher.next() returns (the first ctx columns of a (batch, ctx + 1) tensor). torch.compile guards
+        on the strides, so a contiguous (batch, ctx) input made the first step compile the model again."""
+        import functools
+
+        import numpy as np
+        from torch._dynamo.utils import counters
+        cpu, model = torch.device("cpu"), base.TestFixes.small_model(self).train()
+        batcher = tiny_gpt.TokenBatcher({"a": np.arange(5000, dtype=np.uint16) % 50}, {"a": 1.0}, model.ctx, 2, cpu, 1)
+        seen = []
+
+        def recording(module, **kwargs):
+            def call(x, **kw):
+                seen.append(x)
+                return module(x, **kw)
+            return call
+
+        with unittest.mock.patch.dict(os.environ), unittest.mock.patch.object(tiny_gpt.torch, "compile", recording):
+            tiny_gpt.maybe_compile(model, "on", cpu, micro=2)
+        x, _ = batcher.next()
+        self.assertEqual(len(seen), 1)
+        self.assertEqual((seen[0].shape, seen[0].stride(), seen[0].dtype), (x.shape, x.stride(), x.dtype))
+        self.assertEqual(x.stride(), (model.ctx + 1, 1))
+        # the real thing, without a code generator: one graph for the warm-up and the first batches
+        eager = functools.partial(torch.compile, backend="eager")
+        torch._dynamo.reset()
+        counters.clear()
+        try:
+            with unittest.mock.patch.dict(os.environ), unittest.mock.patch.object(tiny_gpt.torch, "compile", eager):
+                with redirect_stdout(io.StringIO()) as said:
+                    compiled = tiny_gpt.maybe_compile(model, "on", cpu, micro=2)
+            self.assertIsNot(compiled, model, said.getvalue())
+            for _ in range(3):
+                x, _ = batcher.next()
+                with torch.autocast("cpu", dtype=torch.float32, enabled=False):  # as the training loop calls it
+                    compiled(x).float().sum().backward()
+                model.zero_grad(set_to_none=True)
+            self.assertEqual(counters["stats"]["unique_graphs"], 1)
+        finally:
+            torch._dynamo.reset()
+        self.assertFalse(os.path.exists(os.path.join(HERE, ".compile_cache")), "the eager backend writes no cache")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -2112,7 +2112,7 @@ class TokenBatcher:
         if self.pin:
             t = t.pin_memory()
         t = t.to(self.device, non_blocking=True)
-        return t[:, :-1], t[:, 1:]
+        return input_and_target(t)
 
     def state_dict(self):
         return {"generator": self.gen.get_state()}
@@ -2121,6 +2121,13 @@ class TokenBatcher:
         if state and "generator" in state:
             self.gen.set_state(state["generator"].cpu() if isinstance(state["generator"], torch.Tensor)
                                else state["generator"])
+
+
+def input_and_target(windows):
+    """(x, y) of a (batch, ctx + 1) tensor of token windows: the first and the last ctx columns. Both are views,
+    so their strides are (ctx + 1, 1). torch.compile guards on the strides of its input: the warm-up of
+    maybe_compile cuts its batch here too, or the first training step would compile the model once more."""
+    return windows[:, :-1], windows[:, 1:]
 
 
 class EvalSet:
@@ -5535,8 +5542,9 @@ def record_experiment(out_dir, row):
 
 def maybe_compile(model, mode, device, return_hidden=False, amp_dtype=None, micro=1, return_aux=False):
     """The model compiled with torch.compile, warmed up once with exactly the call
-    training makes (a (micro, ctx) batch under the same autocast; return_hidden:
-    the chunked loss), so the training graph is compiled here and a compile failure
+    training makes (a (micro, ctx) batch with the layout of TokenBatcher.next()'s,
+    under the same autocast; return_hidden: the chunked loss), so the training
+    graph is compiled here and a compile failure
     falls back to eager instead of failing step 1; or the model itself (eager)
     when compiling is off, unavailable or fails. Running out of memory in the
     warm-up is not a compile failure: the compiled model is returned and the
@@ -5563,8 +5571,9 @@ def maybe_compile(model, mode, device, return_hidden=False, amp_dtype=None, micr
         # dynamic=False: a new shape (a halved micro-batch after an out-of-memory error) gets its own static graph
         # instead of turning the training graph into a slower dynamic-shape one
         compiled = torch.compile(model, dynamic=False)
-        # the shape and autocast state training uses: Dynamo guards on both, so this graph is the one step 1 reuses
-        x = torch.zeros((max(1, int(micro)), model.ctx), dtype=torch.long, device=device)
+        # the shape, the strides and the autocast state training uses: Dynamo guards on all three, so this graph is
+        # the one step 1 reuses (a batch is the first ctx columns of a (micro, ctx + 1) tensor: input_and_target)
+        x, _ = input_and_target(torch.zeros((max(1, int(micro)), model.ctx + 1), dtype=torch.long, device=device))
         # fork_rng: the warm-up's dropout masks must not consume the (restored) random state of the run
         with fork_device_rng(device):
             with torch.autocast(device.type, dtype=amp_dtype or torch.float32, enabled=amp_dtype is not None):
