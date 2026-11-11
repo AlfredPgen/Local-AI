@@ -255,6 +255,12 @@ class Audit2PipelineTools(unittest.TestCase):
         self.assertNotIn("a rebuild from scratch", out, "the build itself would reuse this tokenizer")
         self.assertEqual(kept(self.run_estimate(argv + ["--sample-fraction", "0.5"])),
                          {"web": (20, 10), "papers": (12, 6)})
+        # select 'auto' is 'top' only with include keywords and a limit, as data_prep resolves it: with exclude
+        # keywords alone a build reads the source in stream order and samples it
+        auto = argv + ["--parquet-select", "auto", "--parquet-max-docs", "1000", "--sample-fraction", "0.5"]
+        self.assertEqual(kept(self.run_estimate(auto + ["--exclude-keywords", "zzzqqq"]))["web"], (20, 10))
+        self.assertEqual(kept(self.run_estimate(auto + ["--include-keywords", "genetic*,allele*,protein*"]))["web"],
+                         (20, 20), "ranked, so not sampled")
 
     def test_estimate_excludes_gz_files_like_data_prep(self):
         """F150: an --md-exclude pattern is matched against a .gz file's name without '.gz', as data_prep does."""

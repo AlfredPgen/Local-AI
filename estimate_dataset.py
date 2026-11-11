@@ -196,10 +196,11 @@ def table_source(name, kind, source, args, use_kw, min_score, max_docs, select):
     import pyarrow.parquet as pq
     t = Tally(name, kind, args.est_seed)
     t.max_docs, t.sample_fraction = max_docs, args.sample_fraction
-    t.select ="top" if select == "top" or (select == "auto" and use_kw and max_docs) else "first"
     k = max(1, round(1 / args.sample))
     kw = dp._W_KW if use_kw else None
     need = kw is not None and bool(kw.include_patterns)
+    # 'auto' as data_prep resolves it: ranked only with include keywords and a limit (exclude keywords rank nothing)
+    t.select = "top" if select == "top" or (select == "auto" and need and max_docs) else "first"
 
     def batches():
         if kind == "parquet":
