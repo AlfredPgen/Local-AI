@@ -305,6 +305,41 @@ class Audit2Followers(unittest.TestCase):
         tiny_gpt.release_run_lock(tiny_gpt.acquire_run_lock(fresh))
         self.assertEqual(os.listdir(fresh.out_dir), [])
 
+    # ---------------- X6: the viewer loads and builds through tiny_gpt ----------------
+    def test_viewer_model_and_file_come_from_the_loaders_of_tiny_gpt(self):
+        """X6 (F405, F393, F329): view_pt.build_model is tiny_gpt.model_from_checkpoint(assign=True) and
+        view_pt.load_checkpoint is tiny_gpt.load_any(mmap=True); the viewer had a copy of each. The model
+        still holds the file's own tensors and gives the logits of an ordinary load, and it now gets the
+        document mask of a run trained with --doc-mask on."""
+        import torch
+        import test_a2_c as C
+        import tiny_gpt
+        import view_pt
+        folder = os.path.join(self.tmp, "x6")
+        os.makedirs(folder)
+        tok, cpu = T.CharTok(), torch.device("cpu")
+        tokens = torch.tensor([[3, 4, tok.bos_id, 5, 6, 7, tok.bos_id, 8, 9, 10]])  # three documents in one window
+        logits = {}
+        for doc_mask in (False, True):
+            path = C.toy_file(folder, f"mask_{doc_mask}.pt", train_config=dict(C.TRAIN_CONFIG, doc_mask=doc_mask))
+            with unittest.mock.patch.object(tiny_gpt, "tokenizer_from_checkpoint", return_value=tok):
+                ck = view_pt.Checkpoint(path)
+                model = view_pt.build_model(ck, cpu)
+                plain = tiny_gpt.model_from_checkpoint(tiny_gpt.safe_load(path))[0]
+            self.assertFalse(model.training)
+            self.assertEqual(model.doc_sep_id, tok.bos_id if doc_mask else None)
+            self.assertEqual(model.token_embedding.weight.data_ptr(),
+                             ck.obj["model"]["token_embedding.weight"].data_ptr(), "no second copy of the weights")
+            with torch.no_grad():
+                logits[doc_mask] = model(tokens)[0]
+                self.assertTrue(torch.equal(logits[doc_mask], plain(tokens)[0]))
+        self.assertFalse(torch.equal(logits[False], logits[True]), "the mask changes what a later document sees")
+        with unittest.mock.patch.object(tiny_gpt, "load_any", return_value={"format": "none"}) as load:
+            self.assertEqual(view_pt.load_checkpoint(path, True), {"format": "none"})
+        load.assert_called_once_with(path, True, mmap=True)
+        with open(view_pt.__file__, encoding="utf-8") as f:
+            self.assertNotIn("attention_weights", f.read(), "a function that no longer exists")
+
 
 if __name__ == "__main__":
     unittest.main()

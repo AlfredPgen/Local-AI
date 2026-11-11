@@ -225,36 +225,14 @@ def load_checkpoint(path, trust=False):
     state of a training checkpoint included) are then read from disk only when a
     panel uses them. Not on Windows, where a mapped file cannot be replaced, so
     training could not save over a checkpoint while its dashboard is drawn."""
-    if os.name != "nt" and os.path.isfile(path):
-        try:
-            return torch.load(path, map_location="cpu", weights_only=True, mmap=True)
-        except Exception:  # noqa: BLE001 - old (non-zip) files, or ones that need --trust-checkpoint
-            pass
-    return tiny_gpt.load_any(path, trust)
+    return tiny_gpt.load_any(path, trust, mmap=True)
 
 
 def build_model(ck, device):
-    """The checkpoint's model in eval mode, like tiny_gpt.model_from_checkpoint, but
-    built on the meta device and given the checkpoint's own tensors (assign=True):
-    no random initialisation and no second copy of the weights in memory."""
-    cfg = tiny_gpt.config_from_checkpoint(ck.obj)
-    cfg.dropout = 0.0
-    try:
-        with torch.device("meta"):
-            model = tiny_gpt.TinyGPT(cfg)
-        missing, unexpected = model.load_state_dict(ck.obj["model"], strict=False, assign=True)
-    except (TypeError, RuntimeError, NotImplementedError):  # older PyTorch: the normal way
-        return tiny_gpt.model_from_checkpoint(ck.obj, device)[0]
-    missing = [m for m in missing if not (m == "lm_head.weight" and cfg.tie_embeddings)]
-    if missing or unexpected:
-        raise SystemExit(f"Checkpoint weights do not match the architecture "
-                         f"(missing {missing[:4]}, unexpected {unexpected[:4]}).")
-    if cfg.tie_embeddings:
-        model.lm_head.weight = model.token_embedding.weight
-    model.rope = tiny_gpt.RotaryEmbedding(cfg.head_dim, cfg.ctx, cfg.rope_base)  # buffers not in the file
-    if any(t.is_meta for t in list(model.parameters()) + list(model.buffers())):
-        return tiny_gpt.model_from_checkpoint(ck.obj, device)[0]
-    return model.float().to(device).eval()  # float32 like model_from_checkpoint (no copy if already float32)
+    """The checkpoint's model in eval mode, holding the checkpoint's own tensors
+    (tiny_gpt.model_from_checkpoint with assign=True): no random initialisation
+    and no second copy of the weights in memory."""
+    return tiny_gpt.model_from_checkpoint(ck.obj, device, assign=True)[0]
 
 
 def scrub(text):
@@ -568,7 +546,7 @@ def attention_entropy(model, window, device, budget=2 ** 25, with_rms=False):
     group = max(1, budget // (t * t))
     for block in model.blocks:
         attn = block.attn
-        q, k, _ = attn._qkv(block.attn_norm(h), model.rope)  # as in attention_weights: causal softmax(QK^T/sqrt(d))
+        q, k, _ = attn._qkv(block.attn_norm(h), model.rope)  # causal softmax(QK^T/sqrt(d))
         k = k.repeat_interleave(attn.n_rep, dim=1)
         ent = []
         for h0 in range(0, q.size(1), group):
