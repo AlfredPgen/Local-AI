@@ -4391,6 +4391,11 @@ def _train(args):
         if cfg.ctx != stored_ctx:
             plan_lines.append(f"model was trained at ctx {stored_ctx}; continuing at {cfg.ctx} (RoPE tables rebuilt "
                               "for the new length, weights unchanged)")
+        if cfg.rope_base < default_rope_base(cfg.ctx):
+            # the weights were trained with this base, so it is not changed; a new run at this context would get more
+            plan_lines.append(f"RoPE base stays at the checkpoint's {cfg.rope_base:,.0f}, below the rule for ctx "
+                              f"{cfg.ctx} ({default_rope_base(cfg.ctx):,.0f}): long-range retrieval may be weaker "
+                              "than in a run started at this context")
         cfg.dropout = args.dropout if args.dropout is not None else 0.0
         if args.qk_norm is not None and (args.qk_norm == "on") != cfg.qk_norm:
             plan_lines.append(f"--qk-norm {args.qk_norm} ignored: the architecture is the checkpoint's (QK-norm "

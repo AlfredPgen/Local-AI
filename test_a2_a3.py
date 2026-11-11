@@ -624,6 +624,23 @@ class Audit2TinyGptC(unittest.TestCase):
         self.notes_runs()
         self.assertIsNone(self.load("N.pt")["train_config"]["probes_sha"])  # --no-probes
 
+    def test_init_from_says_when_the_rope_base_is_below_the_rule(self):
+        """F341: --init-from keeps the checkpoint's RoPE base; when that is below the rule for the context of
+        the new run, a plan line says so."""
+        out_best, out_state = self.init_runs()
+        for text in (out_best, out_state):
+            plan = [line for line in self.header(text) if line.startswith("plan: RoPE base ")]
+            self.assertEqual(len(plan), 1, text)
+            self.assertIn("stays at the checkpoint's 500", plan[0])
+            self.assertIn("ctx 64 (10,000)", plan[0])
+        # a base at the rule (the run C of the console tests): no line
+        self.console_runs()
+        code, out = base.run(self.common + ["--name", "I3", "--init-from", os.path.join(self.runs, "C_best.pt"),
+                                            "--steps", "2", "--eval-every", "2", "--no-probes"])
+        self.assertEqual(code, 0, out)
+        self.assertIn("plan: architecture taken from --init-from ", out)
+        self.assertNotIn("RoPE base stays", out)
+
 
 if __name__ == "__main__":
     unittest.main()
