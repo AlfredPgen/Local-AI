@@ -60,20 +60,6 @@ def prompts_from_validation(dataset, tok, n, prompt_tokens, split, seed):
     return out
 
 
-def sample_next(logits, generator, temperature, top_k, top_p):
-    logits = logits.float() / max(temperature, 1e-6)
-    if top_k and top_k < logits.size(-1):
-        kth = torch.topk(logits, top_k, dim=-1).values[:, -1:]
-        logits = logits.masked_fill(logits < kth, float("-inf"))
-    probs = logits.softmax(-1)
-    if 0 < top_p < 1:
-        sp, order = probs.sort(dim=-1, descending=True)
-        sp = sp.masked_fill(sp.cumsum(-1) - sp > top_p, 0)
-        probs = torch.zeros_like(probs).scatter(-1, order, sp)
-        probs = probs / probs.sum(-1, keepdim=True)
-    return torch.multinomial(probs, 1, generator=generator).squeeze(-1)
-
-
 @torch.no_grad()
 def generate_batch(model, prompts, new_tokens, device, amp, seed, temperature=0.8, top_k=50, top_p=0.95):
     """Continuations of equal-length prompts; (B, P + new) tokens on CPU. KV-cached:
@@ -84,7 +70,7 @@ def generate_batch(model, prompts, new_tokens, device, amp, seed, temperature=0.
     for _ in range(new_tokens):
         with torch.autocast(device.type, dtype=amp or torch.float32, enabled=amp is not None):
             logits = model.lm_head(model(new, return_hidden=True, cache=cache)[:, -1])
-        new = sample_next(logits, gen, temperature, top_k, top_p).unsqueeze(1)
+        new = tg.sample_next(logits, gen, temperature, top_k, top_p).unsqueeze(1)
         x = torch.cat([x, new], dim=1)
     return x.cpu()
 

@@ -340,6 +340,30 @@ class Audit2Followers(unittest.TestCase):
         with open(view_pt.__file__, encoding="utf-8") as f:
             self.assertNotIn("attention_weights", f.read(), "a function that no longer exists")
 
+    # ---------------- X7: edit_weights samples with tiny_gpt.sample_next ----------------
+    def test_edit_weights_samples_through_tiny_gpt(self):
+        """X7 (F311): tools/edit_weights.py draws its continuations with tiny_gpt.sample_next (it had a copy of
+        the function): every token of a seeded batch is one that function returned."""
+        import torch
+        import edit_weights as ew
+        import tiny_gpt
+        model = T.TestFixes.small_model(None, seed=3)
+        prompts = [(1, 2, 3, 4), (5, 6, 7, 8), (9, 9, 9, 9)]
+        real, drawn = tiny_gpt.sample_next, []
+
+        def sample(logits, generator, *settings):
+            self.assertEqual(settings, (0.8, 50, 0.95))
+            drawn.append(real(logits, generator, *settings))
+            return drawn[-1]
+
+        with unittest.mock.patch.object(tiny_gpt, "sample_next", sample):
+            out = ew.generate_batch(model, prompts, 6, torch.device("cpu"), None, seed=11)
+        self.assertEqual(len(drawn), 6)
+        self.assertFalse(hasattr(ew, "sample_next"), "one copy, in tiny_gpt")
+        self.assertEqual(out[:, :4].tolist(), [list(p) for p in prompts])
+        self.assertEqual(out[:, 4:].tolist(), torch.stack(drawn, dim=1).tolist())
+        self.assertGreater(len(set(out[:, 4:].flatten().tolist())), 6, "sampled, not one repeated token")
+
 
 if __name__ == "__main__":
     unittest.main()
