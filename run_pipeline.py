@@ -1,7 +1,8 @@
 r"""The tinyGPT pipeline in a few simple commands.
 
     python run_pipeline.py estimate            # optional: how big will the dataset be? (~7 min)
-    python run_pipeline.py build               # 1. build the dataset from ai_training_data (~2 hours)
+    python run_pipeline.py build               # 1. build the dataset from ai_training_data (several hours; the
+                                               # last build's time is in datasets\bio_all\report.md)
     python run_pipeline.py plan --hours 48     # 2. which model fits in 48 hours? (prints the plan, trains nothing)
     python run_pipeline.py train --hours 48    # 3. train it
     python run_pipeline.py resume              #    continue after Ctrl+C or a shutdown
@@ -43,9 +44,10 @@ OPTIMIZER = "muon"        # "muon": Muon for the block matrices, AdamW for the r
 # Once DATASET is built, its manifest's data settings win over the ones above for estimate and continue, so both
 # describe the dataset that exists rather than constants that may have been edited since.
 
-# data_prep's former --near-dup-max-docs default: manifests written before it became 0 (no limit) record it although
-# nobody chose it, and repeating it would stop a larger rebuild after pass 1
-_OLD_NEAR_DUP_DEFAULT = 3_000_000
+# former --near-dup-max-docs values nobody chose: 2,000,000 was data_prep's default before it became 0 (no limit) and
+# 3,000,000 was what run_pipeline passed. Manifests of that time record them, and repeating one would stop a larger
+# rebuild after pass 1
+_OLD_NEAR_DUP_DEFAULTS = (2_000_000, 3_000_000)
 
 
 def manifest_prep_args(dataset=None):
@@ -63,13 +65,15 @@ def manifest_prep_args(dataset=None):
 def build_command():
     """The data_prep command that builds DATASET. Where DATASET already has a
     manifest, its recorded superbpe, tokenizer_weights, wiki_max_docs and
-    near_dup_max_docs are used instead of the constants above (estimate then
-    counts the tokens of the tokenizer that exists: SuperBPE gives ~13 % fewer)."""
+    near_dup_max_docs are used instead of the constants above. The command
+    names no tokenizer: a build trains a new one at data_prep's automatic
+    vocabulary size, `continue` adds --tokenizer-from, and `estimate` adds
+    --tokenizer DATASET to count the tokens of the tokenizer that exists."""
     prep = manifest_prep_args()
     superbpe = bool(prep.get("superbpe", SUPERBPE))
     wiki_max = int(prep.get("wiki_max_docs", WIKI_MAX_DOCS) or 0)
     near_dup_max = int(prep.get("near_dup_max_docs", 0) or 0)
-    if near_dup_max == _OLD_NEAR_DUP_DEFAULT:
+    if near_dup_max in _OLD_NEAR_DUP_DEFAULTS:
         near_dup_max = 0
     cmd = [sys.executable, "data_prep.py", "--out", DATASET, "--text-root", DATA]
     wiki = os.path.join(DATA, "wikipedia")
@@ -88,12 +92,12 @@ def build_command():
     except OSError:
         folders = set()
     weights = ",".join(f"{n}=3" for n in ("books", "articles") if n in folders)
-    if prep.get("tokenizer_weights"):
-        # the recorded weights, minus sources this command no longer reads (data_prep refuses a weight it cannot
-        # apply): the text-root folders plus the named web sources added above
+    if prep and "tokenizer_weights" in prep:
+        # the recorded weights (none when the dataset was built without any), minus sources this command no longer
+        # reads (data_prep refuses a weight it cannot apply): the text-root folders plus the named web sources above
         sources = folders | {name for name, flag in (("wiki", "--wiki-dir"), ("fineweb", "--parquet"),
                                                      ("pes2o", "--jsonl")) if flag in cmd}
-        recorded = [w.strip() for w in str(prep["tokenizer_weights"]).split(",") if w.strip()]
+        recorded = [w.strip() for w in str(prep["tokenizer_weights"] or "").split(",") if w.strip()]
         weights = ",".join(w for w in recorded if w.split("=")[0].strip().lower() in sources)
     return cmd + ["--include-keywords", KEYWORDS, "--keyword-min-distinct", "3"] + (
         ["--tokenizer-weights", weights] if weights else []) + [
@@ -119,7 +123,19 @@ def train_command(hours, name, plan=False):
 
 def run(cmd):
     print("\n> " + " ".join(f'"{c}"' if " " in c else c for c in cmd) + "\n", flush=True)
-    return subprocess.call(cmd, cwd=HERE)
+    # not subprocess.call: on macOS and Linux it kills the child 0.25 s after Ctrl+C, in the middle of tiny_gpt's
+    # pause save or data_prep's clean-up. The child gets the same Ctrl+C and stops by itself; an interrupted step
+    # that still exits 0 counts as stopped (130), so no later step starts
+    p = subprocess.Popen(cmd, cwd=HERE)
+    interrupted = False
+    while True:
+        try:
+            code = p.wait()
+            return code or (130 if interrupted else 0)
+        except KeyboardInterrupt:
+            interrupted = True
+            if p.poll() is None:
+                print("Ctrl+C: waiting for the step to save and stop (pressing it again does not stop it sooner).")
 
 
 def dataset_ready():
@@ -136,10 +152,11 @@ def gpu_busy():
 def step_build():
     if dataset_ready():
         print(f"The dataset is already built: {DATASET}\n(To rebuild, delete that folder or change DATASET at the "
-              "top of run_pipeline.py. A rebuild trains a new tokenizer (32,768 pieces for this much text): existing "
+              "top of run_pipeline.py. A rebuild trains a new tokenizer (its size follows the amount of text): existing "
               "models can only be continued with `continue`, not resumed.)")
         return 0
-    print(f"Building {DATASET} from {DATA}. This takes about 2 hours; the report is {DATASET}\\report.md.")
+    print(f"Building {DATASET} from {DATA}. This takes several hours; the report (with the time it took) is "
+          f"{os.path.join(DATASET, 'report.md')}.")
     return run(build_command())
 
 
@@ -230,8 +247,10 @@ def main():
     if args.step == "posttrain":
         return step_posttrain(args.name)
     if args.step == "estimate":
-        # the same data settings as 'build' (everything after data_prep.py --out <folder>)
-        return run([sys.executable, "estimate_dataset.py", "--hours", "12,24,48,72"] + build_command()[4:])
+        # the same data settings as 'build' (everything after data_prep.py --out <folder>), counted with the built
+        # dataset's own tokenizer where there is one (a rebuild would train a new one: estimate_dataset says so)
+        return run([sys.executable, "estimate_dataset.py"] + (["--tokenizer", DATASET] if dataset_ready() else [])
+                   + build_command()[4:])
     if args.step == "build":
         return step_build()
     if args.step == "plan":

@@ -1942,6 +1942,10 @@ class TestFixes(unittest.TestCase):
         self.assertEqual(nested.get("China Kadoorie Biobank"), "China Kadoorie")
         for kept in ("linear regression", "adalimumab", "=Met", "=MET", "polymer*"):
             self.assertNotIn(kept, nested)
+        # case variants of one term: the first in the file stays (they covered each other, so --fix removed all)
+        self.assertEqual(kw_covered.find(["polymerase", "helicase", "Polymerase"], nested=False),
+                         {"Polymerase": "polymerase"})
+        self.assertEqual(sorted(kw_covered.find(["zeta", "Zeta", "ZETA"], nested=False)), ["ZETA", "Zeta"])
 
     def test_download_docs_helpers(self):
         """download_docs.py: unsafe archive names, bad links, crawl scope, robots wildcards, decoding, Rd code."""
@@ -4335,6 +4339,14 @@ class TestOtherScripts(unittest.TestCase):
             self.assertEqual(cmd[cmd.index("--near-dup-max-docs") + 1], "5000000")
             self.assertNotIn("--superbpe", cmd)
             self.assertEqual(data_prep.parse_args(cmd[2:]).near_dup_max_docs, 5_000_000)
+            with open(os.path.join(dataset, "manifest.json"), "w", encoding="utf-8") as f:
+                json.dump({"prep_args": {**prep, "near_dup_max_docs": 2_000_000}}, f)
+            self.assertNotIn("--near-dup-max-docs", run_pipeline.build_command(),
+                             "2,000,000 was data_prep's old default: not a choice to repeat either")
+            with open(os.path.join(dataset, "manifest.json"), "w", encoding="utf-8") as f:
+                json.dump({"prep_args": {**prep, "tokenizer_weights": None}}, f)
+            self.assertNotIn("--tokenizer-weights", run_pipeline.build_command(),
+                             "a dataset built without tokenizer weights is not given the default ones")
             os.remove(os.path.join(dataset, "manifest.json"))
             cmd = run_pipeline.build_command()  # no manifest: the constants
             self.assertNotIn("--superbpe", cmd)

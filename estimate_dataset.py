@@ -37,12 +37,14 @@ import argparse
 import dataclasses
 import glob
 import gzip
+import heapq
 import math
 import os
 import random
 import sys
 import tempfile
 import time
+import zlib
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -59,8 +61,23 @@ def default_prep_args():
     return run_pipeline.build_command()[4:]
 
 
+TEXT_BUDGET = 6_000_000  # characters of kept sample text stored per source for the tokenizer
+HOLD_OUT = 5             # every 5th stored text is kept out of the tokenizer's text and measured on
+
+
+def split_texts(texts):
+    """(texts the tokenizer is trained on, texts held out to measure characters
+    per token on): every HOLD_OUT-th stored text is held out, so the ratio is
+    not measured on the text the pieces were fitted to. A source with fewer
+    texts than that has none to spare and is measured on its own texts."""
+    held = texts[HOLD_OUT - 1::HOLD_OUT]
+    if not held:
+        return texts, texts
+    return [text for k, text in enumerate(texts) if k % HOLD_OUT != HOLD_OUT - 1], held
+
+
 class Tally:
-    def __init__(self, name, kind):
+    def __init__(self, name, kind, seed=0):
         self.name, self.kind = name, kind
         self.total = 0            # files or records in the source
         self.sampled = 0          # of them examined
@@ -69,16 +86,32 @@ class Tally:
         self.kept = 0
         self.kept_chars = 0
         self.reasons = {}
-        self.texts, self.text_chars = [], 0
+        self.store, self.text_chars = [], 0  # a heap of (-random number, kept number, text): see keep
+        self.rng = random.Random(f"{seed}/{name}")
         self.max_docs, self.select = 0, "first"
+        self.sample_fraction = 1.0  # data_prep --sample-fraction: the share of records a build reads in stream order
         self.ranked = []          # (keyword score, characters) of kept sample documents, for 'top' selection
 
     def keep(self, text):
+        """Count a kept document and store its text for the tokenizer. The store
+        is a random sample of all kept documents that holds TEXT_BUDGET
+        characters: every document draws a random number, and the store keeps
+        the documents with the smallest numbers, as many as it takes to reach
+        the budget (the start of a random order of all kept documents).
+        (Storing only the first ones took a web source's texts from the start of
+        its first file. A store of a fixed number of documents ends far from the
+        budget when the later documents are shorter or longer than the first.)"""
         self.kept += 1
         self.kept_chars += len(text)
-        if self.text_chars < 6_000_000:
-            self.texts.append(text)
-            self.text_chars += len(text)
+        heapq.heappush(self.store, (-self.rng.random(), self.kept, text))
+        self.text_chars += len(text)
+        while self.text_chars - len(self.store[0][2]) >= TEXT_BUDGET:  # the largest number is not needed any more
+            self.text_chars -= len(heapq.heappop(self.store)[2])
+
+    @property
+    def texts(self):
+        """The stored texts, in the order they were kept."""
+        return [text for _, _, text in sorted(self.store, key=lambda entry: entry[1])]
 
     def skip(self, reason):
         self.reasons[reason] = self.reasons.get(reason, 0) + 1
@@ -89,7 +122,10 @@ class Tally:
             docs = self.total * self.kept / max(self.sampled, 1)
             chars = self.total_bytes * self.kept_chars / max(self.sampled_bytes, 1)
         else:
-            scale = self.total / max(self.sampled, 1)
+            # data_prep samples the records first and applies the document limit to what is left; a source it
+            # reads in 'top' mode is not sampled (every record is ranked)
+            fraction = 1.0 if self.select == "top" else self.sample_fraction
+            scale = self.total / max(self.sampled, 1) * fraction
             docs, chars = self.kept * scale, self.kept_chars * scale
         if self.max_docs and docs > self.max_docs:
             if self.select == "top" and self.ranked:
@@ -114,7 +150,7 @@ def examine(tally, title, text, use_kw):
 
 
 def markdown_source(name, dirs, args, use_kw, rng):
-    t = Tally(name, "markdown")
+    t = Tally(name, "markdown", args.est_seed)
     patterns = args.md_glob or list(dp.MD_PATTERNS_DEFAULT)
     files, seen = [], set()
     # the same files data_prep reads: names matched ignoring case, [ ] in folder paths taken literally
@@ -124,7 +160,9 @@ def markdown_source(name, dirs, args, use_kw, rng):
             raise SystemExit(f"--md-dir is not a folder: {directory}")
         for path in dp.list_text_files(directory, patterns, args.md_recursive):
             real = os.path.realpath(path)
-            rel = os.path.relpath(path, directory)
+            rel = os.path.relpath(path, directory).replace(os.sep, "/")
+            if rel.lower().endswith(".gz"):
+                rel = rel[:-3]  # as data_prep: a.md.gz is excluded by the patterns that exclude a.md
             if real in seen or not os.path.isfile(real):
                 continue
             seen.add(real)
@@ -143,7 +181,7 @@ def markdown_source(name, dirs, args, use_kw, rng):
         try:
             with (gzip.open if path.lower().endswith(".gz") else open)(path, "rb") as handle:
                 raw = handle.read()
-        except (OSError, EOFError):
+        except (OSError, EOFError, zlib.error):
             continue  # a damaged .gz file, which data_prep skips too
         text = dp.decode_bytes(raw, {"bom_removed": 0, "decode_errors_docs": 0, "decode_errors_chars": 0})
         t.sampled += 1
@@ -156,12 +194,13 @@ def markdown_source(name, dirs, args, use_kw, rng):
 def table_source(name, kind, source, args, use_kw, min_score, max_docs, select):
     """Wikipedia (Arrow) or Parquet: every k-th record batch is examined."""
     import pyarrow.parquet as pq
-    t = Tally(name, kind)
-    t.max_docs = max_docs
-    t.select = "top" if select == "top" or (select == "auto" and use_kw and max_docs) else "first"
+    t = Tally(name, kind, args.est_seed)
+    t.max_docs, t.sample_fraction = max_docs, args.sample_fraction
     k = max(1, round(1 / args.sample))
     kw = dp._W_KW if use_kw else None
     need = kw is not None and bool(kw.include_patterns)
+    # 'auto' as data_prep resolves it: ranked only with include keywords and a limit (exclude keywords rank nothing)
+    t.select = "top" if select == "top" or (select == "auto" and need and max_docs) else "first"
 
     def batches():
         if kind == "parquet":
@@ -199,8 +238,8 @@ def table_source(name, kind, source, args, use_kw, min_score, max_docs, select):
 
 
 def jsonl_source(name, paths, args, use_kw, max_docs):
-    t = Tally(name, "jsonl")
-    t.max_docs = max_docs
+    t = Tally(name, "jsonl", args.est_seed)
+    t.max_docs, t.sample_fraction = max_docs, args.sample_fraction
     k = max(1, round(1 / args.sample))
     kw = dp._W_KW if use_kw else None
     for path in paths:
@@ -220,33 +259,32 @@ def jsonl_source(name, paths, args, use_kw, max_docs):
     return t
 
 
-def sample_probabilities(tallies, estimates, args, budget=6_000_000):
+def sample_probabilities(tallies, estimates, args, budget=TEXT_BUDGET):
     """{source: probability} for data_prep.tokenizer_sample_lines over the kept
     sample texts, so the tokenizer here sees the sources in the same proportions
     as a build's tokenizer: share = weight x estimated training characters / mass
     (data_prep.tokenizer_shares), and the sample's total is the largest `budget`
     for which no source needs more text than its sample holds."""
-    weights = dp.parse_tokenizer_weights(args.tokenizer_weights, [t.name for t in tallies]) if args else {}
+    weights = dp.parse_tokenizer_weights(args.tokenizer_weights, [t.name for t in tallies])
     shares = dp.tokenizer_shares({t.name: max(estimates[t.name][1], 1) for t in tallies}, weights)
-    available = {t.name: max(t.text_chars, 1) for t in tallies}
+    available = {t.name: max(sum(len(text) for text in split_texts(t.texts)[0]), 1) for t in tallies}
     total = min([budget] + [available[n] / shares[n] for n in shares if shares[n] > 0])
     return {n: min(1.0, total * shares[n] / available[n]) for n in shares}
 
 
-def train_tokenizer(tallies, vocab, work, args=None, estimates=None):
+def train_tokenizer(tallies, vocab, work, args, estimates):
     """A tokenizer like data_prep.py's, trained on the kept sample (with --superbpe:
     the same two stages) with data_prep's window sampler, so the characters per
-    token measured here match a real build's."""
+    token measured here match a real build's. The texts split_texts holds out
+    are not in its text: main measures on them."""
     import sentencepiece as spm
-    extra = max(1, round(vocab * args.superbpe_fraction)) if getattr(args, "superbpe", False) else 0
-    if estimates is None:
-        estimates = {t.name: (t.kept, t.kept_chars) for t in tallies}
+    extra = max(1, round(vocab * args.superbpe_fraction)) if args.superbpe else 0
     probs = sample_probabilities(tallies, estimates, args)
-    seed = args.seed if args is not None else 1234
+    seed = args.seed
     corpus = os.path.join(work, "corpus.txt")
     with open(corpus, "w", encoding="utf-8", newline="\n") as out:
         for t in tallies:
-            for k, text in enumerate(t.texts):
+            for k, text in enumerate(split_texts(t.texts)[0]):
                 for piece in dp.tokenizer_sample_lines(text, t.name, k, seed, probs[t.name]):
                     out.write(piece + "\n")
     spm.SentencePieceTrainer.train(
@@ -257,7 +295,7 @@ def train_tokenizer(tallies, vocab, work, args=None, estimates=None):
         input_sentence_size=3_000_000, shuffle_input_sentence=True, num_threads=os.cpu_count() or 4, minloglevel=2)
     tok = dp.Tokenizer.from_file(os.path.join(work, "spm.model"), "lines")
     if extra:
-        proto, _ = dp.superbpe_extend(tok.proto, corpus, extra, args.superbpe_max_words,
+        proto, _ = dp.superbpe_extend(tok.proto, corpus, extra, args.superbpe_max_words, seed=seed,
                                       threads=os.cpu_count() or 4)
         tok = dp.Tokenizer(proto, "lines")
     return tok
@@ -310,7 +348,7 @@ def main(argv=None):
         raise SystemExit("--sample must be in (0, 1]")
     rest = rest or default_prep_args()
     args = dp.parse_args(rest + ["--out", os.path.join(tempfile.gettempdir(), "estimate_dataset_unused")])
-    args.sample = opts.sample
+    args.sample, args.est_seed = opts.sample, opts.est_seed
     rng = random.Random(opts.est_seed)
     t0 = time.time()
 
@@ -319,7 +357,7 @@ def main(argv=None):
     kw = dp.KeywordFilter(include, exclude, args.keyword_min_hits, args.keyword_min_distinct, args.title_weight,
                           pattern_cache=dp.prefilter_cache_path(args.include_keywords))
     dp._init_worker(kw, {"language": args.language, "max_replacement_ratio": args.max_replacement_ratio,
-                         "min_chars": args.min_chars, "exact_dedup": args.exact_dedup,
+                         "min_chars": args.min_chars,
                          "boilerplate": "off", "boilerplate_min_len": args.boilerplate_min_len})
     spec = args.keyword_sources.strip().lower()
 
@@ -358,16 +396,36 @@ def main(argv=None):
     estimates = {t.name: t.estimate() for t in tallies}
     train_chars = sum(c for _, c in estimates.values())
     vocab = args.vocab_size or dp.auto_vocab_size(train_chars)
-    with tempfile.TemporaryDirectory() as work:
-        if opts.tokenizer:
+    tok = rebuild = None
+    tok_path = opts.tokenizer
+    if opts.tokenizer:
+        try:
             tok = dp.load_tokenizer_from_any(opts.tokenizer)
-            how = f"tokenizer {opts.tokenizer}"
+        except (SystemExit, Exception) as exc:  # noqa: BLE001 - a built dataset whose tokenizer file is gone
+            if not os.path.isfile(os.path.join(opts.tokenizer, "manifest.json")):
+                # a mistyped path, a folder that is no dataset or a file that holds no tokenizer: the estimate
+                # would describe another tokenizer than the one asked for
+                raise
+            print(f"--tokenizer {opts.tokenizer} cannot be read ({type(exc).__name__}: {exc}); a tokenizer is trained "
+                  "on the kept sample instead", flush=True)
+    elif args.tokenizer_from:  # data_prep's own option: the build would reuse this tokenizer
+        tok, tok_path = dp.load_tokenizer_from_any(args.tokenizer_from), args.tokenizer_from
+    with tempfile.TemporaryDirectory() as work:
+        if tok is not None:
+            measure = {t.name: t.texts for t in tallies}
+            how = f"tokenizer {tok_path}"
+            if tok.vocab_size != vocab and not args.tokenizer_from:
+                rebuild = (f"a rebuild from scratch would train a {vocab:,}-piece tokenizer"
+                           + (" (fewer tokens)" if vocab > tok.vocab_size else "")
+                           + ": python estimate_dataset.py for that")
+            vocab = tok.vocab_size  # the model sizes below are for the tokenizer that was measured
         else:
             kind = "SuperBPE" if args.superbpe else "SentencePiece"
             print(f"training a {vocab:,}-piece {kind} tokenizer on the kept sample ...", flush=True)
             tok = train_tokenizer(tallies, vocab, work, args, estimates)
+            measure = {t.name: split_texts(t.texts)[1] for t in tallies}  # the texts it was not trained on
             how = f"a {vocab:,}-piece {kind} tokenizer trained on the kept sample"
-        cpt = {t.name: chars_per_token(tok, t.texts) for t in tallies}
+        cpt = {t.name: chars_per_token(tok, measure[t.name]) for t in tallies}
 
     print(f"\nEstimated dataset (sample {args.sample:.0%} of web records, >= 300 files per folder; "
           f"characters per token from {how}; {time.time() - t0:,.0f} s)\n")
@@ -388,6 +446,8 @@ def main(argv=None):
               f"{train / 1e6:>14,.0f}M  {reasons}{cap}")
     print(f"{'total':<21}{'':>12}{'':>12}{'':>13}{'':>10}{total_tokens / 1e6:>14,.0f}M  "
           f"(+ {total_val / 1e6:,.0f}M validation tokens)")
+    if rebuild:
+        print(f"These are tokens of the {vocab:,}-piece tokenizer given with --tokenizer; {rebuild}")
 
     # ---------------- model sizes ----------------
     import tiny_gpt
@@ -397,9 +457,9 @@ def main(argv=None):
     data_tokens = epochs * unique
     flops, source = (opts.tflops * 1e12, f"--tflops {opts.tflops:g}") if opts.tflops else measured_speed(HERE)
 
-    def per_token(n, c):
-        # tiny_gpt's own rules: the context of default_ctx (1024 up to d 1024, 2048 up to d 2048, then 4096) and
-        # flops_per_token (6 per active parameter + 12 x layers x context x width)
+    def per_token(c):
+        # tiny_gpt's own rules: the context of default_ctx (256 up to d 192, 512 up to d 512, 1024 up to d 1024,
+        # 2048 up to d 2048, then 4096) and flops_per_token (6 per active parameter + 12 x layers x context x width)
         return tiny_gpt.flops_per_token(dataclasses.replace(c, ctx=tiny_gpt.default_ctx(c.d_model)))
 
     def chinchilla(n, d):
@@ -409,7 +469,7 @@ def main(argv=None):
     commands = []
 
     def row(label, n, c, d):
-        hours = d * per_token(n, c) / flops / 3600 / 0.92 if flops else float("nan")
+        hours = d * per_token(c) / flops / 3600 / 0.92 if flops else float("nan")
         commands.append(f"{label}: python tiny_gpt.py --dataset <folder> --d-model {c.d_model} --layers {c.n_layers} "
                         f"--train-tokens {int(d / 1e7) * 10_000_000}")
         return (f"{label:<16}{n / 1e6:>9.1f}M  d{c.d_model:<5} L{c.n_layers:<3}{d / 1e9:>9.2f}B{d / n:>9.0f}"
@@ -430,7 +490,7 @@ def main(argv=None):
         for hours in (float(h) for h in opts.hours.split(",") if h.strip()):
             best = None
             for n, c in shapes:
-                tokens = min(flops * hours * 3600 * 0.92 / per_token(n, c), data_tokens)
+                tokens = min(flops * hours * 3600 * 0.92 / per_token(c), data_tokens)
                 if tokens >= r * n:
                     best = (n, c, tokens)
             if best:

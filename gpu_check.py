@@ -303,11 +303,8 @@ def main():
     snapshot = nvidia_smi()
     if snapshot:
         print_sample("now", snapshot)
-    # a live training lock counts on every device; the nvidia-smi reading only where there is one
-    busy = (bool(snapshot) and (num(snapshot["utilization.gpu"]) > 30 or num(snapshot["memory.used"]) > 2500)
-            or tiny_gpt.gpu_busy())
-    warning = ("\n" + tiny_gpt.GPU_BUSY_MESSAGE + " (Two CUDA jobs on a throttled laptop GPU can also trip the "
-               "Windows 2-second GPU watchdog: driver reset, both jobs killed.) Or pass --force.")
+    busy = tiny_gpt.gpu_busy()
+    warning = "\n" + tiny_gpt.GPU_BUSY_MESSAGE + " Or pass --force."
     loaded = None
     if args.load:
         if busy and not args.force:

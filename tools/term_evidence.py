@@ -8,6 +8,7 @@ Writes OUT.tsv (term, category, batch, query, hits; hits = -1 when a term cannot
 be searched, e.g. a suffix wildcard) and keeps a cache next to it (OUT.tsv.cache.json),
 so an interrupted run continues where it stopped. About 5 requests a second.
 """
+import argparse
 import concurrent.futures
 import json
 import os
@@ -17,21 +18,13 @@ import time
 
 import requests
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # _kw, also when this file is imported by path
+from _kw import read_batch  # noqa: E402
+
 API = "https://www.ebi.ac.uk/europepmc/webservices/rest/search"
 UA = "tinyGPT-keyword-check/1.0 (personal research)"
 _lock = threading.Lock()
 _last = [0.0]
-
-
-def read_batch(path):
-    out, cat = [], None
-    for line in open(path, encoding="utf-8").read().splitlines():
-        s = line.strip()
-        if s.startswith("# "):
-            cat = s[2:].strip()
-        elif s and not s.startswith("#"):
-            out.append((s, cat))
-    return out
 
 
 def query_for(term):
@@ -72,8 +65,12 @@ def hits(session, query):
 
 
 def main():
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("out", metavar="OUT.tsv", help="table to write (its cache is OUT.tsv.cache.json)")
+    p.add_argument("batches", metavar="BATCH.txt", nargs="+", help="keyword batch file(s)")
+    args = p.parse_args()
     sys.stdout.reconfigure(encoding="utf-8")
-    out, batches = sys.argv[1], sys.argv[2:]
+    out, batches = args.out, args.batches
     cache_path = out + ".cache.json"
     try:
         cache = json.load(open(cache_path, encoding="utf-8"))

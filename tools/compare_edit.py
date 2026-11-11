@@ -41,14 +41,6 @@ def paired_ci(a, b, reps=2000, seed=0):
     return float((b - a).mean()), float(low), float(high)
 
 
-def per_text_rates(seqs, start, eos):
-    out = []
-    for s in seqs:
-        lab = ew.loop_labels(s, start, eos)
-        out.append(sum(lab.values()) / len(lab) if lab else 0.0)
-    return np.array(out)
-
-
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("original")
@@ -99,7 +91,7 @@ def main(argv=None):
             nbytes.append(b)
         print(f"{label}: fact benchmark ({len(probes)} questions)", flush=True)
         acc, results = tg.score_probes(model, tok, probes, device, amp, floor=False)
-        res[label] = {"rates": per_text_rates(seqs[label], start, tok.eos_id), "nll": np.array(nll),
+        res[label] = {"rates": ew.per_text_rates(seqs[label], start, tok.eos_id), "nll": np.array(nll),
                       "bytes": np.array(nbytes), "probe": np.array([r["correct"] for r in results], float),
                       "probe_acc": acc}
         del model

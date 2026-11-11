@@ -1,4 +1,6 @@
 """Figures for the tinyGPT learning guide (Nature-style schematics)."""
+import argparse
+import json
 import os
 
 import matplotlib
@@ -20,6 +22,15 @@ def _count_terms():
         return len(data_prep.read_terms(os.path.join(PROJECT, "keywords.txt")))
     except Exception:  # noqa: BLE001
         return 0
+
+
+def _tokenizer_label():
+    """The tokenizer step with the vocabulary size of the built dataset (datasets/bio_all), when there is one."""
+    try:
+        with open(os.path.join(PROJECT, "datasets", "bio_all", "manifest.json"), encoding="utf-8") as handle:
+            return f"BPE tokenizer ({int(json.load(handle)['tokenizer']['vocab_size']):,} pieces)"
+    except (OSError, ValueError, KeyError, TypeError):
+        return "BPE tokenizer"
 
 
 def _count_lines(name):
@@ -85,7 +96,7 @@ def pipeline():
     panel(ax, 0.26, 0.93, "b", "data_prep.py")
     steps = ["Clean: UTF-8, NFC, control chars", "English only", f"Keyword filter ({_count_terms()} terms)",
              "Exact + near-duplicates", "Boilerplate lines removed", "Split by document",
-             "BPE tokenizer (8,192 pieces)", "Token shards + report"]
+             _tokenizer_label(), "Token shards + report"]
     for i, text in enumerate(steps):
         box(ax, 0.26, 0.85 - i * 0.068, 0.22, 0.056, text, "prep", size=6.8)
         if i:
@@ -94,7 +105,7 @@ def pipeline():
     panel(ax, 0.53, 0.93, "c", "tiny_gpt.py  pre-training")
     loop = [("Random windows\nfrom token shards", 0.81), ("Transformer\nforward pass", 0.695),
             ("Cross-entropy\n+ z-loss", 0.58), ("Back-propagation\n(gradients)", 0.465),
-            ("AdamW update\nWSD learning rate", 0.35)]
+            ("Muon + AdamW update\nWSD learning rate", 0.35)]
     for text, y in loop:
         box(ax, 0.55, y, 0.17, 0.085, text, "train")
     for (_, y0), (_, y1) in zip(loop, loop[1:]):
@@ -109,7 +120,7 @@ def pipeline():
         f"fact benchmark ({_count_lines('probes_biology.tsv')} items)\nsample text · checkpoint\nexperiments.csv", "use", size=6.8)
     arrow(ax, 0.738, 0.735, 0.765, 0.735)
     # d: post-training
-    panel(ax, 0.53, 0.26, "d", "finetune.py  post-training")
+    panel(ax, 0.53, 0.26, "d", "posttrain.py (SFT, DPO)")
     post = [("Supervised\nfine-tuning (SFT)", 0.55), ("Preference\ntuning (DPO)", 0.705),
             ("Reinforcement\nlearning (RL)*", 0.86)]
     for text, x in post:
@@ -141,7 +152,7 @@ def architecture():
     ax.add_patch(FancyBboxPatch((col - 0.02, 0.27), 0.38, 0.47, boxstyle="round,pad=0.004,rounding_size=0.012",
                                 linewidth=0.9, edgecolor=EDGE["train"], facecolor="none", linestyle=(0, (3, 2))))
     ax.text(col + 0.36, 0.72, "× L blocks", ha="right", fontsize=7, color=EDGE["train"], fontweight="bold")
-    for text, y, h in (("RMSNorm", 0.64, 0.055), ("grouped-query attention\nwith RoPE positions", 0.52, 0.075),
+    for text, y, h in (("RMSNorm", 0.64, 0.055), ("multi-head attention\nwith RoPE positions", 0.52, 0.075),
                        ("RMSNorm", 0.43, 0.055), ("SwiGLU feed-forward", 0.32, 0.055)):
         box(ax, col + 0.03, y, 0.26, h, text, "train")
     arrow(ax, col + 0.17, 0.77, col + 0.17, 0.695)
@@ -174,7 +185,7 @@ def architecture():
     text = ("attention (q, k, v, o):  $2d^2 + 2\\,d\\,d_{kv}$\n"
             "feed-forward (gate, up, down):  $3\\,d\\,h$,   $h \\approx 8d/3$\n"
             "norms:  $2d$ per block;   embedding:  $V d$ (shared with output)\n\n"
-            "your run:  $d$ = 384,  $L$ = 8,  $V$ = 8,192\n"
+            "first run (Sept.):  $d$ = 384,  $L$ = 8,  $V$ = 8,192\n"
             "blocks  8 × 1,770,240 + 384 = 14,162,304\n"
             "embedding  8,192 × 384 = 3,145,728\n"
             "total  17,308,032 parameters")
@@ -186,7 +197,7 @@ def architecture():
 def stages():
     fig, ax = canvas(7.1, 2.5)
     rows = [("1  Pre-training", "raw text; predict the next token",
-             "$10^8$ tokens (tinyGPT) to $10^{13}$ (frontier)", "train"),
+             "$10^{10}$ tokens (tinyGPT) to $10^{13}$ (frontier)", "train"),
             ("2  Supervised fine-tuning", "(question, ideal answer); loss on the answer only",
              "$10^3$ to $10^6$ pairs", "post"),
             ("3  Preference tuning", "(prompt, better, worse); DPO or RLHF", "$10^3$ to $10^6$ comparisons", "post"),
@@ -204,6 +215,7 @@ def stages():
 
 
 if __name__ == "__main__":
+    argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter).parse_args()
     os.makedirs(OUT, exist_ok=True)
     pipeline()
     architecture()
