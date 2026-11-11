@@ -3823,19 +3823,24 @@ def read_safetensors(path):
         if size > 100 * 2 ** 20:
             raise SystemExit(f"{path}: implausible safetensors header ({size:,} bytes)")
         header = json.loads(handle.read(size))
-        data = handle.read()
-    metadata = header.pop("__metadata__", {})
-    tensors = {}
-    for name, info in header.items():
-        begin, end = info["data_offsets"]
-        if not 0 <= begin <= end <= len(data) or info["dtype"] not in by_name:
-            raise SystemExit(f"{path}: corrupt entry {name}")
-        dtype = by_name[info["dtype"]]
-        if begin == end:  # torch.frombuffer refuses an empty buffer
-            tensors[name] = torch.empty(info["shape"], dtype=dtype)
-            continue
-        buf = torch.frombuffer(bytearray(data[begin:end]), dtype=torch.int16 if dtype == torch.bfloat16 else dtype)
-        tensors[name] = (buf.view(torch.bfloat16) if dtype == torch.bfloat16 else buf).reshape(info["shape"])
+        metadata = header.pop("__metadata__", {})
+        base = 8 + size
+        file_len = os.fstat(handle.fileno()).st_size
+        tensors = {}
+        for name, info in header.items():
+            begin, end = info["data_offsets"]
+            if not 0 <= begin <= end <= file_len - base or info["dtype"] not in by_name:
+                raise SystemExit(f"{path}: corrupt entry {name}")
+            dtype = by_name[info["dtype"]]
+            if begin == end:  # torch.frombuffer refuses an empty buffer
+                tensors[name] = torch.empty(info["shape"], dtype=dtype)
+                continue
+            raw = bytearray(end - begin)  # read into the tensor's own memory, without holding the whole file too
+            handle.seek(base + begin)
+            if handle.readinto(raw) != end - begin:
+                raise SystemExit(f"{path}: corrupt entry {name}")
+            buf = torch.frombuffer(raw, dtype=torch.int16 if dtype == torch.bfloat16 else dtype)
+            tensors[name] = (buf.view(torch.bfloat16) if dtype == torch.bfloat16 else buf).reshape(info["shape"])
     return tensors, metadata
 
 

@@ -507,3 +507,56 @@ class Audit2TinyGptB(unittest.TestCase):
             tracemalloc.stop()
         self.assertLess(peak, 2 * 2 ** 20, f"{peak:,} bytes allocated while writing 18 MiB of tensors")
         self.assertEqual(os.path.getsize(os.path.join(self.tmp, "big.safetensors")) % 8, 0)
+
+    def test_read_safetensors_reads_each_tensor_into_its_own_memory(self):
+        """F352: read_safetensors reads every tensor straight into the buffer it keeps (no copy of the whole file
+        beside the tensors); the tensors are the same, and a file cut short is refused as corrupt."""
+        import tracemalloc
+        tensors = self._safetensors_samples()
+        path = os.path.join(self.tmp, "read_samples.safetensors")
+        tiny_gpt.write_safetensors(tensors, path, {"note": "x"})
+        back, meta = tiny_gpt.read_safetensors(path)
+        self.assertEqual(meta, {"note": "x"})
+        self.assertEqual(sorted(back), sorted(tensors))
+        for name, t in tensors.items():
+            self.assertEqual((back[name].dtype, back[name].shape), (t.dtype, t.shape), name)
+            self.assertTrue(torch.equal(back[name], t.detach()), name)
+        back["f32"][0, 0] = 5.0  # its own writable memory
+        self.assertEqual(float(back["f32"][0, 0]), 5.0)
+        # 18 MiB of weights: the reader allocates about the tensors, not the file a second time
+        big = {"w": torch.arange(4 * 2 ** 20, dtype=torch.float32), "v": torch.ones(2 ** 20).bfloat16()}
+        big_path = os.path.join(self.tmp, "read_big.safetensors")
+        tiny_gpt.write_safetensors(big, big_path)
+        size = os.path.getsize(big_path)
+        tracemalloc.start()
+        try:
+            big_back, _ = tiny_gpt.read_safetensors(big_path)
+            peak = tracemalloc.get_traced_memory()[1]
+        finally:
+            tracemalloc.stop()
+        self.assertTrue(torch.equal(big_back["w"], big["w"]) and torch.equal(big_back["v"], big["v"]))
+        self.assertLess(peak, 1.25 * size, f"{peak:,} bytes allocated while reading a file of {size:,} bytes")
+        # cut short inside the last tensor, and inside the first: SystemExit naming the file, never a short tensor
+        with open(path, "rb") as handle:
+            whole = handle.read()
+        for cut in (len(whole) - 1, len(whole) - 200):
+            short = os.path.join(self.tmp, f"read_short_{cut}.safetensors")
+            with open(short, "wb") as handle:
+                handle.write(whole[:cut])
+            with self.assertRaises(SystemExit) as caught:
+                tiny_gpt.read_safetensors(short)
+            self.assertIn("corrupt entry", str(caught.exception))
+            self.assertIn(short, str(caught.exception))
+        # a file that shrinks after its size was read (the short count of readinto)
+        real_fstat = os.fstat
+
+        def longer(fd):
+            st = real_fstat(fd)
+            return os.stat_result(tuple(st[:6]) + (st.st_size + 64,) + tuple(st[7:10]))
+
+        with unittest.mock.patch.object(tiny_gpt.os, "fstat", side_effect=longer), \
+                unittest.mock.patch.object(tiny_gpt.json, "loads", side_effect=lambda raw: {
+                    "x": {"dtype": "U8", "shape": [len(whole)], "data_offsets": [0, len(whole) - 8 - len(raw) + 64]}}):
+            with self.assertRaises(SystemExit) as caught:
+                tiny_gpt.read_safetensors(path)
+        self.assertIn("corrupt entry x", str(caught.exception))
