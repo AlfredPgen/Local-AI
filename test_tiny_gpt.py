@@ -740,12 +740,6 @@ class TestPipeline(unittest.TestCase):
         self.assertEqual(tiny_gpt.fmt_dur(35_400), "9h 50m")
         self.assertEqual(tiny_gpt.fmt_dur(125), "2m 05s")
 
-    def test_compat_dataset_names_follow_settings(self):
-        a = tiny_gpt.parse_args(["--data", self.corpus.md, "--wiki-articles", "30000"])
-        b = tiny_gpt.parse_args(["--data", self.corpus.md, "--wiki-articles", "50000"])
-        self.assertNotEqual(tiny_gpt.compat_dataset_dir(a), tiny_gpt.compat_dataset_dir(b))
-        self.assertIn("wiki50000", tiny_gpt.compat_dataset_dir(b))
-
     def test_converter(self):
         src, out = os.path.join(self.tmp, "raw"), os.path.join(self.tmp, "converted")
         os.makedirs(src)

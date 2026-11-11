@@ -3493,12 +3493,6 @@ def parse_args(argv=None):
     g.add_argument("--mix-alpha", type=float,
                    help="sampling share of a source ~ its --mix weight x its tokens^alpha (default 1: proportional "
                         "to size; below 1 flattens a mix one source dominates; honoured on --resume like --mix)")
-    g.add_argument("--data", help="(compat) folder of .md files: builds datasets/<name> with data_prep defaults")
-    g.add_argument("--wiki-dir", default=os.path.join(os.path.expanduser("~"), "ai_training_data", "wikipedia"),
-                   help="(compat)")
-    g.add_argument("--wiki-articles", type=int, default=0, help="(compat) Wikipedia articles to add")
-    g.add_argument("--include-keywords", help="(compat) keyword filter passed to data_prep")
-    g.add_argument("--tokenizer-vocab-size", type=int, default=0, help="(compat) vocabulary for auto-prep")
     g = p.add_argument_group("run")
     g.add_argument("--name", default=DEFAULT_NAME, help="checkpoint base name")
     g.add_argument("--out-dir", default=HERE, help="folder for checkpoints and metrics")
@@ -3681,7 +3675,6 @@ def parse_args(argv=None):
                    help="grouped-query attention path (auto: on CUDA the faster of the two, timed once per head shape; "
                         "repeat_kv elsewhere)")
     g.add_argument("--threads", type=int, help="CPU threads for PyTorch")
-    g.add_argument("--suppress", action="store_true", help=argparse.SUPPRESS)  # old script's option: accepted, no effect
     g = p.add_argument_group("generation")
     g.add_argument("--checkpoint",
                    help="checkpoint for --generate/--benchmark/--export (default <name>_best.pt, else <name>.pt)")
@@ -3765,8 +3758,6 @@ def validate_args(args, parser):
         parser.error(f"--out-dir does not exist: {args.out_dir}")
     if args.dataset and not os.path.isdir(args.dataset):
         parser.error(f"--dataset folder not found: {args.dataset}")
-    if args.data and not os.path.isdir(args.data):
-        parser.error(f"--data folder not found: {args.data}")
     if args.sample_every is None:
         args.sample_every = args.eval_every
     if args.no_probes:
@@ -4014,58 +4005,9 @@ def cmd_generate(args):
     print(f"\n{args.generate}{text}" if args.generate and not text.startswith(args.generate) else f"\n{text}")
 
 
-def compat_dataset_dir(args):
-    """datasets/<md folder>_wiki<N>[_kw]_<hash of all settings>. The name encodes
-    the settings, so a different --wiki-articles, keyword file or vocabulary
-    builds a new dataset instead of silently reusing an old one (the bug that
-    trained a "--wiki-articles 50000" run on 30,000 articles)."""
-    canon = lambda p: os.path.normcase(os.path.realpath(p))  # noqa: E731 - C:\X and c:\x are one folder
-    options = {"md_dir": canon(args.data) if args.data else None,
-               "wiki_dir": canon(args.wiki_dir) if args.wiki_articles else None,
-               "wiki_max_docs": args.wiki_articles or 0, "include_keywords": args.include_keywords,
-               "vocab_size": args.tokenizer_vocab_size or 0}
-    digest = hashlib.sha256(json.dumps(options, sort_keys=True).encode()).hexdigest()[:6]
-    parts = [os.path.basename(os.path.normpath(args.data)) if args.data else "nomd"]
-    if args.wiki_articles:
-        parts.append(f"wiki{args.wiki_articles}")
-    if args.include_keywords:
-        parts.append("kw")
-    return os.path.join(HERE, "datasets", "_".join(parts + [digest]))
-
-
 def ensure_dataset(args):
-    """--dataset, or (compat) a dataset built from --data/--wiki-articles; None otherwise (a resumed run takes
-    the path from its checkpoint in _train)."""
-    if args.dataset:
-        return os.path.abspath(args.dataset)
-    if args.data or args.wiki_articles:
-        path = compat_dataset_dir(args)
-        if os.path.exists(os.path.join(path, "manifest.json")):
-            manifest = data_prep.read_manifest(path)
-            kept = {n: s.get("kept_docs") for n, s in manifest["sources"].items()}
-            print(f"Reusing dataset {path}, built earlier with the same --data/--wiki-articles/"
-                  f"--include-keywords/--tokenizer-vocab-size (documents kept: {kept}).")
-            return path
-        prep = ["--out", path]
-        if args.data:
-            has_subfolders = any(os.path.isdir(os.path.join(args.data, d)) and not d.startswith((".", "_"))
-                                 and d.lower() not in ("wikipedia", "web", "images") for d in os.listdir(args.data))
-            prep += ["--text-root", args.data] if has_subfolders else ["--md-dir", args.data]
-        if args.wiki_articles:
-            prep += ["--wiki-dir", args.wiki_dir, "--wiki-max-docs", str(args.wiki_articles)]
-            if not args.include_keywords:
-                prep += ["--wiki-select", "first"]
-        if args.include_keywords:
-            prep += ["--include-keywords", args.include_keywords]
-        if args.tokenizer_vocab_size:
-            prep += ["--vocab-size", str(args.tokenizer_vocab_size)]
-        print("Building dataset: python data_prep.py " + " ".join(f'"{x}"' if " " in x else x for x in prep))
-        # its own process: data_prep's worker processes would otherwise re-import this script (and torch)
-        code = subprocess.run([sys.executable, os.path.join(HERE, "data_prep.py"), *prep]).returncode
-        if code:
-            raise SystemExit(f"data_prep.py failed (exit code {code}); see its messages above.")
-        return path
-    return None
+    """--dataset as an absolute path, or None (a resumed run takes the path from its checkpoint in _train)."""
+    return os.path.abspath(args.dataset) if args.dataset else None
 
 
 def _resume_hint(args, flag=" --resume"):
@@ -4227,7 +4169,7 @@ def _train(args):
         if args.init_from:
             init_obj = safe_load(args.init_from, args.trust_checkpoint, mmap=True)
     if not dataset_dir:
-        raise SystemExit("No training data: pass --dataset <folder from data_prep.py> (or --data <md folder>).")
+        raise SystemExit("No training data: pass --dataset <folder from data_prep.py>.")
     if not os.path.isdir(dataset_dir):
         raise SystemExit(f"Dataset folder not found: {dataset_dir} (moved? pass --dataset).")
     manifest, arrays = data_prep.open_token_files(dataset_dir, verify=True)
