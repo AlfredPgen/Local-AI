@@ -4221,6 +4221,11 @@ def _train(args):
         raise SystemExit("No training data: pass --dataset <folder from data_prep.py>.")
     if not os.path.isdir(dataset_dir):
         raise SystemExit(f"Dataset folder not found: {dataset_dir} (moved? pass --dataset).")
+    # said before the silent part (hashing the token files, building and compiling the model), and before the
+    # header's bar: view_pt splits the sessions of a log at the bar followed by 'RUN '
+    source_path = resume_path if args.resume else args.init_from
+    print((f"loading {os.path.basename(os.path.normpath(source_path))}, " if source_path else "")
+          + "checking the dataset and compiling the model ...")
     manifest, arrays = data_prep.open_token_files(dataset_dir, verify=True)
     tok_meta = manifest["tokenizer"]
     tok = data_prep.Tokenizer.from_file(os.path.join(dataset_dir, tok_meta["file"]), tok_meta.get("encode_mode", "lines"))
