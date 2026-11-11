@@ -3,8 +3,9 @@ result as a NEW checkpoint. The input checkpoint is only read, never written.
 
     python tools/edit_weights.py tinyGPT_muon_best.pt tinyGPT_muon_best_noloop.pt
 
-1. Prompts: the first --prompt-tokens tokens of validation documents (the even-
-   numbered ones; compare_edit.py tests on the odd-numbered ones, never seen here).
+1. Prompts: the first --prompt-tokens tokens of validation documents (those with an
+   even index within their source; compare_edit.py tests on those with an odd index,
+   never seen here).
 2. The model continues each prompt (sampling as tiny_gpt.py --generate does).
 3. Every generated position is labelled "loop" if the 4 tokens ending at the next
    token already appeared earlier in the text, else "fresh". Loops happen late in a
@@ -45,10 +46,11 @@ BAND = 16
 
 
 def prompts_from_validation(dataset, tok, n, prompt_tokens, split, seed):
-    """Token tuples: the first prompt_tokens tokens of validation documents (even
-    indices for split 'find', odd for 'test'), mixed across sources, seeded."""
-    docs = cm.validation_documents(dataset, per_source=max(8, n), max_chars=4000)
-    docs = [d for i, d in enumerate(docs) if i % 2 == (0 if split == "find" else 1)]
+    """Token tuples: the first prompt_tokens tokens of validation documents (those
+    with an even index within their source for split 'find', an odd one for
+    'test'), mixed across sources, seeded."""
+    docs = cm.validation_documents(dataset, per_source=max(8, n), max_chars=4000,
+                                   parity=0 if split == "find" else 1)
     random.Random(seed).shuffle(docs)
     out = []
     for source, k, text in docs:
@@ -301,7 +303,7 @@ def main(argv=None):
                                    args.seed)
     find, dev = allp[:args.prompts], allp[args.prompts:]
     start = len(find[0])
-    bpb_docs = [d for i, d in enumerate(cm.validation_documents(dataset, 2 * args.bpb_docs, 6000)) if i % 2 == 0]
+    bpb_docs = cm.validation_documents(dataset, args.bpb_docs, 6000, parity=0)
     print(f"{len(find)} prompts to find candidates, {len(dev)} to choose; {args.new_tokens} new tokens each; "
           f"safety check on {len(bpb_docs)} validation documents", flush=True)
 

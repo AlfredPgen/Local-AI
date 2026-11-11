@@ -364,6 +364,70 @@ class Audit2Followers(unittest.TestCase):
         self.assertEqual(out[:, 4:].tolist(), torch.stack(drawn, dim=1).tolist())
         self.assertGreater(len(set(out[:, 4:].flatten().tolist())), 6, "sampled, not one repeated token")
 
+    # ---------------- X8: the edit and its test never share a validation document ----------------
+    def test_edit_and_its_comparison_use_disjoint_validation_documents(self):
+        """X8 (F381): tools/edit_weights.py takes its prompts and its safety-check documents from validation
+        documents with an even index within their source, tools/compare_edit.py its prompts and its documents
+        from those with an odd index, whatever number each asks for (the split was by position in two lists
+        of different spacing, which overlapped). Both mains run up to their first generation."""
+        import numpy as np
+        import compare_edit
+        import compare_models
+        import data_prep
+        import edit_weights as ew
+        sizes = {"big": 41, "mid": 7, "one": 1, "two": 2}
+        doc = [0] + [1 + i % 40 for i in range(250)]  # a start token, then 250 characters of CharTok text
+        arrays = {"val": {s: np.array(doc * n, dtype=np.uint16) for s, n in sizes.items()}}
+        manifest = {"tokenizer": {"file": "tokenizer.model", "encode_mode": "lines"}}
+        model = T.TestOtherScripts.model(seed=3)
+        real, calls = compare_models.validation_documents, []
+
+        def recorded(dataset, per_source, max_chars, layout=None, parity=None):
+            docs = real(dataset, per_source, max_chars, layout, parity)
+            calls.append((per_source, max_chars, parity, [(s, k) for s, k, _ in docs]))
+            return docs
+
+        class Reached(Exception):
+            pass
+
+        def generate_all(*a, **k):
+            raise Reached
+
+        def asked(main, argv):
+            """The validation_documents calls of a tool's main up to its first generation."""
+            del calls[:]
+            with unittest.mock.patch.object(data_prep, "open_token_files",
+                                            lambda folder, verify=True: (manifest, arrays)), \
+                    unittest.mock.patch.object(data_prep.Tokenizer, "from_file", lambda *a, **k: T.CharTok()), \
+                    unittest.mock.patch.object(compare_models, "validation_documents", recorded), \
+                    unittest.mock.patch.object(ew.tg, "load_for_inference",
+                                               return_value=(model, T.CharTok(), model.cfg, {"step": 7})), \
+                    unittest.mock.patch.object(ew.tg, "resolve_dataset", return_value="dataset"), \
+                    unittest.mock.patch.object(ew, "generate_all", generate_all), \
+                    redirect_stdout(io.StringIO()), self.assertRaises(Reached):
+                main(argv)
+            return list(calls)
+
+        sizes_of = ["--device", "cpu", "--prompt-tokens", "8", "--new-tokens", "4"]
+        edit = asked(ew.main, [os.path.join(self.tmp, "x8_source.pt"), os.path.join(self.tmp, "x8_edited.pt"),
+                               "--prompts", "30", "--dev-prompts", "10"] + sizes_of)
+        test = asked(compare_edit.main, [os.path.join(self.tmp, "x8_source.pt"),
+                                         os.path.join(self.tmp, "x8_edited.pt"), "--prompts", "20", "--docs", "5"]
+                     + sizes_of)
+        used, held_out = {d for c in edit for d in c[3]}, {d for c in test for d in c[3]}
+        self.assertFalse(used & held_out, "a held-out document was used by the edit")
+        self.assertEqual([c[:3] for c in edit], [(40, 4000, 0), (3, 6000, 0)])
+        self.assertEqual([c[:3] for c in test], [(20, 4000, 1), (5, 20_000, 1)])
+        self.assertTrue(all(k % 2 == 0 for _, k in used) and all(k % 2 == 1 for _, k in held_out))
+        self.assertEqual(({s for s, _ in used}, {s for s, _ in held_out}), (set(sizes), {"big", "mid", "two"}))
+        # the safety check gets --bpb-docs documents per source (fewer from a source that has fewer even ones)
+        per_source = {s: sum(1 for name, _ in edit[1][3] if name == s) for s in sizes}
+        self.assertEqual(per_source, {"big": 3, "mid": 3, "one": 1, "two": 1})
+        for module in (ew, compare_edit):
+            self.assertIn("index within their source", " ".join(module.__doc__.split()))
+            self.assertNotIn("numbered", module.__doc__)
+        self.assertIn("index within their source", " ".join(ew.prompts_from_validation.__doc__.split()))
+
 
 if __name__ == "__main__":
     unittest.main()

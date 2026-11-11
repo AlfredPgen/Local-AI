@@ -4,12 +4,14 @@ with a picture.
 
     python tools/compare_edit.py tinyGPT_muon_best.pt tinyGPT_muon_best_noloop.pt
 
-1. Loops: both models continue the same held-out prompts (the odd-numbered
-   validation documents; edit_weights.py used the even ones) with the same random
-   seeds; per text, the share of generated tokens that repeat an earlier 4-gram.
-   A paired bootstrap over prompts gives a 95% interval for the change.
-2. Bits per byte on validation documents, per source and overall: paired over
-   documents (compare_models.py's method), 95% interval.
+1. Loops: both models continue the same held-out prompts (validation documents
+   with an odd index within their source; edit_weights.py used those with an even
+   index) with the same random seeds; per text, the share of generated tokens that
+   repeat an earlier 4-gram. A paired bootstrap over prompts gives a 95% interval
+   for the change.
+2. Bits per byte on validation documents with an odd index within their source,
+   per source and overall: paired over documents (compare_models.py's method), 95%
+   interval.
 3. Fact benchmark (probes_biology.tsv): accuracy of each model and a paired
    bootstrap interval over questions.
 Writes <edited>_vs_original.png and .json next to the edited checkpoint, and a few
@@ -80,7 +82,7 @@ def main(argv=None):
             dataset = tg.resolve_dataset(obj, override)
             prompts = ew.prompts_from_validation(dataset, tok, args.prompts, args.prompt_tokens, "test", args.seed)
             start = len(prompts[0])
-            docs = cm.validation_documents(dataset, args.docs, 20_000)
+            docs = cm.validation_documents(dataset, args.docs, 20_000, parity=1)
         print(f"{label}: {path} ({tg.device_label(device)}, {amp_name}) - generating", flush=True)
         seqs[label] = ew.generate_all(model, prompts, args.new_tokens, device, amp, args.batch, args.seed)
         print(f"{label}: bits per byte on {len(docs)} validation documents", flush=True)
