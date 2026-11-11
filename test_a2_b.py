@@ -1335,8 +1335,9 @@ class Audit2DataPrep(unittest.TestCase):
 
     # ---------------- F075: the SentencePiece options are one constant ----------------
     def test_tokenizer_file_records_the_options_of_the_constant(self):
-        """The tokenizer of a build was trained with SPM_TRAIN_OPTIONS: the model file records every one of
-        them (the token files of the golden builds show that the bytes did not change)."""
+        """The tokenizer of a build was trained with SPM_TRAIN_OPTIONS, and the constant holds the values the
+        trainer call had before it existed (written out here, not read from the constant): the model file
+        records every one of them (the token files of the golden builds show that the bytes did not change)."""
         try:
             from sentencepiece import sentencepiece_model_pb2 as spm_pb
         except Exception as exc:  # noqa: BLE001 - protobuf is optional for the build itself
@@ -1345,7 +1346,12 @@ class Audit2DataPrep(unittest.TestCase):
         proto = spm_pb.ModelProto()
         with open(os.path.join(self.plain(), "tokenizer.model"), "rb") as handle:
             proto.ParseFromString(handle.read())
-        options = dict(data_prep.SPM_TRAIN_OPTIONS)
+        options = dict(model_type="bpe", character_coverage=0.9995, byte_fallback=True, split_digits=True,
+                       unk_id=0, bos_id=1, eos_id=2, pad_id=-1, user_defined_symbols=["\n", "\t"],
+                       remove_extra_whitespaces=False, allow_whitespace_only_pieces=True,
+                       normalization_rule_name="identity", max_sentence_length=16384, hard_vocab_limit=False,
+                       shuffle_input_sentence=True, minloglevel=2)
+        self.assertEqual(data_prep.SPM_TRAIN_OPTIONS, options)
         spec, norm = proto.trainer_spec, proto.normalizer_spec
         self.assertEqual(options.pop("model_type"), "bpe")
         self.assertEqual(spec.model_type, spm_pb.TrainerSpec.BPE)
