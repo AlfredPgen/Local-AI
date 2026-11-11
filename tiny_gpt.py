@@ -198,6 +198,17 @@ def file_sha256(path):
         return "?"
 
 
+def source_sha256(path):
+    """sha256 of a source file with its CRLF line ends read as LF, so the same code has the same hash in a
+    Windows checkout and elsewhere (the run header's hash of this script); '?' when it cannot be read.
+    file_sha256 hashes the bytes as they are: dataset and probe files, and the stored probes_sha, use that."""
+    try:
+        with open(path, "rb") as handle:
+            return hashlib.sha256(handle.read().replace(b"\r\n", b"\n")).hexdigest()
+    except OSError:
+        return "?"
+
+
 # ---------------------------------------------------------------------------
 # Device, precision, attention kernel
 # ---------------------------------------------------------------------------
@@ -4555,7 +4566,7 @@ def _train(args):
     # print: the screen and log.txt. log_only: what makes the run reproducible but nobody reads on screen.
     log_only(f"command: {' '.join(sys.argv)}")
     log_only(f"python {platform.python_version()} | torch {torch.__version__} | backend {backend_label(device)} | "
-             f"{platform.platform()} | tiny_gpt.py sha256 {file_sha256(__file__)[:12]}")
+             f"{platform.platform()} | tiny_gpt.py sha256 {source_sha256(__file__)[:12]}")
     print(f"device: {device_label(device)} | {amp_name} | {opt_name} | "
           f"compile: {'on' if train_model is not model else 'off (eager)'}")
     log_only(f"device detail: attention: SDPA {attn_impl} ({attn_why}) | optimizer: {opt_name} ({opt_note})")
