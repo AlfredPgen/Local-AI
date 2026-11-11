@@ -345,10 +345,17 @@ def gpu_busy(*out_dirs, smi=True):
             pass
     if not smi:
         return False
+
+    def number(field):  # nan for a figure nvidia-smi cannot read ("[N/A]"): it never says busy, the other still can
+        try:
+            return float(field)
+        except ValueError:
+            return float("nan")
+
     try:
         out = subprocess.run(["nvidia-smi", "--query-gpu=memory.used,utilization.gpu",
                               "--format=csv,noheader,nounits"], capture_output=True, text=True, timeout=15).stdout
-        rows = [[float(v) for v in line.split(",")] for line in out.strip().splitlines()]
+        rows = [[number(v) for v in line.split(",")] for line in out.strip().splitlines()]
         return any(used > 2500 or util >= 20 for used, util in rows)
     except (OSError, ValueError, IndexError, subprocess.SubprocessError):
         return False

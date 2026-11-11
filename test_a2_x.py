@@ -546,6 +546,28 @@ class Audit2Followers(unittest.TestCase):
         self.assertEqual(overlap({"path": "ds_other"}), ((set(), missing, {}), ""),
                          "without a fingerprint a folder found by its name cannot be checked")
 
+    # ---------------- X17: one unreadable nvidia-smi field does not hide a busy GPU ----------------
+    def test_gpu_busy_skips_a_field_nvidia_smi_cannot_read(self):
+        """X17 (F166): nvidia-smi prints [N/A] for a figure a GPU does not report. tiny_gpt.gpu_busy skips
+        that field and still judges the other one; one such field made the whole test answer 'not busy',
+        which gpu_check.py (it uses this rule since F166) took as leave to start its load test beside a
+        training run. Rows that can be read answer as before."""
+        import tiny_gpt
+        folder = os.path.join(self.tmp, "x17")  # no lock file in it: nvidia-smi alone decides
+        os.makedirs(folder)
+        cases = (("3000, [N/A]", True), ("100, [N/A]", False), ("[N/A], 25", True), ("[N/A], 3", False),
+                 ("[N/A], [N/A]", False), ("100, [N/A]\n3000, 5", True), ("100, [N/A]\n[N/A], 19", False),
+                 ("3000, 10", True), ("100, 25", True), ("400, 3", False), ("2500, 19", False), ("2501, 0", True),
+                 ("0, 20", True), ("400, 3\n100, 25", True), ("", False), ("no devices were found", False),
+                 ("3000", False), ("3000, 10, 5", False))
+        for text, busy in cases:
+            smi = unittest.mock.Mock(stdout=text + "\n")
+            with unittest.mock.patch.object(tiny_gpt.subprocess, "run", return_value=smi) as asked:
+                self.assertIs(tiny_gpt.gpu_busy(folder), busy, text)
+            self.assertEqual(asked.call_count, 1)
+        with unittest.mock.patch.object(tiny_gpt.subprocess, "run", side_effect=OSError("no nvidia-smi")):
+            self.assertIs(tiny_gpt.gpu_busy(folder), False)
+
 
 if __name__ == "__main__":
     unittest.main()
