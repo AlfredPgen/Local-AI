@@ -1298,10 +1298,7 @@ def cmd_plot(args):
     rows = read_results(args.results)
     if not rows:
         raise SystemExit(f"No results in {args.results}; run `python benchmark.py run` first.")
-    plt.rcParams.update({"font.family": "DejaVu Sans", "axes.titlesize": 10, "axes.titleweight": "bold",
-                         "axes.labelsize": 8.5, "axes.labelcolor": vp.INK2, "text.color": vp.INK,
-                         "axes.titlecolor": vp.INK, "figure.facecolor": vp.SURFACE, "legend.fontsize": 7,
-                         "legend.frameon": False})
+    plt.rcParams.update(vp.BASE_STYLE)
     os.makedirs(args.out_dir, exist_ok=True)
     latest = latest_rows(rows, args.checkpoint, log=print)
     if not latest:
