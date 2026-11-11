@@ -4930,6 +4930,11 @@ class TestBenchmarkSuite(unittest.TestCase):
         integer = {"answer": "4", "output_type": "integer", "lower": "4", "upper": "4"}
         self.assertTrue(b.numeric_correct(integer, "4 points")[0])
         self.assertFalse(b.numeric_correct(integer, "5")[0])
+        self.assertTrue(b.numeric_correct(dict(integer, answer="7", lower="7", upper="7"), "7.2")[0])
+        # an 'integer' item whose answer is not a whole number takes its limits (as the official grader does)
+        half = {"answer": "4.5", "output_type": "integer", "lower": "4.5", "upper": "4.5"}
+        self.assertFalse(b.numeric_correct(half, "4")[0], "round(4) == round(4.5) must not count")
+        self.assertTrue(b.numeric_correct(half, "4.5")[0])
         date = {"answer": "09/11/2014", "output_type": "date", "lower": "09/11/2014", "upper": "09/11/2014"}
         self.assertTrue(b.numeric_correct(date, " 9/11/2014.")[0])
         self.assertFalse(b.numeric_correct(date, " 09/12/2014")[0])
@@ -5006,6 +5011,19 @@ class TestBenchmarkSuite(unittest.TestCase):
         self.assertIn("~", text)
         self.assertEqual(len(b.read_results(path)), 14)
         self.assertEqual(len(b.latest_rows(b.read_results(path), "tinyGPT_best.pt")), 7)
+        # the same file scored again later, at step 3000 and on medqa only: that step's rows, never a mix of steps
+        read = b.read_results(path)
+        two_steps = read + [dict(read[4], step="3000", accuracy="0.5")]
+        latest = b.latest_rows(two_steps, "tinyGPT_best.pt")
+        self.assertEqual([(r["benchmark"], r["category"], r["step"]) for r in latest], [("medqa", "all", "3000")])
+        self.assertEqual({r["step"] for r in b.latest_rows(two_steps[:7] + two_steps[-1:])}, {"3000"})
+        said = []
+        b.latest_rows(two_steps, "tinyGPT_best.pt", log=said.append)
+        self.assertEqual(len(said), 1)
+        self.assertIn("step 3000", said[0])
+        self.assertIn("humaneval, medcalc, mmlu", said[0])
+        b.latest_rows(read, "tinyGPT_best.pt", log=said.append)
+        self.assertEqual(len(said), 1, "one step: nothing to say")
         item_csv = os.path.join(self.tmp, "items.csv")
         b.write_item_csv(item_csv, [{"id": "a", "correct": True, "tags": ["x", "y"]}, {"id": "b", "extra": 1}])
         with open(item_csv, encoding="utf-8-sig") as handle:

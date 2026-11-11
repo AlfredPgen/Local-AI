@@ -12,8 +12,9 @@ coding and 3D-modelling benchmarks, downloaded once and scored on any checkpoint
                numeric  greedy answer, first number parsed, the benchmark's tolerance
                code     greedy completion (pass@1), tests run ONLY in a sandbox:
                         Docker (no network, 1 GB, 1 CPU) if its daemon runs, else WSL
-                        with bubblewrap (no network, no Windows drives), else refused
-                        unless --unsafe-local-execution
+                        with bubblewrap (no network, no Windows drives) or unshare
+                        (weaker: no PID namespace), else refused unless
+                        --unsafe-local-execution
                open / vision-graded sets are listed but not scored
              Results: results\benchmarks.csv (appended), per-item CSVs in
              benchmarks\runs\<checkpoint>_<time>\, one row in experiments.csv.
@@ -69,7 +70,6 @@ RESULTS_CSV = os.path.join(HERE, "results", "benchmarks.csv")
 RESULT_COLUMNS = ["time", "checkpoint", "step", "params", "benchmark", "category", "n", "accuracy", "low", "high",
                   "chance", "floor", "notes"]
 MCQ_TEMPLATE = "{prompt}\nAnswer:"
-LETTERS = "ABCDEFGHIJKLMNOP"
 GROUPS = ["knowledge", "medicine", "biology", "statistics", "code", "3d"]
 SANDBOX_SITE = "$HOME/.cache/tinygpt-sandbox/site"  # inside WSL; mounted read-only as /site
 
@@ -78,8 +78,11 @@ SANDBOX_SITE = "$HOME/.cache/tinygpt-sandbox/site"  # inside WSL; mounted read-o
 # ---------------------------------------------------------------------------
 
 
-def _flat(value):
+def _flat(value):  # None -> "", but 0 stays "0" on purpose: an MCQ option can be the number 0
     return " ".join(str(value if value is not None else "").split())
+
+
+_QUOTED_RE = re.compile(r"'((?:[^'\\]|\\.)*)'|\"((?:[^\"\\]|\\.)*)\"")  # one quoted string, either kind of quote
 
 
 def _list(value):
@@ -92,12 +95,12 @@ def _list(value):
         text = value.strip()
         if text.startswith("["):
             if re.search(r"""['"]\s+['"]""", text):  # numpy's printed form: literal_eval would join the strings
-                return [a or b for a, b in re.findall(r"'((?:[^'\\]|\\.)*)'|\"((?:[^\"\\]|\\.)*)\"", text)]
+                return [a or b for a, b in _QUOTED_RE.findall(text)]
             try:
                 import ast
                 return list(ast.literal_eval(text))
-            except (ValueError, SyntaxError):  # numpy's printed form: ['a' 'b'] without commas
-                return [a or b for a, b in re.findall(r"'((?:[^'\\]|\\.)*)'|\"((?:[^\"\\]|\\.)*)\"", text)]
+            except (ValueError, SyntaxError):  # other list text that is no Python literal: its quoted strings
+                return [a or b for a, b in _QUOTED_RE.findall(text)]
         return [value]
     return list(value)
 
@@ -116,14 +119,6 @@ def _dict(value):
 
 def stable_key(*parts):
     return hashlib.sha256("|".join(str(p) for p in parts).encode("utf-8")).hexdigest()
-
-
-def file_sha256(path):
-    h = hashlib.sha256()
-    with open(path, "rb") as handle:
-        for block in iter(lambda: handle.read(1 << 20), b""):
-            h.update(block)
-    return h.hexdigest()
 
 
 def home_short(text):
@@ -517,6 +512,7 @@ def folder_bytes(path):
 
 def download_one(spec, man, force=False):
     from huggingface_hub import HfApi, hf_hub_download
+    import data_prep  # here, not at the top: it loads numpy, which no other sub-command start needs
     info = HfApi().dataset_info(spec["repo"])
     if info.gated:
         raise RuntimeError(f"{spec['repo']} is gated ({info.gated}); not downloaded")
@@ -530,19 +526,20 @@ def download_one(spec, man, force=False):
         return old, "up to date"
     os.makedirs(raw_dir, exist_ok=True)
     for f in spec["files"]:
-        hf_hub_download(spec["repo"], f, repo_type="dataset", revision=info.sha, local_dir=raw_dir)
-    items = spec["normalise"](raw_paths)
-    bad = [(it["id"], why) for it in items if (why := valid_item(it))]
-    items = [it for it in items if not valid_item(it)]
+        hf_hub_download(spec["repo"], f, repo_type="dataset", revision=info.sha, local_dir=raw_dir,
+                        force_download=force)
+    checked = [(it, valid_item(it)) for it in spec["normalise"](raw_paths)]
+    bad = [(it["id"], why) for it, why in checked if why]
+    items = [it for it, why in checked if not why]
     items_path = os.path.join(folder, "items.jsonl")
     write_items(items_path, items)
     entry = {"title": spec["title"], "group": spec["group"], "kind": spec["kind"], "grading": spec["grading"],
              "scored": spec["scored"], "source": spec["url"], "repo_id": spec["repo"], "revision": info.sha,
              "licence": spec["licence"], "card_licence": card.get("license"),
-             "files": [{"path": f, "bytes": os.path.getsize(p), "sha256": file_sha256(p)}
+             "files": [{"path": f, "bytes": os.path.getsize(p), "sha256": data_prep.sha256_file(p)}
                        for f, p in zip(spec["files"], raw_paths)],
              "items": len(items), "dropped_items": len(bad), "dropped_examples": bad[:5],
-             "items_sha256": file_sha256(items_path), "categories": len({it["category"] for it in items}),
+             "items_sha256": data_prep.sha256_file(items_path), "categories": len({it["category"] for it in items}),
              "bytes": folder_bytes(folder), "downloaded": now_iso(), "notes": spec["notes"]}
     return entry, "downloaded"
 
@@ -623,6 +620,11 @@ def wsl_distros():
             if d.strip() and not d.strip().lower().startswith("docker-desktop")]
 
 
+def wsl_candidates(distro=None):
+    """The WSL distributions to try: the named one, else every installed one, Ubuntu first."""
+    return [distro] if distro else sorted(wsl_distros(), key=lambda d: (not d.lower().startswith("ubuntu"), d))
+
+
 WSL_PROBE = r"""
 command -v python3 >/dev/null || { echo NO_PYTHON; exit 3; }
 command -v timeout >/dev/null || { echo NO_TIMEOUT; exit 3; }
@@ -697,11 +699,11 @@ class WSLSandbox:
                     "[ -d /etc/alternatives ] && args=\"$args --ro-bind /etc/alternatives /etc/alternatives\"\n"
                     f"[ -d {SANDBOX_SITE} ] && "
                     f"args=\"$args --ro-bind {SANDBOX_SITE} /site --setenv PYTHONPATH /site\"\n"
-                    f"eval timeout -k 2 {int(timeout)} prlimit --as={mem} bwrap $args {exe}\n")
+                    f"eval timeout -k 2 {int(timeout)} prlimit --as={mem} bwrap $args {exe} </dev/null\n")
         else:
             jail = (f"cd \"$d\"; timeout -k 2 {int(timeout)} prlimit --as={mem} unshare -rmn sh -c "
                     f"'mount -t tmpfs none /mnt && mount -t tmpfs none /home && cd \"$0\" && MPLBACKEND=Agg "
-                    f"exec {exe}' \"$d\"\n")
+                    f"exec {exe}' \"$d\" </dev/null\n")
         return ("d=$(mktemp -d /tmp/tgbench.XXXXXX)\n"
                 "base64 -d > \"$d/prog.py\" <<'__TINYGPT_B64__'\n" + "\n".join(lines) + "\n__TINYGPT_B64__\n"
                 + jail + "rc=$?\nrm -rf \"$d\"\nexit $rc\n")
@@ -727,7 +729,8 @@ class LocalSubprocess:
             with open(path, "w", encoding="utf-8") as handle:
                 handle.write(program)
             try:
-                proc = subprocess.run([sys.executable, "-I", path], cwd=d, capture_output=True, timeout=timeout + 5)
+                proc = subprocess.run([sys.executable, "-I", path], cwd=d, capture_output=True, timeout=timeout + 5,
+                                      stdin=subprocess.DEVNULL)
             except subprocess.TimeoutExpired:
                 return SandboxResult(False, "timeout")
         out = (proc.stdout + proc.stderr).decode(errors="replace")[-2000:]
@@ -754,8 +757,7 @@ def select_sandbox(prefer="auto", unsafe=False, distro=None, docker_image="pytho
             return DockerSandbox(docker_image)
         log("Docker: daemon not running (or docker not installed).")
     if prefer in ("auto", "wsl"):
-        candidates = [distro] if distro else sorted(wsl_distros(),
-                                                    key=lambda d: (not d.lower().startswith("ubuntu"), d))
+        candidates = wsl_candidates(distro)
         for d in candidates:
             probe = wsl_probe(d)
             if probe:
@@ -863,7 +865,8 @@ def parse_date(text):
 
 def numeric_correct(item, generated):
     """(correct, parsed) following MedCalc-Bench: dates exact, tuples (weeks, days) exact, integers exact after
-    rounding, decimals within the item's lower/upper limits."""
+    rounding, decimals within the item's lower/upper limits (also the 'integer' items whose answer is not a whole
+    number, as in the official grader)."""
     gt = str(item["answer"]).strip()
     if item.get("output_type") == "date" or DATE_RE.search(gt):
         got, want = parse_date(generated), parse_date(gt)
@@ -876,7 +879,7 @@ def numeric_correct(item, generated):
     value = parse_first_number(generated)
     if value is None:
         return False, None
-    if item.get("output_type") == "integer":
+    if item.get("output_type") == "integer" and float(gt).is_integer():
         return round(value) == round(float(gt)), value
     try:
         low, high = float(item.get("lower")), float(item.get("upper"))
@@ -917,14 +920,31 @@ def score_mcq(model, tok, items, device, amp_dtype, floor=True, batch_size=32):
     return rows
 
 
+DECODE_WINDOW = 16  # prompt tokens decoded together with the completion at every step (not the whole prompt)
+
+
+def _prompt_tail(tok, ids, start):
+    """(a, head) for a prompt `ids` whose text starts at `start` (after the begin token): the index of its last
+    DECODE_WINDOW tokens and their text. The text a tokenizer gives a token depends on its neighbours (a space
+    before a word, bytes of one character), so the completion is decoded together with this tail."""
+    a = max(start, len(ids) - DECODE_WINDOW)
+    return a, tok.decode(ids[a:])
+
+
+def _completion_text(tok, ids, n_prompt, a, head):
+    """The text of ids[n_prompt:] as it reads after the prompt; (a, head) from _prompt_tail."""
+    full = tok.decode(ids[a:])
+    return full[len(head):] if full.startswith(head) else tok.decode(ids[n_prompt:])
+
+
 def greedy_generate(model, tok, prompt, max_new_tokens, device, amp_dtype=None, stops=()):
     """Greedy continuation of `prompt`, stopped at the first stop string."""
     import torch
     import tiny_gpt
     prefix = [tok.bos_id] if tok.bos_id >= 0 else []
     ids = prefix + tok.encode(prompt)
-    start, n_prompt = len(prefix), len(ids)
-    head = tok.decode(ids[start:])
+    n_prompt = len(ids)
+    tail = _prompt_tail(tok, ids, len(prefix))
     text = ""
     decoder = tiny_gpt.IncrementalDecoder(model, device, amp_dtype)  # KV cache: one token of work per step
     with torch.no_grad():
@@ -933,8 +953,7 @@ def greedy_generate(model, tok, prompt, max_new_tokens, device, amp_dtype=None, 
             if nxt == tok.eos_id:
                 break
             ids.append(nxt)
-            full = tok.decode(ids[start:])
-            text = full[len(head):] if full.startswith(head) else tok.decode(ids[n_prompt:])
+            text = _completion_text(tok, ids, n_prompt, *tail)
             if stops and any(s in text for s in stops):
                 return cut_at_stops(text, stops)
     return cut_at_stops(text, stops) if stops else text
@@ -978,7 +997,7 @@ def batched_greedy(model, tok, prompts, max_new_tokens, device, amp_dtype=None, 
         group = order[g:g + max(1, int(batch))]
         ids = [list(encoded[i]) for i in group]
         n_prompt = [len(r) for r in ids]
-        heads = [tok.decode(r[start:]) for r in ids]
+        tails = [_prompt_tail(tok, r, start) for r in ids]
         texts = [""] * len(group)
         width = max(n_prompt)
         x = torch.zeros((len(group), width), dtype=torch.long)
@@ -1004,8 +1023,7 @@ def batched_greedy(model, tok, prompts, max_new_tokens, device, amp_dtype=None, 
                     if token == tok.eos_id:
                         continue
                     ids[r].append(token)
-                    full = tok.decode(ids[r][start:])
-                    texts[r] = full[len(heads[r]):] if full.startswith(heads[r]) else tok.decode(ids[r][n_prompt[r]:])
+                    texts[r] = _completion_text(tok, ids[r], n_prompt[r], *tails[r])
                     row_stops = per_stops[group[r]]
                     if row_stops and any(s in texts[r] for s in row_stops):
                         continue
@@ -1133,9 +1151,12 @@ def cmd_run(args):
     if code_names:
         sandbox = select_sandbox(args.sandbox, args.unsafe_local_execution, args.wsl_distro, args.docker_image)
         if sandbox is None:
-            print(f"REFUSING to run generated code for {', '.join(code_names)}: no sandbox (start Docker Desktop, "
-                  "or install bubblewrap in a WSL distribution with python3). Generated code is never run on the "
-                  "Windows host; --unsafe-local-execution runs it in a plain subprocess if you accept the risk.")
+            host = "the Windows host" if sys.platform == "win32" else "this machine"
+            hint = ("start Docker Desktop, or install bubblewrap in a WSL distribution with python3"
+                    if sys.platform == "win32" else "start Docker")
+            print(f"REFUSING to run generated code for {', '.join(code_names)}: no sandbox ({hint}). Generated code "
+                  f"is never run on {host}; --unsafe-local-execution runs it in a plain subprocess if you accept "
+                  "the risk.")
             names = [n for n in names if n not in code_names]
         else:
             print(f"Sandbox for generated code: {sandbox.describe()}")
@@ -1157,7 +1178,7 @@ def cmd_run(args):
     print(f"{os.path.basename(path)}: step {step}, {params / 1e6:.1f}M parameters, {tiny_gpt.device_label(device)} "
           f"({amp_name}); limit {args.limit or 'none'}\n")
     t_all = time.time()
-    csv_rows, notes = [], []
+    notes = []
     for name in names:
         spec, t0 = BY_NAME[name], time.time()
         items = sample_items(read_items(name), args.limit, name)
@@ -1170,8 +1191,15 @@ def cmd_run(args):
                 before = len(items)
                 items = [it for it in items if not set(it.get("requires", [])) & lacking]
                 note += f"; {before - len(items)} skipped: sandbox lacks {', '.join(sorted(lacking))}"
+                if sandbox.name == "docker":  # sandbox-setup fills the folder only the bubblewrap jail mounts
+                    hint = (f"pass --docker-image <image with {', '.join(sorted(lacking))}> or --sandbox wsl after "
+                            "sandbox-setup")
+                elif sandbox.name == "wsl" and sandbox.tool == "unshare":
+                    hint = "install bubblewrap; the unshare fallback cannot see the sandbox site"
+                else:
+                    hint = "see `python benchmark.py sandbox-setup`"
                 print(f"{name}: sandbox lacks {', '.join(sorted(lacking))} ({before - len(items)} items skipped; "
-                      "see `python benchmark.py sandbox-setup`)")
+                      f"{hint})")
             if not items:
                 continue
         print(f"{name}: {len(items)} items ({spec['kind']}) ...", flush=True)
@@ -1180,18 +1208,17 @@ def cmd_run(args):
             note += "; option log-likelihood per character"
         elif spec["kind"] == "numeric":
             rows = score_numeric(model, tok, items, device, amp_dtype, batch=args.batch)
-            note += "; greedy, first number, MedCalc tolerance"
+            note += "; greedy, first number, MedCalc tolerance, integer rule: official"
         else:
             rows = score_code(model, tok, items, device, amp_dtype, sandbox, args.max_new_tokens, args.timeout,
                               batch=args.batch)
             note += f"; greedy pass@1, tests in {sandbox.name} sandbox"
         write_item_csv(os.path.join(run_dir, f"{name}.csv"), rows)
         summaries = summarise(rows)
-        for s in summaries:
-            csv_rows.append({"time": now_iso(), "checkpoint": path, "step": step, "params": params, "benchmark": name,
-                             "category": s["category"], "n": s["n"], "accuracy": fmt(s["accuracy"]),
-                             "low": fmt(s["low"]), "high": fmt(s["high"]), "chance": fmt(s["chance"]),
-                             "floor": fmt(s["floor"]), "notes": note})
+        rows_out = [{"time": now_iso(), "checkpoint": path, "step": step, "params": params, "benchmark": name,
+                     "category": s["category"], "n": s["n"], "accuracy": fmt(s["accuracy"]), "low": fmt(s["low"]),
+                     "high": fmt(s["high"]), "chance": fmt(s["chance"]), "floor": fmt(s["floor"]), "notes": note}
+                    for s in summaries]
         s = summaries[0]
         floor_txt = f", floor {s['floor']:.1%}" if s["floor"] is not None else ""
         print(f"  {name}: {s['correct']}/{s['n']} = {s['accuracy']:.1%} (95% {s['low']:.1%}-{s['high']:.1%}); "
@@ -1200,16 +1227,16 @@ def cmd_run(args):
             print(f"    {t['category']:<14} {t['correct']}/{t['n']} = {t['accuracy']:.1%}")
         notes.append(f"{name} {s['accuracy']:.3f} (n={s['n']}, chance {s['chance']:.2f}"
                      + (f", floor {s['floor']:.3f}" if s["floor"] is not None else "") + ")")
-        append_results(args.results, csv_rows[-len(summaries):])
+        append_results(args.results, rows_out)
     print(f"\nResults appended to {args.results}; per-item CSVs in {run_dir} ({time.time() - t_all:,.0f} s)")
     if args.no_publish:
         tiny_gpt.publish_experiments = lambda *a, **k: print("experiments.csv: not published (--no-publish)")
     tiny_gpt.record_experiment(os.path.dirname(path), {
         "event": "benchmark suite", "name": os.path.basename(path), "step": step, "params": params,
         "d_model": cfg.d_model, "layers": cfg.n_layers, "ctx": cfg.ctx, "vocab": cfg.vocab_size,
-        "device": tiny_gpt.device_label(device), "checkpoint": path,
-        "notes": "; ".join(notes) + f"; limit {args.limit or 'none'}; items in benchmarks\\runs\\"
-                                    f"{os.path.basename(run_dir)}"})
+        "device": device.type, "checkpoint": path,
+        "notes": "; ".join([tiny_gpt.device_label(device)] + notes)
+                 + f"; limit {args.limit or 'none'}; items in benchmarks\\runs\\{os.path.basename(run_dir)}"})
     return 0
 
 
@@ -1230,14 +1257,24 @@ def _f(x):
         return None
 
 
-def latest_rows(rows, checkpoint=None):
-    """The most recent result of each (benchmark, category) for one checkpoint (default: the last one run)."""
+def latest_rows(rows, checkpoint=None, log=None):
+    """The most recent result of each (benchmark, category) for one checkpoint (default: the last one run), from
+    the training step of its last run only: a checkpoint file scored again at a later step never has rows of
+    different steps mixed. `log` (print) is told which benchmarks that leaves out."""
     if checkpoint:
         want = os.path.basename(checkpoint).lower()
         rows = [r for r in rows if os.path.basename(r["checkpoint"].replace("\\", "/")).lower() == want]
     elif rows:
         last = rows[-1]["checkpoint"]
         rows = [r for r in rows if r["checkpoint"] == last]
+    if rows:
+        step = rows[-1]["step"]
+        kept = [r for r in rows if r["step"] == step]
+        older = sorted({r["benchmark"] for r in rows} - {r["benchmark"] for r in kept})
+        if older and log:
+            log(f"Only the results of step {step} are used; scored at older steps only and left out: "
+                f"{', '.join(older)}")
+        rows = kept
     best = {}
     for r in rows:
         best[(r["benchmark"], r["category"])] = r
@@ -1266,7 +1303,7 @@ def cmd_plot(args):
                          "axes.titlecolor": vp.INK, "figure.facecolor": vp.SURFACE, "legend.fontsize": 7,
                          "legend.frameon": False})
     os.makedirs(args.out_dir, exist_ok=True)
-    latest = latest_rows(rows, args.checkpoint)
+    latest = latest_rows(rows, args.checkpoint, log=print)
     if not latest:
         raise SystemExit(f"No results for {args.checkpoint} in {args.results}.")
     ck = os.path.basename(latest[0]["checkpoint"].replace("\\", "/"))
@@ -1333,18 +1370,20 @@ def cmd_plot(args):
             hi = np.array([_f(r["high"]) for r in cats])
             fl = [_f(r["floor"]) for r in cats]
             yy = np.arange(len(cats))
-            ax.barh(yy, a, color=[vp.GOOD if f is not None and v > f else vp.CRITICAL for v, f in zip(a, fl)],
-                    height=0.62, alpha=0.9)
+            floors = any(f is not None for f in fl)  # none after `run --no-floor`: neutral bars, no floor marks
+            ax.barh(yy, a, color=[vp.SERIES[0] if f is None else vp.GOOD if v > f else vp.CRITICAL
+                                  for v, f in zip(a, fl)], height=0.62, alpha=0.9)
             ax.errorbar(a, yy, xerr=[a - lo, hi - a], fmt="none", ecolor=vp.INK2, elinewidth=0.7, capsize=1.5)
-            ax.scatter([f if f is not None else np.nan for f in fl], yy, marker="|", s=80, color=vp.INK, lw=1.6,
-                       zorder=4, label="floor (question words shuffled)")
+            if floors:
+                ax.scatter([f if f is not None else np.nan for f in fl], yy, marker="|", s=80, color=vp.INK, lw=1.6,
+                           zorder=4, label="floor (question words shuffled)")
             chance = np.mean([_f(r["chance"]) for r in cats])
             ax.axvline(chance, color=vp.MUTED, lw=0.8, ls=":", label=f"chance (mean {chance:.0%})")
             ax.set_yticks(yy)
             ax.set_yticklabels([f"{r['category']} (n={r['n']})" for r in cats], fontsize=6.5)
             ax.set_xlim(0, 1)
             ax.grid(axis="y", visible=False)
-            ax.set_xlabel("accuracy; green above floor, red at or below")
+            ax.set_xlabel("accuracy; green above floor, red at or below" if floors else "accuracy")
             ax.set_title(f"{BY_NAME[bench]['title']} by category", loc="left")
             ax.legend(loc="lower right")
         out = os.path.join(args.out_dir, f"{stem}_categories.png")
@@ -1361,14 +1400,32 @@ def cmd_plot(args):
         steps_known = all(_f(s) is not None for _, s in runs) and len({s for _, s in runs}) == len(runs)
         xpos = {cs: (_f(cs[1]) if steps_known else i) for i, cs in enumerate(runs)}
         benches = sorted({r["benchmark"] for r in overall})
-        for i, b in enumerate(benches):
-            pts = {}
-            for r in overall:
-                if r["benchmark"] == b:
-                    pts[xpos[(r["checkpoint"], r["step"])]] = _f(r["accuracy"])
-            xs = sorted(pts)
-            ax.plot(xs, [pts[x] for x in xs], color=vp.SERIES[i % len(vp.SERIES)], lw=1.8, marker="o", ms=3.5,
-                    label=b)
+
+        def name_of(r):  # a checkpoint's _best and _final files are one name
+            stem = os.path.splitext(os.path.basename(r["checkpoint"].replace("\\", "/")))[0]
+            return re.sub(r"_(best|final)$", "", stem)
+
+        sizes = {}
+        for r in overall:
+            if r["params"]:
+                sizes.setdefault(name_of(r), set()).add(r["params"])
+
+        def model_of(r):  # a model: a name at one size; two models never share a line. A row without a
+            name = name_of(r)  # parameter count (a table edited by hand) joins the only size its name has
+            return name, r["params"] or (min(sizes[name]) if len(sizes.get(name, ())) == 1 else "")
+
+        models = sorted({model_of(r) for r in overall})
+        for i, b in enumerate(benches):  # colour (and from the ninth on the marker): benchmark; line style: model
+            for g, model in enumerate(models):
+                pts = {xpos[(r["checkpoint"], r["step"])]: _f(r["accuracy"]) for r in overall
+                       if r["benchmark"] == b and model_of(r) == model}
+                if not pts:
+                    continue
+                xs = sorted(pts)
+                size = f" ({_f(model[1]) / 1e6:.1f}M)" if _f(model[1]) else ""
+                ax.plot(xs, [pts[x] for x in xs], color=vp.SERIES[i % len(vp.SERIES)], lw=1.8,
+                        ls=("-", "--", ":", "-.")[g % 4], marker="os^"[i // len(vp.SERIES) % 3], ms=3.5,
+                        label=b if len(models) == 1 else f"{b}: {model[0]}{size}")
         if not steps_known:
             ax.set_xticks(range(len(runs)))
             ax.set_xticklabels([f"{os.path.basename(c.replace(chr(92), '/'))}\nstep {s}" for c, s in runs],
@@ -1376,7 +1433,10 @@ def cmd_plot(args):
         ax.set_xlabel("training step" if steps_known else "checkpoint")
         ax.set_ylabel("accuracy (latest run of each checkpoint)")
         ax.set_ylim(0, 1)
-        ax.legend(loc="upper left", ncols=3)
+        if len(models) == 1:
+            ax.legend(loc="upper left", ncols=3)
+        else:  # one entry per benchmark and model: beside the axes, not over the lines
+            ax.legend(loc="upper left", bbox_to_anchor=(1.01, 1.0), ncols=1 + len(ax.lines) // 30)
         ax.set_title("Benchmark progress over checkpoints", loc="left")
         out = os.path.join(args.out_dir, "progress.png")
         fig.savefig(out, dpi=args.dpi, facecolor=vp.SURFACE)
@@ -1393,9 +1453,7 @@ def cmd_plot(args):
 # sandbox setup
 # ---------------------------------------------------------------------------
 def cmd_sandbox_setup(args):
-    distros = [args.wsl_distro] if args.wsl_distro else sorted(
-        wsl_distros(), key=lambda d: (not d.lower().startswith("ubuntu"), d))
-    distro = next((d for d in distros if wsl_probe(d)), None)
+    distro = next((d for d in wsl_candidates(args.wsl_distro) if wsl_probe(d)), None)
     if not distro:
         raise SystemExit("No usable WSL distribution (python3 + bubblewrap/unshare). For Docker, build an image "
                          "FROM python:3.12-slim with `pip install numpy` and pass --docker-image.")

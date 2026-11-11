@@ -1,0 +1,515 @@
+"""Staging tests of package D (benchmark.py) of the 2026-11 audit. Target class: TestBenchmarkSuite in
+test_tiny_gpt.py (package T moves every test there and deletes this file)."""
+import io
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+import unittest
+import unittest.mock
+from contextlib import redirect_stdout
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+
+
+class Audit2Benchmark(unittest.TestCase):
+    """benchmark.py: offline only (no downloads, no sandbox, no real checkpoint)."""
+
+    @classmethod
+    def setUpClass(cls):
+        import benchmark
+        cls.b = benchmark
+        cls.tmp = tempfile.mkdtemp(prefix="tiny_gpt_a2_bench_")
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def suite_run(self, label, items, extra=(), sandbox=None):
+        """`benchmark.py run --device cpu --no-publish` on a tiny saved checkpoint, every output path inside the
+        temporary folder. items = {benchmark name: [item, ...]}. Returns (exit code, stdout, rows of the results
+        CSV, {file name: rows} of the per-item CSVs, rows of experiments.csv)."""
+        import csv
+        import dataclasses
+        import json
+        import torch
+        import tiny_gpt
+        from test_tiny_gpt import CharTok
+        b = self.b
+        root = os.path.join(self.tmp, label)
+        bench, runs = os.path.join(root, "bench"), os.path.join(root, "bench", "runs")
+        for name, its in items.items():
+            os.makedirs(os.path.join(bench, name))
+            b.write_items(os.path.join(bench, name, "items.jsonl"), its)
+        with open(os.path.join(bench, "manifest.json"), "w", encoding="utf-8") as handle:
+            json.dump({"benchmarks": {name: {"items": len(its)} for name, its in items.items()}}, handle)
+        torch.manual_seed(0)
+        cfg = tiny_gpt.ModelConfig(vocab_size=50, ctx=64, d_model=32, n_layers=2, n_heads=4, n_kv_heads=2)
+        ck = os.path.join(root, "model", "tiny_best.pt")
+        os.makedirs(os.path.dirname(ck))
+        torch.save({"format": tiny_gpt.CHECKPOINT_FORMAT, "format_version": tiny_gpt.FORMAT_VERSION,
+                    "checkpoint_type": "inference", "model_config": dataclasses.asdict(cfg),
+                    "model": tiny_gpt.TinyGPT(cfg).state_dict(), "step": 7}, ck)
+        results = os.path.join(root, "results", "benchmarks.csv")
+        out = io.StringIO()
+        with unittest.mock.patch.object(b, "BENCH_DIR", bench), \
+                unittest.mock.patch.object(b, "MANIFEST", os.path.join(bench, "manifest.json")), \
+                unittest.mock.patch.object(b, "RUNS_DIR", runs), \
+                unittest.mock.patch.object(b, "select_sandbox", return_value=sandbox), \
+                unittest.mock.patch.object(tiny_gpt, "tokenizer_from_checkpoint", return_value=CharTok()), \
+                unittest.mock.patch.object(tiny_gpt, "publish_experiments", tiny_gpt.publish_experiments), \
+                redirect_stdout(out):
+            code = b.main(["run", "--checkpoint", ck, "--benchmarks", ",".join(items), "--device", "cpu",
+                           "--no-publish", "--results", results, *extra])
+
+        def table(path):
+            with open(path, encoding="utf-8-sig", newline="") as handle:
+                return list(csv.DictReader(handle))
+
+        item_rows = {}
+        for folder in (os.listdir(runs) if os.path.isdir(runs) else []):
+            for name in os.listdir(os.path.join(runs, folder)):
+                item_rows[name] = table(os.path.join(runs, folder, name))
+        experiments = os.path.join(root, "model", "results", "experiments.csv")
+        return (code, out.getvalue(), b.read_results(results), item_rows,
+                table(experiments) if os.path.isfile(experiments) else [])
+
+    @staticmethod
+    def medcalc_items():
+        return [{"id": f"medcalc-{i}", "question": "Score?", "options": None, "answer": answer, "category": "risk",
+                 "kind": "numeric", "context": "A patient note.", "output_type": kind, "lower": answer,
+                 "upper": answer, "calculator": "c"} for i, (answer, kind) in enumerate((("4", "integer"),
+                                                                                        ("2.5", "decimal")))]
+
+    @staticmethod
+    def humaneval_item(**extra):
+        return {"id": "h0", "question": "def f():\n", "options": None, "answer": "    return 1\n",
+                "category": "python", "kind": "code", "style": "humaneval", "test": "def check(c): pass",
+                "entry_point": "f", **extra}
+
+    def mcq_items(self):
+        options = ["alpha", "beta", "gamma"]
+        return [self.b.mcq_item(f"t{i}", f"Which gene number {i}?", options, options[i % 3],
+                                "genes" if i % 2 else "cells", ["biology"] if i < 3 else None) for i in range(6)]
+
+    def test_experiments_row_has_the_device_type(self):
+        """F008: the experiments.csv row of a benchmark run has the device type in `device`, as training rows
+        do; the hardware label opens the notes."""
+        import torch
+        import tiny_gpt
+        code, _, _, _, experiments = self.suite_run("f008", {"medqa": self.mcq_items()}, extra=["--no-floor"])
+        self.assertEqual((code, len(experiments)), (0, 1))
+        row = experiments[0]
+        self.assertEqual((row["event"], row["device"]), ("benchmark suite", "cpu"))
+        self.assertTrue(row["notes"].startswith(tiny_gpt.device_label(torch.device("cpu")) + "; medqa "),
+                        row["notes"])
+
+    def plot_figures(self, label, rows):
+        """`benchmark.py plot` on a results table made of `rows` (benchmark, category, accuracy, floor or None,
+        optional checkpoint/step/params): ({PNG name: its Figure}, stdout). The PNGs are drawn into the
+        temporary folder."""
+        import matplotlib.figure
+        import tiny_gpt
+        b = self.b
+        path = os.path.join(self.tmp, label, "benchmarks.csv")
+        full = []
+        for r in rows:
+            low, high = tiny_gpt.wilson_interval(round(r["accuracy"] * 20), 20)
+            full.append({"time": "t", "checkpoint": "tinyGPT_best.pt", "step": 1000, "params": 1000000, "n": 20,
+                         "low": low, "high": high, "chance": 0.25, "notes": "", **r,
+                         "floor": "" if r.get("floor") is None else r["floor"]})
+        b.append_results(path, full)
+        figures, save, out = {}, matplotlib.figure.Figure.savefig, io.StringIO()
+
+        def savefig(fig, name, *args, **kwargs):
+            figures[os.path.basename(name)] = fig
+            return save(fig, name, *args, **kwargs)
+
+        with unittest.mock.patch.object(matplotlib.figure.Figure, "savefig", savefig), redirect_stdout(out):
+            self.assertEqual(b.main(["plot", "--results", path, "--out-dir", os.path.join(self.tmp, label, "plots"),
+                                     "--dpi", "40"]), 0)
+        return figures, out.getvalue()
+
+    def test_category_panel_without_a_floor(self):
+        """F003: after `run --no-floor` the category bars are neutral (not all red) and neither the legend nor
+        the axis speaks of a floor; a category with a floor is still green above it and red at or below."""
+        import matplotlib.colors
+        import view_pt as vp
+
+        def panel(label, floors):
+            rows = [{"benchmark": "mmlu", "category": "all", "accuracy": 0.3, "floor": floors[0]}]
+            rows += [{"benchmark": "mmlu", "category": c, "accuracy": a, "floor": f}
+                     for c, a, f in zip(("anatomy", "genetics", "virology"), (0.2, 0.4, 0.6), floors)]
+            ax = self.plot_figures(label, rows)[0]["tinyGPT_best_categories.png"].axes[0]
+            colours = [matplotlib.colors.to_hex(p.get_facecolor()[:3]) for p in ax.patches]
+            return colours, [t.get_text() for t in ax.get_legend().get_texts()], ax.get_xlabel()
+
+        colours, legend, xlabel = panel("f003_none", (None, None, None))
+        self.assertEqual(colours, [vp.SERIES[0]] * 3)
+        self.assertFalse([text for text in legend if "floor" in text], legend)
+        self.assertEqual(xlabel, "accuracy")
+        colours, legend, xlabel = panel("f003_mixed", (0.3, 0.3, None))  # sorted by accuracy: 0.2, 0.4, 0.6
+        self.assertEqual(colours, [vp.CRITICAL, vp.GOOD, vp.SERIES[0]])
+        self.assertTrue([text for text in legend if "floor" in text], legend)
+        self.assertIn("green above floor", xlabel)
+
+    def test_progress_plot_draws_one_line_per_model(self):
+        """F004: the progress plot never joins two models into one line: one line per (benchmark, model), a model
+        being a checkpoint name without _best/_final plus its parameter count; the line style tells the models
+        apart, the colour the benchmarks, and from the ninth benchmark on the marker changes too."""
+        import view_pt as vp
+
+        def scored(checkpoint, params, steps, benches):
+            return [{"checkpoint": checkpoint, "params": params, "step": step, "benchmark": bench, "category": "all",
+                     "accuracy": 0.2 + 0.02 * k, "floor": 0.2} for step in steps for k, bench in enumerate(benches)]
+
+        nine = [f"bench{k}" for k in range(9)]
+        small = scored("m/small_best.pt", 1000000, (1000, 2000), nine)
+        # one model (its _best and _final files): one line per benchmark, the bare name in the legend, inside
+        ax = self.plot_figures("f004_one", small + scored("m/small_final.pt", 1000000, (3000,), nine)
+                               )[0]["progress.png"].axes[0]
+        self.assertEqual([line.get_label() for line in ax.lines], nine)
+        self.assertEqual({len(line.get_xdata()) for line in ax.lines}, {3})
+        self.assertEqual({line.get_linestyle() for line in ax.lines}, {"-"})
+        self.assertEqual([line.get_color() for line in ax.lines], vp.SERIES + vp.SERIES[:1])
+        self.assertEqual([line.get_marker() for line in ax.lines], ["o"] * 8 + ["s"])
+        self.assertLess(ax.get_legend().get_bbox_to_anchor().x0, ax.bbox.x1)
+        # two models scored at different steps: two lines per benchmark, the model in the label, legend outside
+        ax = self.plot_figures("f004_two", small + scored("m/big_best.pt", 5000000, (1500, 2500), nine[:2])
+                               )[0]["progress.png"].axes[0]
+        big, little = [1500.0, 2500.0], [1000.0, 2000.0]
+        self.assertEqual([(line.get_label(), line.get_linestyle(), list(line.get_xdata())) for line in ax.lines[:4]],
+                         [("bench0: big (5.0M)", "-", big), ("bench0: small (1.0M)", "--", little),
+                          ("bench1: big (5.0M)", "-", big), ("bench1: small (1.0M)", "--", little)])
+        self.assertEqual(len(ax.lines), 2 * 2 + 7)
+        self.assertEqual(ax.lines[0].get_color(), ax.lines[1].get_color())
+        self.assertGreater(ax.get_legend().get_bbox_to_anchor().x0, ax.bbox.x1)
+
+    def test_progress_plot_row_without_params_joins_its_model(self):
+        """F004: rows whose params cell is empty (a table edited by hand) belong to the model of the same name
+        when that name has one parameter count: its line is not split in two. A name with two parameter counts
+        keeps such rows apart, because they could be either model."""
+        def scored(params, step, checkpoint="m/small_best.pt"):
+            return [{"checkpoint": checkpoint, "params": params, "step": step, "benchmark": bench, "category": "all",
+                     "accuracy": 0.3, "floor": 0.2} for bench in ("bench0", "bench1")]
+
+        ax = self.plot_figures("f004_empty", scored(1000000, 1000) + scored("", 2000)
+                               + scored("", 3000, "m/small_final.pt"))[0]["progress.png"].axes[0]
+        self.assertEqual([(line.get_label(), list(line.get_xdata())) for line in ax.lines],
+                         [("bench0", [1000.0, 2000.0, 3000.0]), ("bench1", [1000.0, 2000.0, 3000.0])])
+        self.assertLess(ax.get_legend().get_bbox_to_anchor().x0, ax.bbox.x1)
+        # no row of the name has a parameter count: still one model
+        ax = self.plot_figures("f004_none", scored("", 1000) + scored("", 2000))[0]["progress.png"].axes[0]
+        self.assertEqual([(line.get_label(), len(line.get_xdata())) for line in ax.lines],
+                         [("bench0", 2), ("bench1", 2)])
+        # two sizes under one name: the row without a count joins neither
+        ax = self.plot_figures("f004_two_sizes", scored(1000000, 1000) + scored(5000000, 2000) + scored("", 3000)
+                               )[0]["progress.png"].axes[0]
+        self.assertEqual([(line.get_label(), list(line.get_xdata())) for line in ax.lines[:3]],
+                         [("bench0: small", [3000.0]), ("bench0: small (1.0M)", [1000.0]),
+                          ("bench0: small (5.0M)", [2000.0])])
+
+    def test_completion_text_from_a_short_decode_window(self):
+        """F013: the completion text of a decode step comes from the last 16 prompt tokens plus the new tokens,
+        not from the whole prompt again, and equals the text the whole-prompt decode gave: with a SentencePiece
+        tokenizer (byte fallback, lines and plain mode) on prompts that are empty, short, non-ASCII or end in
+        white space, for every step of 40 random tokens."""
+        import random
+        import sentencepiece as spm
+        import data_prep
+        from test_tiny_gpt import paragraphs
+        b = self.b
+        writer = io.BytesIO()
+        spm.SentencePieceTrainer.train(
+            sentence_iterator=iter(paragraphs(3, 200).split("\n")), model_writer=writer, model_type="bpe",
+            vocab_size=400, character_coverage=0.9995, byte_fallback=True, split_digits=True, unk_id=0, bos_id=1,
+            eos_id=2, pad_id=-1, user_defined_symbols=["\n", "\t"], remove_extra_whitespaces=False,
+            allow_whitespace_only_pieces=True, normalization_rule_name="identity", hard_vocab_limit=False,
+            minloglevel=2)
+        long_text = paragraphs(5, 3)
+        prompts = ["", "a", "Gene", "Question: which gene?\nAnswer:", "ends in a space ", "ends in a newline\n",
+                   "two newlines\n\n", "  leading spaces", "naïve café: β-globin α1 → 5′ end",
+                   "日本語 \U0001f9ec emoji", long_text, long_text + " ", long_text + "\nAnswer:", long_text[:300] + " µ"]
+        rng, steps = random.Random(0), 0
+        for mode in ("lines", "plain"):
+            tok = data_prep.Tokenizer(writer.getvalue(), mode)
+            prefix = [tok.bos_id]
+            for prompt in prompts:
+                for _ in range(3):
+                    ids = prefix + tok.encode(prompt)
+                    start, n_prompt = len(prefix), len(ids)
+                    old_head = tok.decode(ids[start:])
+                    tail = b._prompt_tail(tok, ids, start)
+                    self.assertEqual(tail[0], max(start, n_prompt - b.DECODE_WINDOW))
+                    for _ in range(40):
+                        ids.append(rng.randrange(3, tok.vocab_size))
+                        full = tok.decode(ids[start:])
+                        old = full[len(old_head):] if full.startswith(old_head) else tok.decode(ids[n_prompt:])
+                        self.assertEqual(b._completion_text(tok, ids, n_prompt, *tail), old, (mode, prompt, ids))
+                        steps += 1
+        self.assertEqual(steps, 2 * len(prompts) * 3 * 40)
+
+    def test_decode_steps_do_not_decode_the_whole_prompt(self):
+        """F013: with a 300-token prompt no decode call of batched_greedy or greedy_generate gets more than the
+        16-token window plus the new tokens (it was the whole prompt, at every step of every row)."""
+        import torch
+        from test_tiny_gpt import CharTok, TestOtherScripts
+        b = self.b
+
+        class Counting(CharTok):
+            longest = 0
+
+            def decode(self, ids):
+                Counting.longest = max(Counting.longest, len(ids))
+                return super().decode(ids)
+
+        model, tok, cpu = TestOtherScripts.model(seed=1, ctx=400), Counting(), torch.device("cpu")
+        prompts = ["".join("abcdefghij klmnop"[(i * k) % 17] for i in range(300)) for k in (3, 5)]
+        self.assertEqual(len(tok.encode(prompts[0])), 300)
+        texts = b.batched_greedy(model, tok, prompts, 8, cpu, batch=2)
+        self.assertEqual([len(t) for t in texts], [8, 8])
+        self.assertLessEqual(Counting.longest, b.DECODE_WINDOW + 8)
+        Counting.longest = 0
+        self.assertEqual([b.greedy_generate(model, tok, p, 8, cpu) for p in prompts], texts)
+        self.assertLessEqual(Counting.longest, b.DECODE_WINDOW + 8)
+
+    def test_medcalc_rows_name_the_integer_rule(self):
+        """F016: MedCalc rows scored with the official integer rule say so in their notes (earlier rows of
+        results/benchmarks.csv used rounding for the 34 'integer' items whose answer is not a whole number)."""
+        code, _, rows, _, _ = self.suite_run("f016", {"medcalc": self.medcalc_items()})
+        self.assertEqual(code, 0)
+        self.assertEqual([r["benchmark"] for r in rows], ["medcalc"])
+        self.assertIn("integer rule: official", rows[0]["notes"])
+
+    def fake_download(self, label, force):
+        """download_one on a made-up benchmark with huggingface_hub replaced by a stand-in (no network):
+        (manifest entry, status, keyword arguments of every hf_hub_download call, items written)."""
+        import importlib
+        import json
+        import types
+        b = self.b
+        bench = os.path.join(self.tmp, label)
+        calls = []
+
+        def hf_hub_download(repo, name, local_dir=None, **kwargs):
+            calls.append(kwargs)
+            path = os.path.join(local_dir, *name.split("/"))
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w", encoding="utf-8", newline="\n") as handle:
+                for i in range(3):
+                    handle.write(json.dumps({"n": i}) + "\n")
+            return path
+
+        class HfApi:
+            def dataset_info(self, repo):
+                return types.SimpleNamespace(gated=False, card_data=None, sha="rev1")
+
+        def normalise(raw):
+            items = [b.mcq_item(f"t{r['n']}", f"Question {r['n']}?", ["a", "b"], "a", "cat")
+                     for r in b.read_table(raw[0])]
+            return items + [dict(items[0], id="bad", answer="z")]
+
+        spec = b._spec("toy", "Toy", "knowledge", "someone/toy", ["data/t.jsonl"], "MIT", normalise)
+        hub = types.SimpleNamespace(HfApi=HfApi, hf_hub_download=hf_hub_download)
+        # download_one imports data_prep (and with it numpy): loaded here first, because leaving patch.dict drops
+        # every module first imported inside it, and numpy cannot be loaded a second time in one process
+        importlib.import_module("data_prep")
+        with unittest.mock.patch.dict(sys.modules, {"huggingface_hub": hub}), \
+                unittest.mock.patch.object(b, "BENCH_DIR", bench):
+            entry, status = b.download_one(spec, {"benchmarks": {}}, force=force)
+            items = b.read_items("toy")
+        return entry, status, calls, items
+
+    def test_download_force_downloads_again(self):
+        """F012: `download --force` tells hf_hub_download to fetch the file again (it used to re-normalise the
+        cached copy only); without --force nothing changes."""
+        entry, status, calls, items = self.fake_download("f012_force", True)
+        self.assertEqual((status, len(calls)), ("downloaded", 1))
+        self.assertIs(calls[0].get("force_download"), True)
+        self.assertEqual((calls[0]["repo_type"], calls[0]["revision"]), ("dataset", "rev1"))
+        _, _, calls, _ = self.fake_download("f012_plain", False)
+        self.assertFalse(calls[0].get("force_download"))
+
+    def test_missing_module_hint_fits_the_sandbox(self):
+        """F010: `sandbox-setup` fills the folder that only the bubblewrap jail mounts, so the line about skipped
+        items points there for bubblewrap alone; Docker and the unshare fallback get the step that helps them."""
+        b = self.b
+        items = [self.humaneval_item(requires=["numpy"])]
+        lacks = b.SandboxResult(True, "passed", 'MODS={"numpy": false}')
+        boom = unittest.mock.Mock(side_effect=AssertionError("nothing may be executed"))
+        old = "see `python benchmark.py sandbox-setup`"
+        cases = (("docker", b.DockerSandbox("img"), "pass --docker-image <image with numpy> or --sandbox wsl"),
+                 ("unshare", b.WSLSandbox("Ubuntu", "unshare"), "install bubblewrap; the unshare fallback cannot"),
+                 ("bwrap", b.WSLSandbox("Ubuntu", "bwrap"), old))
+        for label, sandbox, want in cases:
+            with unittest.mock.patch.object(b, "_finish", return_value=lacks), \
+                    unittest.mock.patch.object(b, "_run", boom), \
+                    unittest.mock.patch.object(b, "_MODULE_CACHE", {}):
+                code, out, rows, _, _ = self.suite_run(f"f010_{label}", {"humanevalplus": items}, sandbox=sandbox)
+            line = next(text for text in out.splitlines() if "sandbox lacks numpy" in text)
+            self.assertIn("(1 items skipped; " + want, line)
+            self.assertEqual(old in line, label == "bwrap", line)
+            self.assertEqual((code, rows), (0, []))
+        boom.assert_not_called()
+        self.assertIn("or unshare (weaker: no PID namespace)", " ".join(b.__doc__.split()))
+
+    def test_refusal_names_this_machine(self):
+        """F006: without a sandbox the refusal names Docker Desktop, WSL and the Windows host on Windows only; on
+        a Mac or Linux it says 'start Docker' and 'this machine'. It starts with REFUSING everywhere."""
+        import json
+        b = self.b
+        bench = os.path.join(self.tmp, "f006")
+        os.makedirs(os.path.join(bench, "humaneval"))
+        b.write_items(os.path.join(bench, "humaneval", "items.jsonl"), [self.humaneval_item()])
+        with open(os.path.join(bench, "manifest.json"), "w", encoding="utf-8") as handle:
+            json.dump({"benchmarks": {"humaneval": {"items": 1}}}, handle)
+        args = b.parse_args(["run", "--checkpoint", "none.pt", "--benchmarks", "humaneval", "--device", "cpu"])
+        said = {}
+        for platform in ("win32", "darwin", "linux"):
+            out = io.StringIO()
+            with unittest.mock.patch.object(b, "BENCH_DIR", bench), \
+                    unittest.mock.patch.object(b, "MANIFEST", os.path.join(bench, "manifest.json")), \
+                    unittest.mock.patch.object(b, "select_sandbox", return_value=None), \
+                    unittest.mock.patch.object(sys, "platform", platform), \
+                    redirect_stdout(out):
+                self.assertEqual(b.cmd_run(args), 1)
+            said[platform] = out.getvalue()
+            self.assertTrue(said[platform].startswith("REFUSING to run generated code for humaneval: no sandbox ("))
+            self.assertIn("--unsafe-local-execution runs it in a plain subprocess", said[platform])
+        self.assertIn("(start Docker Desktop, or install bubblewrap in a WSL distribution with python3). Generated "
+                      "code is never run on the Windows host;", said["win32"])
+        for platform in ("darwin", "linux"):
+            self.assertNotIn("WSL", said[platform])
+            self.assertNotIn("Windows", said[platform])
+            self.assertIn("(start Docker). Generated code is never run on this machine;", said[platform])
+
+    def test_download_entry_hashes_and_dropped_items(self):
+        """F001, F011 (guard: passes before and after): the manifest entry of a download has the sha256 of the
+        raw file and of items.jsonl, and a malformed item is dropped and counted once."""
+        import hashlib
+        entry, _, _, items = self.fake_download("f001", False)
+        folder = os.path.join(self.tmp, "f001", "toy")
+        for path, digest in ((os.path.join(folder, "raw", "data", "t.jsonl"), entry["files"][0]["sha256"]),
+                             (os.path.join(folder, "items.jsonl"), entry["items_sha256"])):
+            with open(path, "rb") as handle:
+                self.assertEqual(hashlib.sha256(handle.read()).hexdigest(), digest)
+        self.assertEqual([it["id"] for it in items], ["t0", "t1", "t2"])
+        self.assertEqual((entry["items"], entry["dropped_items"]), (3, 1))
+        self.assertEqual([list(pair) for pair in entry["dropped_examples"]],
+                         [["bad", "answer not among the options"]])
+
+    def test_start_loads_neither_data_prep_nor_numpy(self):
+        """F001: benchmark.py takes sha256_file from data_prep inside download_one, the only place that hashes;
+        starting it (--help, plot, sandbox-setup, the import) loads neither data_prep nor numpy, as before."""
+        code = ("import sys; sys.path.insert(0, sys.argv[1]); import benchmark; "
+                "print(sorted(m for m in ('data_prep', 'numpy', 'torch') if m in sys.modules))")
+        proc = subprocess.run([sys.executable, "-c", code, HERE], capture_output=True, text=True, timeout=300)
+        self.assertEqual((proc.returncode, proc.stdout.strip()), (0, "[]"), proc.stderr)
+
+    def test_printed_lists(self):
+        """F002 (guard: passes before and after): _list reads numpy's printed form, a Python literal, and text
+        that is neither (quoted strings by the same pattern, else nothing)."""
+        b = self.b
+        self.assertEqual(b._list("['a' 'b']"), ["a", "b"])
+        self.assertEqual(b._list("['a', 'b']"), ["a", "b"])
+        self.assertEqual(b._list("[a b]"), [])
+        self.assertEqual(b._list("[a 'b', \"c\"]"), ["b", "c"])
+        self.assertEqual(b._list("['it\\'s' \"say \\\"x\\\"\"\n 'c']"), ["it\\'s", 'say \\"x\\"', "c"])
+        self.assertEqual(b._list("[1, 2]"), [1, 2])
+        self.assertEqual((b._list(None), b._list("plain"), b._list(("x", "y"))), ([], ["plain"], ["x", "y"]))
+
+    def test_run_scores_and_records(self):
+        """F206 (guard): `benchmark.py run` on a tiny checkpoint scores a multiple-choice, a numeric and a coding
+        set (the tests go to a stand-in sandbox: nothing is executed), appends the summary rows to the results
+        CSV, writes one CSV of items per set and one experiments.csv row, all inside the temporary folder."""
+        import tiny_gpt
+        b = self.b
+
+        class Sandbox:
+            name, programs = "stand-in", []
+
+            def describe(self):
+                return "stand-in sandbox"
+
+            def run(self, program, timeout=20, **kwargs):
+                self.programs.append(program)
+                return b.SandboxResult(True, "passed", "ok")
+
+        def repo_tables():
+            paths = (b.RESULTS_CSV, tiny_gpt.experiments_path(HERE))
+            return [(os.path.getsize(p), os.stat(p).st_mtime_ns) if os.path.isfile(p) else None for p in paths]
+
+        before, publish = repo_tables(), tiny_gpt.publish_experiments
+        sets = {"medqa": self.mcq_items(), "medcalc": self.medcalc_items(), "humaneval": [self.humaneval_item()]}
+        code, out, rows, item_rows, experiments = self.suite_run("f206", sets, extra=["--limit", "4"],
+                                                                 sandbox=Sandbox())
+        self.assertEqual(code, 0, out)
+        self.assertEqual((repo_tables(), tiny_gpt.publish_experiments), (before, publish), "nothing outside the folder")
+        for text in ("Sandbox for generated code: stand-in sandbox", "tiny_best.pt: step 7, ", "medqa: 4 items (mcq)",
+                     "medcalc: 2 items (numeric)", "humaneval: 1 items (code)", "Results appended to "):
+            self.assertIn(text, out)
+        # the results CSV: for each set the overall row, then its tags and (more than one) categories
+        self.assertEqual([r["benchmark"] for r in rows if r["category"] == "all"], list(sets))
+        medqa = [r for r in rows if r["benchmark"] == "medqa"]
+        self.assertEqual(medqa[0]["n"], "4")
+        self.assertEqual([r["category"] for r in medqa[1:2]], ["[biology]"])
+        self.assertEqual(sum(int(r["n"]) for r in medqa if r["category"] in ("cells", "genes")), 4)
+        self.assertEqual([r["benchmark"] for r in rows[len(medqa):]], ["medcalc", "humaneval"])
+        params = str(tiny_gpt.count_params(tiny_gpt.ModelConfig(vocab_size=50, ctx=64, d_model=32, n_layers=2,
+                                                                 n_heads=4, n_kv_heads=2))[0])
+        for r in rows:
+            self.assertEqual(list(r), b.RESULT_COLUMNS)
+            self.assertEqual((os.path.basename(r["checkpoint"]), r["step"], r["params"]), ("tiny_best.pt", "7", params))
+            self.assertRegex(r["time"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d")
+            self.assertTrue(0.0 <= float(r["low"]) <= float(r["accuracy"]) <= float(r["high"]) <= 1.0, r)
+        by_set = {r["benchmark"]: r for r in rows if r["category"] == "all"}
+        self.assertEqual(by_set["medqa"]["notes"], "4 of 6 items (hash sample); option log-likelihood per character")
+        self.assertEqual((by_set["medqa"]["chance"], by_set["medqa"]["floor"] != ""), ("0.3333", True))
+        self.assertTrue(by_set["medcalc"]["notes"].startswith("2 of 2 items (hash sample); greedy, first number, "))
+        self.assertEqual((by_set["medcalc"]["n"], by_set["medcalc"]["floor"]), ("2", ""))
+        self.assertEqual(by_set["humaneval"]["notes"],
+                         "1 of 1 items (hash sample); greedy pass@1, tests in stand-in sandbox")
+        self.assertEqual((by_set["humaneval"]["n"], float(by_set["humaneval"]["accuracy"])), ("1", 1.0))
+        # the per-item CSVs, and the one program that went to the sandbox
+        self.assertEqual(sorted(item_rows), ["humaneval.csv", "medcalc.csv", "medqa.csv"])
+        self.assertEqual([len(item_rows[f"{name}.csv"]) for name in sets], [4, 2, 1])
+        self.assertTrue({"id", "category", "correct", "chance", "floor_correct", "answer"}
+                        <= set(item_rows["medqa.csv"][0]))
+        self.assertTrue({"id", "correct", "parsed", "generated"} <= set(item_rows["medcalc.csv"][0]))
+        self.assertEqual((item_rows["humaneval.csv"][0]["status"], item_rows["humaneval.csv"][0]["correct"]),
+                         ("passed", "True"))
+        self.assertEqual(len(Sandbox.programs), 1)
+        self.assertTrue(Sandbox.programs[0].startswith("def f():\n"))
+        self.assertTrue(Sandbox.programs[0].endswith("\n\ndef check(c): pass\n\ncheck(f)\n"))
+        # the experiments row
+        self.assertEqual(len(experiments), 1)
+        row = experiments[0]
+        self.assertEqual((row["event"], row["name"], row["step"], row["params"], row["d_model"], row["layers"],
+                          row["ctx"], row["vocab"]),
+                         ("benchmark suite", "tiny_best.pt", "7", params, "32", "2", "64", "50"))
+        self.assertEqual(os.path.basename(row["checkpoint"]), "tiny_best.pt")
+        for text in ("medqa 0.", "medcalc 0.", "humaneval 1.000 (n=1, chance 0.00)", "; limit 4; items in "
+                     "benchmarks\\runs\\tiny_best_"):
+            self.assertIn(text, row["notes"])
+
+    def test_generated_code_gets_no_stdin(self):
+        """F020: the jailed program reads /dev/null, not the rest of the wrapper script piped to `bash -s` (which
+        holds the clean-up lines), and the unsafe local runner gives its child no stdin either."""
+        b = self.b
+        for tool, end in (("bwrap", "python3 -s prog.py </dev/null"), ("unshare", "\"$d\" </dev/null")):
+            script = b.WSLSandbox("Ubuntu", tool).script("input()\n", 5)
+            jail = [line for line in script.splitlines() if "prlimit" in line]
+            self.assertEqual(len(jail), 1, script)
+            self.assertTrue(jail[0].endswith(end), jail[0])
+            self.assertTrue(script.endswith("rc=$?\nrm -rf \"$d\"\nexit $rc\n"), "the clean-up lines follow the jail")
+        with unittest.mock.patch.object(subprocess, "run", side_effect=subprocess.run) as spy:
+            res = b.LocalSubprocess().run("input()\n", timeout=5)
+        self.assertIs(spy.call_args.kwargs.get("stdin"), subprocess.DEVNULL)
+        self.assertEqual((res.passed, res.status), (False, "failed"))
+        self.assertIn("EOFError", res.output)
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)
