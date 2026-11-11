@@ -510,8 +510,11 @@ class Audit2DocsYoutubeConvert(unittest.TestCase):
             want = {"model": conv.convert_pdf(path, argparse.Namespace())}
             want["fast"] = conv.convert_pdf(path, argparse.Namespace(pdf_layout="fast"))
             self.assertFalse(pymupdf4llm._use_layout)
+            # the switch is per process: a later conversion in it that asks for the model gets the model back
+            self.assertEqual(conv.convert_pdf(path, argparse.Namespace()), want["model"])
+            self.assertEqual(pymupdf4llm._use_layout, before)
         finally:
-            pymupdf4llm.use_layout(before)  # the switch is per process: give the other tests their mode back
+            pymupdf4llm.use_layout(before)  # whatever failed above, the other tests keep their mode
         for mode, extra in (("fast", ["--pdf-layout", "fast"]), ("model", [])):
             out = os.path.join(self.tmp, "f031", mode)
             done = subprocess.run([sys.executable, os.path.join(HERE, "convert_to_markdown.py"), src, "--out", out,

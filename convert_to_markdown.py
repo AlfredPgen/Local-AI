@@ -211,7 +211,8 @@ OCR_SECONDS_PER_PAGE = 15   # --ocr: a child process gets at least this long per
 # without --ocr (layout analysis of a page takes well under a second on a CPU with --pdf-layout model, on about
 # 3 cores; --pdf-layout fast needs about a quarter of that CPU time)
 PDF_SECONDS_PER_PAGE = 5
-_PICTURE_TEXT = re.compile(r"(?:<!--|-----) Start of picture text (?:-->|-----).*?(?:<!--|-----) End of picture "
+_PDF_LAYOUT = []  # [pymupdf4llm's layout switch as the first convert_pdf of this process found it]
+_PICTURE_TEXT =re.compile(r"(?:<!--|-----) Start of picture text (?:-->|-----).*?(?:<!--|-----) End of picture "
                            r"text (?:-->|-----)\n?", re.S)
 # pymupdf4llm writes each image link on a line of its own ('\n![](path)\n'): matching the whole line lets
 # the path run to the last ')', so names like 'paper (1).pdf-0001-03.png' stay whole
@@ -260,10 +261,16 @@ def convert_pdf(path, args, image_dir=None, info=None):
         import pymupdf4llm
     except ImportError:
         raise RuntimeError("PDF conversion needs pymupdf4llm: python -m pip install pymupdf4llm")
+    if not _PDF_LAYOUT:
+        _PDF_LAYOUT.append(getattr(pymupdf4llm, "_use_layout", False))
     if getattr(args, "pdf_layout", "model") == "fast":
-        pymupdf4llm.use_layout(False)  # for the rest of this process (every PDF is converted in a process of its own)
+        pymupdf4llm.use_layout(False)  # pymupdf4llm's switch is one per process: off until a call asks for the model
         kwargs = {}  # no use_ocr: without the layout model there is no OCR, and the argument is refused with a warning
     else:
+        if getattr(pymupdf4llm, "_use_layout", False) != _PDF_LAYOUT[0]:
+            # a fast conversion earlier in this process switched the model off (not on the command line, where
+            # every PDF has a process of its own): back on only now, because that loads the model again
+            pymupdf4llm.use_layout(_PDF_LAYOUT[0])
         kwargs = {"use_ocr": False}  # OCR only when --ocr asks for it (else it runs whenever Tesseract is on PATH)
     if getattr(args, "extract_images", False):
         if image_dir is None:
