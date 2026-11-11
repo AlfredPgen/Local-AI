@@ -386,16 +386,23 @@ class Audit2PipelineTools(unittest.TestCase):
     # ---------------- gpu_check ----------------
     def gpu_check_load(self, used, util):
         """(stdout, load_test mock) of `gpu_check.py --load 5` on a machine whose nvidia-smi reports `used` MiB
-        and `util` % (both the script's own snapshot and tiny_gpt.gpu_busy's query)."""
+        and `util` % (both the script's own snapshot and tiny_gpt.gpu_busy's query). Nothing else of the
+        machine counts: gpu_busy looks for lock files in an empty folder (not beside tiny_gpt.py, where a
+        training run that is alive has one), and CUDA is not started in the test process."""
         import types
         import gpu_check
         import tiny_gpt
+        import torch
         snapshot = dict.fromkeys(gpu_check.QUERY, "0")
         snapshot.update({"pstate": "P8", "utilization.gpu": str(util), "memory.used": str(used)})
         smi = types.SimpleNamespace(stdout=f"{used}, {util}\n", returncode=0)
+        no_locks = os.path.join(self.tmp, "no_locks")
+        os.makedirs(no_locks, exist_ok=True)
         with unittest.mock.patch.object(gpu_check, "nvidia_smi", return_value=snapshot), \
                 unittest.mock.patch.object(gpu_check, "windows_power", return_value={}), \
                 unittest.mock.patch.object(gpu_check, "load_test") as load, \
+                unittest.mock.patch.object(tiny_gpt, "HERE", no_locks), \
+                unittest.mock.patch.object(torch.cuda, "is_available", return_value=False), \
                 unittest.mock.patch.object(tiny_gpt.subprocess, "run", return_value=smi), \
                 unittest.mock.patch.object(sys, "argv", ["gpu_check.py", "--load", "5"]), \
                 redirect_stdout(io.StringIO()) as out:
