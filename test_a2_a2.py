@@ -348,8 +348,9 @@ class Audit2TinyGptB(unittest.TestCase):
 
     def test_sustained_speed_is_the_last_session_of_a_resumed_run(self):
         """F361: the rows of a resumed run are cumulative, so the planner's speed is the difference to the previous
-        row of the same run (the last session), not the whole-run average; a different run under the same name or
-        a session too short to measure falls back to the whole run."""
+        row of the same run (the last session), not the whole-run average; a different run under the same name
+        (another shape, or the same shape started again from scratch) or a session too short to measure falls
+        back to the whole run."""
         shape = {"event": "training run", "vocab": "16384", "ctx": "1024", "d_model": "1024", "layers": "18",
                  "heads": "16", "kv_heads": "4", "params": "216180000", "device": "cuda",
                  "activation_checkpointing": "off"}
@@ -401,6 +402,31 @@ class Audit2TinyGptB(unittest.TestCase):
         speed_new, note_new = speed_of("started_again", [row("run", 1, t1, 100), row("run", 3, 7_200_000, 1)])
         self.assertAlmostEqual(speed_new, 2000 * flops, delta=flops)
         self.assertNotIn("last session", note_new)
+        # a run started again from scratch under its name and shape that got FURTHER than the old one (--overwrite):
+        # more tokens and hours than the row before, but another run. Its whole training time fits between the two
+        # rows, which no resumed run's does, so the whole-run figure of the new run stands (faster or slower)
+        for case, old_speed, new_speed, when in (("again_faster", 6000, 8000, "2026-11-05T00:00:00"),
+                                                 ("again_slower", 8000, 7000, "2026-11-05T00:00:00"),
+                                                 ("again_at_once", 6000, 8000, "2026-11-01T12:30:00")):
+            speed_again, note_again = speed_of(case, [
+                row("run", 1, 10 * 3600 * old_speed, 10, status="finished"),
+                row("run", 5, 12 * 3600 * new_speed, 12, status="finished", time=when)])
+            self.assertAlmostEqual(speed_again, new_speed * flops, delta=flops, msg=case)
+            self.assertIn(f"{new_speed:,} tokens/s)", note_again, case)
+            self.assertNotIn("last session", note_again, case)
+        # the same two rows written 3 hours apart can only be one run (12 hours of training do not fit in 3)
+        speed_3h, note_3h = speed_of("resumed_3h", [row("run", 1, 10 * 3600 * 6000, 10),
+                                                    row("run", 1, 10 * 3600 * 6000 + 2 * 3600 * 8000, 12,
+                                                        time="2026-11-01T03:00:00")])
+        self.assertAlmostEqual(speed_3h, 8000 * flops, delta=flops)
+        self.assertIn("8,000 tokens/s, last session", note_3h)
+        # a difference that is longer than the time between the rows, or rows without a usable time: the whole run
+        for case, times in (("too_long", ("2026-11-01T00:00:00", "2026-11-01T01:00:00")), ("no_time", ("", "")),
+                            ("mixed_time", ("2026-11-01T00:00:00+00:00", "2026-11-01T03:00:00"))):
+            speed_w, note_w = speed_of(case, [row("run", 1, 10 * 3600 * 6000, 10, time=times[0]),
+                                              row("run", 1, 10 * 3600 * 6000 + 2 * 3600 * 8000, 12, time=times[1])])
+            self.assertAlmostEqual(speed_w, (10 * 6000 + 2 * 8000) / 12 * flops, delta=flops, msg=case)
+            self.assertNotIn("last session", note_w, case)
 
     def test_resume_min_lr_ratio_that_already_holds_is_not_called_ignored(self):
         """F358: --min-lr-ratio on --resume that asks for the min_lr the run already has says so in every phase;

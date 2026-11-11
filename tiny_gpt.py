@@ -3216,9 +3216,10 @@ def sustained_speed(out_dir, device):
     hours the power and heat limits slow it down (about 1.6x on this RTX 3070), so a
     real run is the better guide. Rows from before the device column are CUDA.
     The rows of a resumed run are cumulative: when an earlier row of the same
-    run exists (same name, device and shape) the speed is that of the last
-    session alone, the difference between the two rows, if it lasted 12 minutes
-    or more."""
+    run exists (same name, device and shape, written less than the run's whole
+    training time before this one, so that it cannot be an older run of that
+    name) the speed is that of the last session alone, the difference between
+    the two rows, if it lasted 12 minutes or more."""
     import csv
     try:
         path = experiments_path(out_dir)
@@ -3249,9 +3250,14 @@ def sustained_speed(out_dir, device):
                 try:
                     more_tokens = tokens - float(earlier["tokens_seen"])
                     more_hours = hours - float(earlier["train_hours"])
-                except (KeyError, TypeError, ValueError):
-                    more_tokens = more_hours = 0.0
-                if more_tokens > 0 and more_hours >= 0.2:
+                    between = (datetime.datetime.fromisoformat(r["time"])
+                               - datetime.datetime.fromisoformat(earlier["time"])).total_seconds() / 3600
+                except (KeyError, TypeError, ValueError):  # a row without a usable time: the whole run
+                    more_tokens = more_hours = between = 0.0
+                # the table has no run id, and a run started again from scratch under its name and shape can pass
+                # the earlier row in tokens and hours. The clock tells the two apart: all the training of a new run
+                # fits between the two rows; of a resumed run only the last session does (0.01 h: the rounding)
+                if more_tokens > 0 and 0.2 <= more_hours <= between + 0.01 < hours:
                     tokens, hours, session = more_tokens, more_hours, ", last session"
             speed = tokens / (hours * 3600) * flops_per_token(cfg, recompute)
             return speed, (f"{speed / 1e12:.1f} TFLOP/s sustained by run '{r.get('name')}' of {r.get('time', '')[:10]} "
