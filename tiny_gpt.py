@@ -329,19 +329,22 @@ GPU_BUSY_MESSAGE = ("The GPU is busy (another training run?): two training jobs 
                     "driver). Wait for the other job or stop it first.")
 
 
-def gpu_busy(*out_dirs):
+def gpu_busy(*out_dirs, smi=True):
     """True when another training job is running, on any device: a <name>.train.lock
     whose process is alive in one of `out_dirs` (default: this script's folder), or,
     where nvidia-smi exists, more than 2500 MiB of GPU memory in use or a utilization
     of 20 % or more (a training run holds gigabytes even while it saves). Without
     nvidia-smi (macOS) the lock files are the only signal, so every trainer in this
-    project takes one."""
+    project takes one. smi=False asks the lock files alone: nvidia-smi's figures are
+    also that high on desktop load, which is too weak a reason to warn every run."""
     for folder in out_dirs or (HERE,):
         try:
             if any(data_prep._lock_owner_alive(lock) for lock in glob.glob(os.path.join(folder, "*.train.lock"))):
                 return True
         except OSError:
             pass
+    if not smi:
+        return False
     try:
         out = subprocess.run(["nvidia-smi", "--query-gpu=memory.used,utilization.gpu",
                               "--format=csv,noheader,nounits"], capture_output=True, text=True, timeout=15).stdout
@@ -4204,6 +4207,10 @@ def cmd_train(args):
                 pass
     lock = acquire_run_lock(args)
     try:
+        # another run (another --name) training here: said, not refused, and from the lock files alone, so that a
+        # plain --resume is never stopped or warned by what else the desktop is doing
+        if args.device != "cpu" and gpu_busy(args.out_dir, HERE, smi=False):
+            print("WARNING: " + GPU_BUSY_MESSAGE)
         return _train(args)
     finally:
         release_run_lock(lock)
@@ -5613,6 +5620,8 @@ def cmd_plan(args):
         # the plan never opens a checkpoint (so it cannot change one); a resumed run keeps its own settings
         print(f"Note: --plan describes a new run on this dataset; {'--resume' if args.resume else '--init-from'} is "
               "ignored here (a resumed run keeps its checkpoint's settings, printed in its run header).")
+    if args.time_budget_hours and args.device != "cpu" and gpu_busy(args.out_dir, HERE, smi=False):
+        print("WARNING: " + GPU_BUSY_MESSAGE)  # the time budget is planned from training steps timed now
     cfg, settings, lines = plan_with_time_budget(args, manifest, device, amp_dtype)
     print(f"\nPlan for {dataset_dir} on {device_label(device)} ({amp_name}) at {now_iso()}")
     for line in lines:

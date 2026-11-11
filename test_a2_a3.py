@@ -943,6 +943,81 @@ class Audit2TinyGptC(unittest.TestCase):
         self.assertIn("--- tinyGPT ", text)
         self.assertIn("unrecognized arguments: --no-such-option", text)
 
+    # ---------------- another training run beside this one ----------------
+    def test_a_live_lock_of_another_run_is_a_warning(self):
+        """F287 (with F312): a training run, and --plan with --time-budget-hours (it times training steps), warn
+        when another run's lock is alive in the output folder or beside the script. A warning, never a refusal,
+        and from the locks alone (gpu_busy(..., smi=False)): nvidia-smi's figures are also high on desktop load.
+        With --device cpu nothing is asked."""
+        import glob
+        import signal
+        out_dir = os.path.join(self.tmp, "busy287")
+        os.makedirs(out_dir)
+        warning = "WARNING: " + tiny_gpt.GPU_BUSY_MESSAGE + "\n"
+        signals = [getattr(signal, name) for name in tiny_gpt.PAUSE_SIGNALS if hasattr(signal, name)]
+        handlers = {number: signal.getsignal(number) for number in signals}  # cmd_train sets them for its run
+
+        def train(argv, busy):
+            args = tiny_gpt.parse_args(["--name", "b", "--out-dir", out_dir] + argv)
+            with unittest.mock.patch.object(tiny_gpt, "gpu_busy", return_value=busy) as asked, \
+                    unittest.mock.patch.object(tiny_gpt, "_train", return_value=None) as trained, \
+                    redirect_stdout(io.StringIO()) as said:
+                tiny_gpt.cmd_train(args)
+            self.assertEqual(trained.call_count, 1, "a warning: the run goes on")
+            return asked, said.getvalue()
+
+        try:
+            asked, said = train(["--device", "cuda"], True)
+            self.assertEqual(said, warning)
+            asked.assert_called_once_with(out_dir, tiny_gpt.HERE, smi=False)
+            asked, said = train([], False)  # --device auto
+            self.assertEqual((asked.call_count, said), (1, ""))
+            asked, said = train(["--device", "cpu"], True)
+            self.assertEqual((asked.call_count, said), (0, ""))
+        finally:
+            for number, handler in handlers.items():
+                signal.signal(number, handler)
+        self.assertEqual(glob.glob(os.path.join(out_dir, "*.train.lock")), [], "the run's own lock is released")
+
+        # --plan: only when it times steps (--time-budget-hours), before the timing starts
+        dataset = os.path.join(self.tmp, "ds287")
+        os.makedirs(dataset)
+        with open(os.path.join(dataset, "manifest.json"), "w", encoding="utf-8") as f:
+            json.dump({"format": data_prep.FORMAT, "format_version": 1, "fingerprint": "abc"}, f)
+
+        def plan(argv, busy):
+            args = tiny_gpt.parse_args(["--plan", "--dataset", dataset, "--out-dir", out_dir] + argv)
+            with unittest.mock.patch.object(tiny_gpt, "gpu_busy", return_value=busy) as asked, \
+                    unittest.mock.patch.object(tiny_gpt, "plan_with_time_budget",
+                                               side_effect=KeyboardInterrupt("the planner starts")), \
+                    redirect_stdout(io.StringIO()) as said, self.assertRaises(KeyboardInterrupt):
+                tiny_gpt.cmd_plan(args)
+            return asked, said.getvalue()
+
+        asked, said = plan(["--time-budget-hours", "1"], True)
+        self.assertEqual(said, warning)
+        asked.assert_called_once_with(out_dir, tiny_gpt.HERE, smi=False)
+        self.assertEqual(plan(["--time-budget-hours", "1"], False)[1], "")
+        asked, said = plan([], True)
+        self.assertEqual((asked.call_count, said), (0, ""))
+        asked, said = plan(["--time-budget-hours", "1", "--device", "cpu"], True)
+        self.assertEqual((asked.call_count, said), (0, ""))
+
+    def test_gpu_busy_can_leave_nvidia_smi_out(self):
+        """F287: gpu_busy(..., smi=False) answers from the lock files alone; the default still asks nvidia-smi."""
+        folder = os.path.join(self.tmp, "smi287")
+        os.makedirs(folder)
+        loaded = unittest.mock.Mock(stdout="3000, 50\n")
+        with unittest.mock.patch.object(tiny_gpt.subprocess, "run", return_value=loaded) as smi:
+            self.assertTrue(tiny_gpt.gpu_busy(folder))
+            self.assertEqual(smi.call_count, 1)
+            self.assertFalse(tiny_gpt.gpu_busy(folder, smi=False))
+            self.assertEqual(smi.call_count, 1, "not asked")
+            with open(os.path.join(folder, "other.train.lock"), "w", encoding="utf-8") as f:
+                json.dump({"pid": os.getppid(), "started": None}, f)  # a live process that is not this one
+            self.assertTrue(tiny_gpt.gpu_busy(folder, smi=False))
+            self.assertEqual(smi.call_count, 1)
+
 
 if __name__ == "__main__":
     unittest.main()
