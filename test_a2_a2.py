@@ -752,3 +752,17 @@ class Audit2TinyGptB(unittest.TestCase):
         with self.assertRaises(SystemExit) as caught:
             tiny_gpt.resolve_dataset(old)
         self.assertIn("records no dataset", str(caught.exception))
+
+    def test_export_names_the_attention_the_model_has(self):
+        """F282: config.json of an export says 'grouped-query attention' with the head counts only when the
+        key/value heads are shared; a model with as many key/value heads as query heads is 'multi-head attention'."""
+        for name, heads, kv, want in (("gqa", 4, 2, "SwiGLU, grouped-query attention (4 query / 2 key-value heads), "),
+                                      ("mha", 4, 4, "SwiGLU, multi-head attention, ")):
+            runs = os.path.join(self.tmp, f"export_attn_{name}")
+            self._toy_checkpoint(runs, heads=heads, kv_heads=kv)
+            self._quiet(tiny_gpt.cmd_export, self._args(runs, "--export", os.path.join(runs, "exp")))
+            with open(os.path.join(runs, "exp", "config.json"), encoding="utf-8") as handle:
+                config = json.load(handle)
+            self.assertIn(want, config["architecture"])
+            self.assertEqual("grouped-query" in config["architecture"], kv < heads)
+            self.assertEqual((config["model_config"]["n_heads"], config["model_config"]["n_kv_heads"]), (heads, kv))

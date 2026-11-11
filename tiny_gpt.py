@@ -3904,7 +3904,8 @@ def cmd_export(args):
         handle.write(tok.proto)
     metrics = obj.get("metrics", {}) if isinstance(obj.get("metrics"), dict) else {}
     config = {"architecture": "tinyGPT decoder-only Transformer: interleaved-pair RoPE, RMSNorm, SwiGLU, "
-                              "grouped-query attention"
+                              + (f"grouped-query attention ({cfg.n_heads} query / {cfg.n_kv_heads} key-value heads)"
+                                 if cfg.n_kv_heads < cfg.n_heads else "multi-head attention")
                               + (", QK-norm (RMSNorm with a shared gain on each query and key head, before RoPE)"
                                  if cfg.qk_norm else "")
                               + (f", mixture of experts ({cfg.n_experts} SwiGLU experts of hidden "
