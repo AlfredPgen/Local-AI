@@ -162,7 +162,8 @@ def text_encoding(path):
             return "utf-16-be"
     decoded = codecs.getincrementaldecoder("utf-8")(errors="replace").decode(sample, final=False)  # cut tail ignored
     invalid = decoded.count("\ufffd") - sample.count(b"\xef\xbf\xbd")
-    valid = sum(1 for ch in decoded if ord(ch) > 127) - decoded.count("\ufffd")
+    # the non-ASCII characters, counted in C: this runs on every .txt and .gz while a --by-type batch is planned
+    valid = len(decoded) - len(decoded.encode("ascii", "ignore")) - decoded.count("\ufffd")
     return "cp1252" if invalid > 0 and invalid > valid else "utf-8-sig"
 
 

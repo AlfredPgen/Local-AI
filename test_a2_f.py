@@ -372,6 +372,36 @@ class Audit2DocsYoutubeConvert(unittest.TestCase):
             handle.write("made by this version\n")
         self.assertEqual(planned(), "tables/lost.md")
 
+    def test_text_encoding_is_chosen_as_before(self):
+        """F039 (guard, passes before and after): the first lines of every .txt and .gz are now read when a
+        --by-type batch is planned, so the encoding test counts in C, not character by character; it still
+        chooses Windows-1252 only when invalid UTF-8 outnumbers valid non-ASCII UTF-8."""
+        import gzip
+        import convert_to_markdown as conv
+        folder = os.path.join(self.tmp, "f039enc")
+        os.makedirs(folder)
+        squared = "h² ".encode("utf-8")  # one valid non-ASCII character
+        mark = "� ".encode("utf-8")  # a replacement character that is in the file itself: not an invalid byte
+        cases = {
+            "ascii": (b"plain text\n" * 5, "utf-8-sig"),
+            "utf8": ("Heritability h² of αβγ traits\n".encode("utf-8") * 50, "utf-8-sig"),
+            "cp1252": ("naïve café – résumé\n".encode("cp1252") * 50, "cp1252"),
+            "tie": (squared * 3 + b"\x96 \x97 \x93\n", "utf-8-sig"),  # 3 invalid bytes, 3 valid characters
+            "more_invalid": (squared * 3 + b"\x96 \x97 \x93 \x94\n", "cp1252"),  # 4 invalid, 3 valid
+            "own_marks": (mark * 3 + b"\x96\n", "cp1252"),  # 1 invalid, 0 valid: the 3 marks count as neither
+            "own_marks_tie": (mark * 3 + squared + b"\x96\n", "utf-8-sig"),  # 1 invalid, 1 valid
+            "cut": (b"a" * ((1 << 20) - 1) + "éé\n".encode("utf-8"), "utf-8-sig"),  # the MB ends inside a character
+            "long": ((squared * 40 + b"\x96" * 41 + b"\n") * 3000, "cp1252"),  # 123,000 invalid, 120,000 valid
+            "long_tie": ((squared * 41 + b"\x96" * 41 + b"\n") * 3000, "utf-8-sig"),
+        }
+        for name, (raw, want) in cases.items():
+            path = os.path.join(folder, name + ".txt")
+            with open(path, "wb") as handle:
+                handle.write(raw)
+            with gzip.open(path + ".gz", "wb") as handle:
+                handle.write(raw)
+            self.assertEqual([conv.text_encoding(path), conv.text_encoding(path + ".gz")], [want, want], name)
+
     def test_pdf_page_count_is_one_cached_function(self):
         """F038: one page counter (0 for a file that cannot be opened), each PDF opened once; --by-type sorts a
         PDF as before."""
