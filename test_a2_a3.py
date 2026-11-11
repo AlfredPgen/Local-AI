@@ -433,6 +433,23 @@ class Audit2TinyGptC(unittest.TestCase):
         self.assertTrue(lines(out_u))
         self.assertEqual(lines(out_u), lines(out_r), "the paused run must reproduce the uninterrupted one")
 
+    def test_failed_save_warning_names_the_next_attempt(self):
+        """F225 (with F237): the warning of a failed periodic save says when the next attempt is: in about a
+        minute with --save-minutes, at the next multiple of --save-every with --save-minutes 0."""
+        self.pipeline()
+        args = list(self.common[1:]) + ["--steps", "8", "--no-probes", "--save-every", "3"]
+        code, out = self.patched_run("savefail", 1, args + ["--name", "SW0", "--save-minutes", "0"])
+        self.assertEqual(code, 0, out)
+        self.assertEqual(out.count("WARNING: could not save"), 1, out)
+        self.assertRegex(out, r"WARNING: could not save .*SW0\.pt \(OSError: .*\); training continues, next attempt "
+                              r"at step 6 \(1/3\)\n")
+        self.assertNotIn("in about a minute", out)
+        self.assertEqual(self.load("SW0.pt")["step"], 8)
+        code, out_m = self.patched_run("savefail", 1, args + ["--name", "SW1"])
+        self.assertEqual(code, 0, out_m)
+        self.assertRegex(out_m, r"WARNING: could not save .*SW1\.pt \(OSError: .*\); training continues, next attempt "
+                                r"in about a minute \(1/3\)\n")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -5180,11 +5180,14 @@ def _train(args):
                     save_failures = 0
                 except Exception as exc:  # noqa: BLE001 - not BaseException: Ctrl+C keeps its own path below
                     # A save that fails (disk full, file locked, no RAM for the CPU copy) must not end a run that
-                    # is training fine: the loop goes on and tries again in about a minute, three times in a row
-                    # at most. A save that the session needs now (its last step, --stop-after-steps) is raised.
+                    # is training fine: the loop goes on and tries again in about a minute (with --save-minutes 0 at
+                    # the next multiple of --save-every), three times in a row at most. A save that the session
+                    # needs now (its last step, --stop-after-steps) is raised.
                     save_failures += 1
+                    next_try = ("in about a minute" if args.save_minutes > 0 else "at step "
+                                f"{min(total_steps, (step // args.save_every + 1) * args.save_every):,}")
                     print(f"WARNING: could not save {ckpt_path} ({type(exc).__name__}: {str(exc)[:160]}); "
-                          f"training continues, next attempt in about a minute ({save_failures}/3)")
+                          f"training continues, next attempt {next_try} ({save_failures}/3)")
                     x = y = logits = flat = lse = loss = ce = zsum = output = aux = None
                     free_device_memory(device)
                     last_save = time.perf_counter() - args.save_minutes * 60 + 60
