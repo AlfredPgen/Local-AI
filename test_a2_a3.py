@@ -674,7 +674,7 @@ class Audit2TinyGptC(unittest.TestCase):
         self.assertFalse([line for line in head if line.startswith("plan: WARNING: ") and "decay" in line], head)
         # a continued cosine schedule falls from the end of its warm-up on by design: no warning either, although
         # this run starts at step 9 of 10, after the warm-up (--steps could not change that)
-        code, out_cos = base.run(self.common + ["--eval-every", "2", "--no-probes", "--name", "I3", "--init-from",
+        code, out_cos = base.run(self.common + ["--eval-every", "2", "--no-probes", "--name", "I4", "--init-from",
                                                 os.path.join(self.runs, "N.pt"), "--train-tokens", "1024",
                                                 "--schedule", "cosine", "--warmup-steps", "1"])
         self.assertEqual(code, 0, out_cos)
