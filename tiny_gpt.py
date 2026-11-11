@@ -4663,7 +4663,7 @@ def _train(args):
                         "baseline": True, "time": now_iso()})
         write_metrics(history[-1])
         print(f"step {start_step:>6}/{total_steps} | baseline before training | val {ev['loss']:.3f} @{start_step}"
-              + _per_source(ev) + f" | ppl {math.exp(min(ev['loss'], 50)):,.1f} | bpb {ev['bpb']:.3f} "
+              f" | ppl {math.exp(min(ev['loss'], 50)):,.1f} | bpb {ev['bpb']:.3f} "
               f"| uniform-guess loss would be {math.log(cfg.vocab_size):.3f} (not counted as best)")
 
     def run_seconds():
@@ -5079,7 +5079,6 @@ def _train(args):
                 else:
                     status_text = f"best {best_val:.3f} @{best_step}"
                 print(f"step {step:>6}/{total_steps} | train {train_loss:.3f} | val {ev['loss']:.3f} @{step}"
-                      + _per_source(ev)
                       + (f" | val(mix) {ev['loss_mix']:.3f}" if ev.get("loss_mix") is not None else "")
                       + (f" | val(ema) {ev_ema['loss']:.3f}" if ev_ema is not None else "")
                       + f" | ppl {entry['ppl']:,.2f} | bpb {ev['bpb']:.3f} | lr {lr:.2e} | {tok_s:,.0f} tok/s | "
@@ -5354,12 +5353,6 @@ def record_experiment(out_dir, row):
         return
     if os.path.normcase(os.path.abspath(out_dir)) == os.path.normcase(HERE):  # this folder's runs, not test runs
         publish_experiments(path, row)
-
-
-def _per_source(ev):
-    if len(ev["per_source"]) < 2:
-        return ""
-    return " [" + " ".join(f"{n} {v:.3f}" for n, v in ev["per_source"].items()) + "]"
 
 
 def maybe_compile(model, mode, device, return_hidden=False, amp_dtype=None, micro=1, return_aux=False):
