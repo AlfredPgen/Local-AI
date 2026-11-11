@@ -921,6 +921,28 @@ class Audit2TinyGptC(unittest.TestCase):
             args = tiny_gpt.parse_args(["--name", "x", "--out-dir", self.tmp] + argv)
             self.assertEqual(tiny_gpt._log_path_from(argv), args.log_file, argv)
 
+    def test_help_is_not_written_to_the_log(self):
+        """F323: --help prints the options and exits without opening the log file; an argument error is still
+        logged."""
+        from contextlib import redirect_stderr
+        for i, argv in enumerate((["--help"], ["-h"], ["--name", "x", "--help"])):
+            log = os.path.join(self.tmp, f"help{i}.log")
+            with redirect_stdout(io.StringIO()) as out, self.assertRaises(SystemExit) as stop:
+                tiny_gpt.main(argv + ["--log-file", log])
+            self.assertEqual(stop.exception.code, 0)
+            self.assertIn("--dashboard-push-hours", out.getvalue())
+            self.assertNotIn("--- tinyGPT ", out.getvalue())
+            self.assertFalse(os.path.exists(log), argv)
+            self.assertNotIn("handle", tiny_gpt._LOG_STATE)
+        log = os.path.join(self.tmp, "error.log")
+        with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as stop:
+            tiny_gpt.main(["--no-such-option", "--log-file", log])
+        self.assertEqual(stop.exception.code, 1)
+        with open(log, encoding="utf-8") as handle:
+            text = handle.read()
+        self.assertIn("--- tinyGPT ", text)
+        self.assertIn("unrecognized arguments: --no-such-option", text)
+
 
 if __name__ == "__main__":
     unittest.main()

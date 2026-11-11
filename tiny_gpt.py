@@ -5651,6 +5651,9 @@ def _log_path_from(argv):
 
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else list(argv)
+    if any(item in ("-h", "--help") for item in argv):
+        parse_args(argv)  # prints the options and exits: the help text is no part of a run's log
+        return
     start_log(_log_path_from(argv))
     print(f"\n--- tinyGPT {now_iso()} | log {os.path.abspath(_log_path_from(argv))} ---")
     try:
