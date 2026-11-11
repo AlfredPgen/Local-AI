@@ -370,7 +370,9 @@ def print_summary(ck):
         try:  # at its stored path or in datasets/ with the stored fingerprint: an export folder stores the name only
             tiny_gpt.resolve_dataset(o)
             exists = True
-        except SystemExit:  # not on this machine, or rebuilt since
+        except SystemExit:
+            # NOT FOUND: not on this machine, rebuilt since (another fingerprint), or a folder at the stored path
+            # that is no finished dataset (no manifest.json, or one without a fingerprint)
             exists = False
         tokens = f" | train tokens {ds['train_tokens']}" if ds.get("train_tokens") is not None else ""
         print(f"dataset: {ds.get('path')} ({'found' if exists else 'NOT FOUND'}) | fingerprint "

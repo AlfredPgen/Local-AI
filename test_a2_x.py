@@ -463,7 +463,7 @@ class Audit2Followers(unittest.TestCase):
         this machine, so the viewer's 'dataset:' line asks tiny_gpt.resolve_dataset where it tested the
         stored path with os.path.isdir ('NOT FOUND' for every export), and it leaves the 'train tokens'
         part out when the entry has none ('train tokens None'). A folder that was rebuilt since is not the
-        model's dataset."""
+        model's dataset, and neither is one without a manifest that has a fingerprint."""
         import test_a2_c as C
         import data_prep
         import tiny_gpt
@@ -501,7 +501,19 @@ class Audit2Followers(unittest.TestCase):
         manifest("0" * 64)  # rebuilt: same name, another fingerprint
         with unittest.mock.patch.object(tiny_gpt, "HERE", work):
             self.assertEqual(dataset_lines(export), missing)
-        self.assertEqual(dataset_lines(file), [whole[0].replace("(found)", "(NOT FOUND)")])
+        not_found = [whole[0].replace("(found)", "(NOT FOUND)")]
+        self.assertEqual(dataset_lines(file), not_found)
+        # A folder at the stored path that is no finished dataset is not the model's dataset either (it counted
+        # as found while the line only asked whether the folder exists): its manifest has no fingerprint, also
+        # when the checkpoint stores none, or it has no manifest. Guards of what resolve_dataset means.
+        older = C.toy_file(work, "B_best.pt", history=[], tokenizer={"proto": tok.proto, **tok.meta()},
+                           dataset={"path": dataset, "train_tokens": {"md": 1000}})
+        no_print = [line.replace("ffffffffffff", "None") for line in whole + not_found]
+        self.assertEqual(dataset_lines(older), no_print[:1], "without a stored fingerprint its own path is trusted")
+        manifest(None)
+        self.assertEqual((dataset_lines(file), dataset_lines(older)), (not_found, no_print[1:]))
+        os.remove(os.path.join(dataset, "manifest.json"))
+        self.assertEqual((dataset_lines(file), dataset_lines(older)), (not_found, no_print[1:]))
 
     # ---------------- X14: compare_models finds a model's training dataset as tiny_gpt does ----------------
     def test_training_overlap_finds_a_dataset_stored_by_name_in_datasets(self):
