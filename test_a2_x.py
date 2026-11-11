@@ -450,6 +450,52 @@ class Audit2Followers(unittest.TestCase):
             {"category": "genetics", "difficulty": "hard", "prompt": "Cells divide by", "answer": "mitosis",
              "distractors": ["fusion", "decay"]}])
 
+    # ---------------- X13: the viewer's dataset line asks tiny_gpt.resolve_dataset ----------------
+    def test_summary_finds_the_dataset_of_an_export_folder_by_name_and_fingerprint(self):
+        """X13 (F284): an export folder stores the name of its dataset and the fingerprint, not a path of
+        this machine, so the viewer's 'dataset:' line asks tiny_gpt.resolve_dataset where it tested the
+        stored path with os.path.isdir ('NOT FOUND' for every export), and it leaves the 'train tokens'
+        part out when the entry has none ('train tokens None'). A folder that was rebuilt since is not the
+        model's dataset."""
+        import test_a2_c as C
+        import data_prep
+        import tiny_gpt
+        import view_pt
+        work = os.path.join(self.tmp, "x13")
+        dataset, fingerprint = os.path.join(work, "datasets", "ds_toy"), "f" * 64
+        os.makedirs(dataset)
+
+        def manifest(value):
+            with open(os.path.join(dataset, "manifest.json"), "w", encoding="utf-8") as f:
+                json.dump({"format": data_prep.FORMAT, "format_version": data_prep.FORMAT_VERSION,
+                           "fingerprint": value}, f)
+
+        def dataset_lines(path):
+            with redirect_stdout(io.StringIO()) as out:
+                view_pt.print_summary(view_pt.Checkpoint(path))
+            return [line for line in out.getvalue().splitlines() if "dataset" in line.split("training settings")[0]]
+
+        manifest(fingerprint)
+        with open(self.tokenizer_model("x13_tok")[0], "rb") as f:
+            tok = data_prep.Tokenizer(f.read())
+        file = C.toy_file(work, "A_best.pt", history=[], tokenizer={"proto": tok.proto, **tok.meta()},
+                          dataset={"path": dataset, "fingerprint": fingerprint, "train_tokens": {"md": 1000}})
+        export = os.path.join(work, "exported")
+        with redirect_stdout(io.StringIO()):
+            tiny_gpt.cmd_export(tiny_gpt.parse_args(["--checkpoint", file, "--export", export, "--device", "cpu"]))
+        self.assertEqual(tiny_gpt.load_exported(export)["dataset"], {"path": "ds_toy", "fingerprint": fingerprint})
+        whole = [f"dataset: {dataset} (found) | fingerprint ffffffffffff | train tokens {{'md': 1000}}"]
+        self.assertEqual(dataset_lines(file), whole, "the line of a training checkpoint is as it was")
+        with unittest.mock.patch.object(tiny_gpt, "HERE", work):  # datasets/ds_toy beside the scripts
+            self.assertEqual(dataset_lines(export), ["dataset: ds_toy (found) | fingerprint ffffffffffff"])
+        missing = ["dataset: ds_toy (NOT FOUND) | fingerprint ffffffffffff"]
+        with unittest.mock.patch.object(tiny_gpt, "HERE", export):  # no datasets/ds_toy there
+            self.assertEqual(dataset_lines(export), missing)
+        manifest("0" * 64)  # rebuilt: same name, another fingerprint
+        with unittest.mock.patch.object(tiny_gpt, "HERE", work):
+            self.assertEqual(dataset_lines(export), missing)
+        self.assertEqual(dataset_lines(file), [whole[0].replace("(found)", "(NOT FOUND)")])
+
 
 if __name__ == "__main__":
     unittest.main()

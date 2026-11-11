@@ -367,9 +367,14 @@ def print_summary(ck):
                  if newer else ""))
     ds = o.get("dataset")
     if isinstance(ds, dict):
-        exists = os.path.isdir(ds.get("path", ""))
+        try:  # at its stored path or in datasets/ with the stored fingerprint: an export folder stores the name only
+            tiny_gpt.resolve_dataset(o)
+            exists = True
+        except SystemExit:  # not on this machine, or rebuilt since
+            exists = False
+        tokens = f" | train tokens {ds['train_tokens']}" if ds.get("train_tokens") is not None else ""
         print(f"dataset: {ds.get('path')} ({'found' if exists else 'NOT FOUND'}) | fingerprint "
-              f"{str(ds.get('fingerprint'))[:12]} | train tokens {ds.get('train_tokens')}")
+              f"{str(ds.get('fingerprint'))[:12]}{tokens}")
     tc = o.get("train_config")
     if tc:
         print("training settings: " + ", ".join(f"{k}={v}" for k, v in tc.items()))
