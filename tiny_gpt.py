@@ -3872,8 +3872,13 @@ def load_any(path, trust=False, mmap=False):
 
 
 def _home_short(path):
-    """`path` with the home folder shown as ~, so a file meant for sharing does not carry the user name."""
-    return _hide_home(path)
+    """`path` with the home folder shown as ~, so a file meant for sharing does not carry the user name.
+    For one path: only a home folder at its start, as a whole folder (_hide_home, for the text of the experiments
+    table, replaces the home string wherever it stands)."""
+    home = os.path.expanduser("~")
+    if os.path.normcase(path).startswith(os.path.normcase(home) + os.sep):
+        return "~" + path[len(home):]
+    return path
 
 
 def resolve_checkpoint(args, hint):

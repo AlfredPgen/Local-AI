@@ -854,9 +854,21 @@ class Audit2TinyGptB(unittest.TestCase):
         self.assertEqual(header(metrics={}), start + "12,345")
         self.assertEqual(header(step=None), start + "?")
 
-    def test_one_home_folder_masker(self):
-        """F215 (home-masker half): _home_short, which the export and the tools use, is _hide_home, the masker
-        of the experiments table; the paths a checkpoint can have read the same as before."""
+    def test_home_short_masks_only_a_leading_home_folder(self):
+        """F215 (home-masker half, not merged): _home_short, which the export and the tools use on one path,
+        stays apart from _hide_home, the masker of the experiments table's text, because the two differ: it
+        shortens the home folder only at the start of a path and only as a whole folder, so a folder beside the
+        home folder whose name starts the same way, the home folder itself and a home string in the middle of a
+        path read as before. On the paths a checkpoint usually has the two agree."""
+        fake = os.path.join(os.path.splitdrive(self.tmp)[0] + os.sep, "Users", "al")
+        differ = [fake + "fred" + os.sep + os.path.join("runs", "a.pt"),  # a folder beside it, same first letters
+                  fake,  # the home folder itself
+                  "copy" + os.sep + fake + os.sep + "a.pt"]  # the home string in the middle
+        with unittest.mock.patch.object(tiny_gpt.os.path, "expanduser", return_value=fake):
+            self.assertEqual([tiny_gpt._home_short(p) for p in differ], differ)
+            self.assertEqual(tiny_gpt._home_short(os.path.join(fake, "runs", "a.pt")),
+                             "~" + os.sep + os.path.join("runs", "a.pt"))
+            self.assertNotEqual([tiny_gpt._hide_home(p) for p in differ], differ)  # why they are not one function
         home = os.path.expanduser("~")
         samples = [os.path.join(home, "runs", "A_best.pt"),  # inside the home folder
                    os.path.join(os.path.splitdrive(home)[0] + os.sep, "data", "runs", "A_best.pt"),  # outside it
@@ -870,9 +882,6 @@ class Audit2TinyGptB(unittest.TestCase):
             want.append("~" + os.sep + os.path.join("Runs", "A_best.pt"))
         self.assertEqual([tiny_gpt._home_short(p) for p in samples], want)
         self.assertEqual([tiny_gpt._hide_home(p) for p in samples], want)
-        with unittest.mock.patch.object(tiny_gpt, "_hide_home", return_value="masked") as hide:
-            self.assertEqual(tiny_gpt._home_short("some path"), "masked")
-        hide.assert_called_once_with("some path")
         # the export records its source with it
         runs = os.path.join(self.tmp, "home_mask")
         best = self._toy_checkpoint(runs)
