@@ -276,7 +276,7 @@ def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("a", help="checkpoint A (.pt or --export folder)")
     p.add_argument("b", help="checkpoint B")
-    p.add_argument("--dataset", help="dataset whose validation documents are used (default: A's dataset)")
+    p.add_argument("--dataset", help="dataset whose validation documents are used (default: A's dataset, else B's)")
     p.add_argument("--docs", type=int, default=150, help="documents per source")
     p.add_argument("--max-chars", type=int, default=20_000, help="characters used per document")
     p.add_argument("--reps", type=int, default=2000, help="bootstrap resamples")
