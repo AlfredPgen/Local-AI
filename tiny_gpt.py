@@ -4426,7 +4426,9 @@ def _train(args):
 
     start_step, tokens_seen, train_seconds = 0, 0, 0.0
     run_seconds_before = 0.0  # wall-clock time of earlier sessions of this run (before --resume)
-    rewarm_start, rewarm_steps = 0, 0  # learning-rate ramp after resuming from a best checkpoint
+    # learning-rate ramp after a resume from a best checkpoint, or an --init-from whose optimizer state partly
+    # restarts
+    rewarm_start, rewarm_steps = 0, 0
     interval_state = None
     history, best_val, best_step, last_eval = [], float("inf"), None, None
     resume_note = "fresh run"
@@ -4759,7 +4761,8 @@ def _train(args):
             scaler_state = scaler.state_dict() if scaler is not None else None  # for a retry of this step
             step += 1
             lr = schedule.lr_at(step)
-            if rewarm_steps and step - rewarm_start <= rewarm_steps:  # only after resuming from a best checkpoint
+            # after a resume from a best checkpoint, or an --init-from whose optimizer state partly restarts
+            if rewarm_steps and step - rewarm_start <= rewarm_steps:
                 lr *= (step - rewarm_start) / rewarm_steps
             for group in opt.param_groups:
                 group["lr"] = lr
@@ -4893,8 +4896,8 @@ def _train(args):
                 if scaler is not None:  # a new scaler with the same scale: forgets an unscale_ already done
                     scaler = torch.amp.GradScaler(device.type)
                     scaler.load_state_dict(scaler_state)
-                # cheapest remedy first: the loss in pieces, then a smaller micro-batch down to 4, then recomputation,
-                # then smaller still; never one that the command line switched off
+                # cheapest remedy first: the loss in pieces, then a smaller micro-batch down to about 2,048 tokens
+                # (micro_floor), then recomputation, then smaller still; never one that the command line switched off
                 chunk_ok = not loss_chunk and args.loss_chunk_tokens != 0
                 ckpt_ok = not model.grad_checkpoint and args.activation_checkpointing != "off"
                 if not oom:
@@ -5128,8 +5131,7 @@ def _train(args):
         if done_step < step:
             # Ctrl+C arrived inside a step, before its update (which Ctrl+C never
             # splits). Rewind the sampler, dropout RNG and loss sums so --resume
-            # replays exactly that step, and save the last completed step (the
-            # original script saved the unfinished step number).
+            # replays exactly that step, and save the last completed step.
             rewind(step_start)
             opt.zero_grad(set_to_none=True)
             step = done_step
