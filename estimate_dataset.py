@@ -201,6 +201,9 @@ def table_source(name, kind, source, args, use_kw, min_score, max_docs, select):
     need = kw is not None and bool(kw.include_patterns)
     # 'auto' as data_prep resolves it: ranked only with include keywords and a limit (exclude keywords rank nothing)
     t.select = "top" if select == "top" or (select == "auto" and need and max_docs) else "first"
+    # as the build: 'top' ranks by the RE2 counts whatever the number of patterns; in stream order they are
+    # counted only when data_prep's readers use them to reject records before the full check
+    prefilter = need if t.select == "top" else dp._use_prefilter(kw)
 
     def batches():
         if kind == "parquet":
@@ -219,15 +222,15 @@ def table_source(name, kind, source, args, use_kw, min_score, max_docs, select):
                     yield f, b, arrays
 
     for f, b, arrays in batches():
-        hits, chars, score_ok = dp._vector_scores(arrays, kw, source.text_col, source.title_col, source.score_col,
-                                                  min_score)
+        hits, chars, score_ok = dp._vector_scores(arrays, kw if prefilter else None, source.text_col,
+                                                  source.title_col, source.score_col, min_score)
         t.sampled += len(chars)
         for r in range(len(chars)):
             if not score_ok[r]:
                 t.skip("score_below_min")
             elif chars[r] == 0:
                 t.skip("empty")
-            elif need and hits[r] < kw.min_hits:
+            elif prefilter and hits[r] < kw.min_hits:
                 t.skip("keyword_min_hits")
             else:
                 _, title, text, _ = dp._row(arrays, r, source, f, b)

@@ -18,7 +18,8 @@ from types import SimpleNamespace as types_ns
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(HERE, "tools"))
-import test_tiny_gpt as T  # noqa: E402,F401
+import test_a2_h as H  # noqa: E402
+import test_tiny_gpt as T  # noqa: E402
 
 KEYWORDS = "genetic*\nallele*\ndrift\nselection\n"
 MATCH = ("Genetic drift and allele frequencies", "Genetic drift changes allele frequencies; selection acts too.")
@@ -139,6 +140,60 @@ class Audit2Followers(unittest.TestCase):
                     for title, text in texts:
                         self.assertEqual(kw.evaluate(title, text), default.evaluate(title, text), (title, text))
                     self.assertEqual([kw.evaluate(*t)[0] for t in texts[:2]], [True, False])
+
+    # ---------------- X2: the estimate gates the keyword prefilter as the build does ----------------
+    def run_estimate(self, argv):
+        return H.Audit2PipelineTools.run_estimate(self, argv)  # the helper of package H (one method after the fold)
+
+    def tokenizer_model(self, name):
+        return H.Audit2PipelineTools.tokenizer_model(self, name)
+
+    def test_estimate_gates_the_keyword_prefilter_like_the_build(self):
+        """X2 (F047): a source read in stream order ('first') gets the RE2 keyword counts only when the
+        build's readers use them (data_prep._use_prefilter: not above PREFILTER_MAX_PATTERNS patterns); a
+        ranked source ('top') always gets them, they are its ranking score. Either way the estimate keeps
+        the documents the build keeps, with the build's skip reasons."""
+        import data_prep as dp
+        import estimate_dataset
+        c = T.Corpus(os.path.join(self.tmp, "x2_corpus"))
+        model, _ = self.tokenizer_model("x2_tok")
+        common = ["--wiki-dir", c.wiki, "--parquet", c.parquet, "--parquet-name", "web", "--min-score", "2",
+                  "--include-keywords", "genetic*,allele*,protein,DNA,RNA,genome*", "--keyword-min-distinct", "2"]
+        real_scores, real_source = dp._vector_scores, estimate_dataset.table_source
+        for mode, wiki_max in (("first", "0"), ("top", "30")):
+            out = os.path.join(self.tmp, f"x2_build_{mode}")
+            with redirect_stdout(io.StringIO()):
+                dp.prepare(["--out", out, "--wiki-max-docs", wiki_max, "--vocab-size", "700", "--val-fraction", "0.2",
+                            "--threads", "2", "--workers", "1"] + common)
+            sources = dp.read_manifest(out)["sources"]
+            self.assertEqual((sources["wiki"]["select"], sources["web"]["select"]), (mode, "first"))
+            for limit in (0, 10 ** 9):  # prefilter never used / always used in stream order
+                with_kw, tallies = [], {}
+
+                def recorded(arrays, kw, *a, **k):
+                    with_kw.append(kw is not None)
+                    return real_scores(arrays, kw, *a, **k)
+
+                def source(name, *a, **k):
+                    tallies[name] = real_source(name, *a, **k)
+                    return tallies[name]
+
+                with unittest.mock.patch.object(dp, "PREFILTER_MAX_PATTERNS", limit),                         unittest.mock.patch.object(dp, "_vector_scores", recorded),                         unittest.mock.patch.object(estimate_dataset, "table_source", source):
+                    self.run_estimate(["--sample", "1", "--tflops", "1", "--hours", "1", "--tokenizer-from", model,
+                                       "--wiki-max-docs", wiki_max] + common)
+                if limit:
+                    self.assertEqual(set(with_kw), {True}, (mode, limit))
+                else:  # only the ranked source is counted
+                    self.assertEqual(set(with_kw), {False} if mode == "first" else {True, False}, (mode, limit))
+                for name in ("wiki", "web"):
+                    t, built = tallies[name], sources[name]
+                    self.assertEqual((t.select, t.total, round(t.estimate()[0])),
+                                     (built["select"], built["scanned"], built["kept_docs"]), (mode, limit, name))
+                    self.assertEqual(t.reasons, {reason: n for reason, n in built["skipped"].items()
+                                                 if n and reason in ("score_below_min", "keyword_min_hits")},
+                                     (mode, limit, name))
+            self.assertEqual(sources["wiki"]["skipped"]["keyword_min_hits"], 20)
+            self.assertEqual(sources["web"]["skipped"], {"score_below_min": 12, "keyword_min_hits": 9})
 
 
 if __name__ == "__main__":
