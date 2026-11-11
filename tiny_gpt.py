@@ -3924,8 +3924,9 @@ def cmd_export(args):
               "exported": now_iso()}
     dataset = obj.get("dataset")
     if isinstance(dataset, dict) and dataset.get("path"):
-        # the folder's name and the fingerprint find the dataset again (resolve_dataset); no folder of this machine
-        config["dataset"] = {"path": os.path.basename(os.path.normpath(dataset["path"])),
+        # the folder's name and the fingerprint find the dataset again (resolve_dataset); no folder of this machine.
+        # The name by resolve_dataset's rule: the path may have been stored on the other kind of system
+        config["dataset"] = {"path": re.split(r"[\\/]", str(dataset["path"]).rstrip("\\/"))[-1],
                              "fingerprint": dataset.get("fingerprint")}
     if obj.get("train_config"):
         config["train_config"] = obj["train_config"]

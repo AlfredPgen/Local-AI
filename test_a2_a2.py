@@ -782,6 +782,27 @@ class Audit2TinyGptB(unittest.TestCase):
             tiny_gpt.resolve_dataset(old)
         self.assertIn("records no dataset", str(caught.exception))
 
+    def test_export_records_only_the_name_of_a_dataset_stored_on_another_system(self):
+        """F284: a checkpoint may carry a dataset path written on the other kind of system (trained on Windows,
+        exported on the Mac, or the reverse). The export still records the folder's name alone, by the rule of
+        resolve_dataset, never the whole foreign path with its user name."""
+        import posixpath
+        fingerprint = "f" * 64
+        for case, stored in (("windows", "C:\\Users\\someone\\project\\datasets\\bio_all"),
+                             ("windows_sep", "C:\\Users\\someone\\project\\datasets\\bio_all\\"),
+                             ("posix", "/Users/someone/project/datasets/bio_all/"),
+                             ("mixed", "C:\\Users\\someone/project/datasets\\bio_all")):
+            runs = os.path.join(self.tmp, f"export_foreign_{case}")
+            self._toy_checkpoint(runs, dataset={"path": stored, "fingerprint": fingerprint})
+            args = self._args(runs, "--export", os.path.join(runs, "exp"))
+            # os.path.basename as it is on macOS and Linux, where a backslash is no separator
+            with unittest.mock.patch.object(tiny_gpt.os.path, "basename", posixpath.basename):
+                self._quiet(tiny_gpt.cmd_export, args)
+            with open(os.path.join(runs, "exp", "config.json"), encoding="utf-8") as handle:
+                config = json.load(handle)
+            self.assertEqual(config["dataset"], {"path": "bio_all", "fingerprint": fingerprint}, case)
+            self.assertNotIn("someone", json.dumps(config["dataset"]), case)
+
     def test_export_names_the_attention_the_model_has(self):
         """F282: config.json of an export says 'grouped-query attention' with the head counts only when the
         key/value heads are shared; a model with as many key/value heads as query heads is 'multi-head attention'."""
