@@ -3953,6 +3953,8 @@ def cmd_benchmark(args):
     model, tok, cfg, obj = load_for_inference(path, device, args.trust_checkpoint)
     model.set_attention_impl(choose_attention(device, cfg, amp_dtype, args.attn)[0])
     probes = read_probes(probes_file)
+    if not probes:
+        raise SystemExit(f"{probes_file}: no probes found")
     acc, results = score_probes(model, tok, probes, device, amp_dtype)
     k, n = sum(r["correct"] for r in results), len(results)
     low, high = wilson_interval(k, n)

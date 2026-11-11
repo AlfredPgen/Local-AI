@@ -766,3 +766,16 @@ class Audit2TinyGptB(unittest.TestCase):
             self.assertIn(want, config["architecture"])
             self.assertEqual("grouped-query" in config["architecture"], kv < heads)
             self.assertEqual((config["model_config"]["n_heads"], config["model_config"]["n_kv_heads"]), (heads, kv))
+
+    def test_benchmark_refuses_a_probe_file_without_probes(self):
+        """F280: --benchmark with a --probes file that holds no probe line (comments, blank lines) stops with a
+        message naming the file instead of a ZeroDivisionError; nothing is written."""
+        runs = os.path.join(self.tmp, "no_probes")
+        self._toy_checkpoint(runs)
+        probes = os.path.join(runs, "empty.tsv")
+        with open(probes, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write("# category\tdifficulty\tprompt\tanswer\tdistractors\n\n# nothing else\n")
+        with self.assertRaises(SystemExit) as caught, contextlib.redirect_stdout(io.StringIO()):
+            tiny_gpt.cmd_benchmark(self._args(runs, "--benchmark", "--probes", probes))
+        self.assertEqual(str(caught.exception), f"{probes}: no probes found")
+        self.assertEqual(sorted(os.listdir(runs)), ["A_best.pt", "empty.tsv"])
