@@ -560,6 +560,28 @@ class Audit2TinyGptC(unittest.TestCase):
                                                                     "plan: --kv-heads", "plan: --ffn-hidden"))])
         self.assertIn("model: d_model 64, 2 layers, 4 heads / 2 KV, ctx 64, vocabulary 700", self.header(out_best))
 
+    def test_init_from_a_training_state_counts_its_own_steps(self):
+        """F251 (with F222): after --init-from of a training state the budget line counts the steps and tokens of
+        the new run, not the checkpoint's, and a plan WARNING says so when its first step is already in the
+        decay of the continued schedule."""
+        out_best, out_state = self.init_runs()
+        head = self.header(out_state)
+        self.assertRegex("\n".join(head), r"(?m)^budget: 2 steps \(9-10\) x 512 tokens \(8 x 1 x 64\) = 1,024 tokens = "
+                                          r"[\d.]+ tokens/parameter, [\d.]+ epochs$")
+        self.assertIn("schedule: WSD: warmup 1-1 (linear), stable to 8 at", "\n".join(head))
+        warned = [line for line in head if line.startswith("plan: WARNING: ") and "decay" in line]
+        self.assertEqual(len(warned), 1, head)
+        self.assertIn("step 9", warned[0])
+        self.assertIn("--steps", warned[0])
+        self.assertRegex(out_state, r"(?m)^RUN \S+ completed at \S+ \| step 10/10 \| ")
+        # from a best file the schedule starts at step 0: the whole run, no range, no warning
+        head = self.header(out_best)
+        self.assertRegex("\n".join(head), r"(?m)^budget: 2 steps x 512 tokens \(8 x 1 x 64\) = 1,024 tokens = ")
+        self.assertFalse([line for line in head if line.startswith("plan: WARNING: ") and "decay" in line], head)
+        # a resumed run keeps the whole run's count
+        out_flags, _ = self.notes_runs()
+        self.assertRegex(out_flags, r"(?m)^budget: 8 steps x 512 tokens \(8 x 1 x 64\) = 4,096 tokens = ")
+
 
 if __name__ == "__main__":
     unittest.main()

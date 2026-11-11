@@ -4586,6 +4586,14 @@ def _train(args):
         resume_note = note + "; best/last validation reset because the validation set is new"
         if start_step >= total_steps:
             raise SystemExit(f"--init-from checkpoint is at step {start_step:,}; set --steps above that.")
+        if schedule.phase(start_step + 1) == "decay":
+            # the schedule of a training state is continued over the old and the new steps together, so its decay
+            # (a share of that total) can begin before the first step of this run
+            plan_lines.append(f"WARNING: this run starts at step {start_step + 1:,}, inside the decay of the "
+                              f"schedule it continues (steps {schedule.decay_start + 1:,}-{total_steps:,}): the "
+                              f"learning rate begins at {schedule.lr_at(start_step + 1):.2e}, below the peak "
+                              f"{float(settings['lr']):.2e}, and only falls; pass --steps (the total, counted from "
+                              "step 0) to place the decay")
 
     # The EMA of the weights (fp32 on the CPU, never trained, never in the optimizer): the saved average when the
     # training checkpoint has one for exactly these tensors, else a fresh one starting from the current weights (a
@@ -4648,8 +4656,13 @@ def _train(args):
     print(f"parameters: {n_total:,} total, {n_nonembed:,} non-embedding"
           + (f", {n_active:,} active per token" if moe else ""))
     log_only("train: " + json.dumps({k: v for k, v in settings.items()}))
-    train_tokens_total = total_steps * settings["tokens_per_step"]
-    print(f"budget: {total_steps:,} steps x {settings['tokens_per_step']:,} tokens ({micro} x {accum} x {cfg.ctx}) "
+    # a resumed run: the whole run. After --init-from of a training state: the steps of this run alone (the
+    # schedule goes on at the checkpoint's step, whose tokens were another run's)
+    budget_steps = total_steps if resumed else max(total_steps - start_step, 0)
+    train_tokens_total = budget_steps * settings["tokens_per_step"]
+    print(f"budget: {budget_steps:,} steps"
+          + (f" ({start_step + 1:,}-{total_steps:,})" if budget_steps != total_steps else "")
+          + f" x {settings['tokens_per_step']:,} tokens ({micro} x {accum} x {cfg.ctx}) "
           f"= {train_tokens_total:,} tokens = {train_tokens_total / n_total:,.1f} tokens/parameter, "
           f"{train_tokens_total / max(unique, 1):,.2f} epochs")
     print(f"schedule: {schedule.describe()}")
