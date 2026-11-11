@@ -395,6 +395,7 @@ def train(args):
             "examples": len(rows), "epochs": args.epochs, "lr": args.lr, "template": TEMPLATE,
             **({"beta": args.beta} if args.mode == "dpo" else {})}
     history, step, t0 = [], 0, time.time()
+    epoch_files = {partial_path}  # plus the other names atomic_save used while <name>_partial.pt was locked
     val_loss, val_info = evaluate_items(val_items)
     print(f"epoch 0 | held-out loss {val_loss:.4f}" + "".join(f" | {k} {v:.3f}" for k, v in val_info.items()))
     t_train = last_beat = time.time()  # the rate excludes the initial evaluation
@@ -436,16 +437,18 @@ def train(args):
               + "".join(f" | {k} {v:.3f}" for k, v in val_info.items()) + f" | {time.time() - t0:,.0f} s")
         if epoch < args.epochs:
             kept = save(model, tok, cfg, base_obj, partial_path, {**info, "epochs_done": epoch}, history)
+            epoch_files.add(kept)
             print(f"saved {kept} (epoch {epoch} of {args.epochs}; a rerun starts again from the base)")
     prompt = val_rows[0]["prompt"]
     answer = answer_question(model, tok, prompt, device, amp_dtype, args.max_new_tokens)
     print(f"held-out question: {prompt}\nanswer: {answer}")
     saved = save(model, tok, cfg, base_obj, out_path, info, history)
     print(f"saved {saved}")
-    try:
-        os.remove(partial_path)
-    except OSError:
-        pass
+    for path in sorted(epoch_files - {saved}):
+        try:
+            os.remove(path)
+        except OSError:
+            pass
     tiny_gpt.record_experiment(args.out_dir, {
         "event": f"fine-tune ({args.mode})", "name": args.name, "status": "completed", "checkpoint": saved,
         "notes": f"base {os.path.basename(args.base)}; {len(rows)} examples; held-out loss {val_loss:.4f}"

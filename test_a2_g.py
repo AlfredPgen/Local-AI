@@ -384,6 +384,26 @@ class Audit2FinetuneTools(unittest.TestCase):
                 self.assertEqual(f.read(), b"not a checkpoint" * 100)
         self.assertEqual({safe for name, safe in loads if name == "G_partial.pt"}, {True})
 
+    def test_finetune_removes_epoch_files_saved_under_another_name(self):
+        """F163: while <name>_partial.pt is locked by another program, atomic_save writes each epoch file under a
+        time-stamped name; a finished run removes those files too."""
+        folder = os.path.join(self.tmp, "locked_partial")
+        os.makedirs(folder)
+        base = self.finetune_base("ft_base_locked.pt")
+        real, fallbacks = tiny_gpt.atomic_save, []
+
+        def locked(obj, path):  # what atomic_save does after its retries on a locked target
+            if path.endswith("_partial.pt"):
+                path = f"{os.path.splitext(path)[0]}.{len(fallbacks) + 1:06d}.pt"
+                fallbacks.append(path)
+            return real(obj, path)
+        with unittest.mock.patch.object(tiny_gpt, "atomic_save", locked):
+            saved, out = self.finetune(folder, "sft", base, "L", epochs=3)
+        self.assertEqual([os.path.basename(p) for p in fallbacks], ["L_partial.000001.pt", "L_partial.000002.pt"])
+        self.assertIn("L_partial.000002.pt (epoch 2 of 3", out)
+        self.assertEqual(sorted(f for f in os.listdir(folder) if ".pt" in f), ["L.pt"])
+        self.assertEqual(saved, os.path.join(folder, "L.pt"))
+
     def test_finetune_help_is_not_written_to_the_log(self):
         """F323 (finetune half): --help prints the usage text and neither creates nor appends to the log; an
         argument error is still logged."""
