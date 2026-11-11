@@ -809,6 +809,35 @@ class Audit2TinyGptC(unittest.TestCase):
                          [("training run", ""), ("training run", "r0"), ("training run", "r1")])
         self.assertNotIn(b"STRAY", now)
 
+    @unittest.skipUnless(shutil.which("git"), "needs git")
+    def test_published_experiments_table_keeps_its_byte_order_mark(self):
+        """F350: publishing rewrites results/experiments.csv in the repository; the rewritten file starts with
+        the UTF-8 byte-order mark record_experiment creates it with (Excel reads the pound sign by it), once."""
+        import csv
+        import subprocess
+        repo = os.path.join(self.tmp, "repo350")
+        os.makedirs(repo)
+        for cmd in (["init", "-q"], ["config", "user.name", "test"], ["config", "user.email", "test@example.invalid"],
+                    ["config", "commit.gpgsign", "false"], ["config", "core.autocrlf", "false"]):
+            done = subprocess.run(["git", "-C", repo] + cmd, capture_output=True, text=True)
+            self.assertEqual(done.returncode, 0, done.stderr)
+        path = os.path.join(repo, "results", "experiments.csv")
+        with unittest.mock.patch.object(tiny_gpt, "HERE", repo):  # a run of this folder: its table is published
+            for k in range(2):
+                with redirect_stdout(io.StringIO()) as buffer:
+                    tiny_gpt.record_experiment(repo, {"event": "training run", "name": f"r{k}", "notes": "£1"})
+                self.assertIn("experiments.csv on GitHub (results/experiments.csv): ", buffer.getvalue())
+                with open(path, "rb") as handle:
+                    data = handle.read()
+                self.assertTrue(data.startswith(b"\xef\xbb\xbf"), data[:20])
+                self.assertEqual(data.count(b"\xef\xbb\xbf"), 1)
+        with open(path, encoding="utf-8-sig", newline="") as handle:
+            rows = list(csv.DictReader(handle))
+        self.assertEqual([(row["name"], row["notes"]) for row in rows], [("r0", "£1"), ("r1", "£1")])
+        shown = subprocess.run(["git", "-C", repo, "show", "HEAD:results/experiments.csv"], capture_output=True)
+        self.assertEqual(shown.returncode, 0, shown.stderr)
+        self.assertEqual(shown.stdout, data, "the committed table is the file")
+
 
 if __name__ == "__main__":
     unittest.main()

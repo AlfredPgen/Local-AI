@@ -5459,7 +5459,9 @@ def publish_experiments(path, row):
     with open(path, encoding="utf-8-sig") as handle:
         text = _hide_home(handle.read())  # rows are written with ~ already; older rows are covered too
     what = " ".join(str(row.get(k)) for k in ("event", "name", "status") if row.get(k))
-    status = publish_to_github("results/experiments.csv", f"Experiments: {what}", content=text, wait=False)
+    # with the byte-order mark the table was created with (read above without it): Excel takes the file for UTF-8
+    status = publish_to_github("results/experiments.csv", f"Experiments: {what}", content="\ufeff" + text,
+                               wait=False)
     print(f"experiments.csv on GitHub (results/experiments.csv): {status}")
 
 
