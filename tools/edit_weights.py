@@ -62,6 +62,15 @@ def prompts_from_validation(dataset, tok, n, prompt_tokens, split, seed):
     return out
 
 
+def source_counts(docs):
+    """'md 3, books 1': how many of these validation documents each source gave. A source
+    with few documents of the wanted index (even or odd) gives fewer than asked for, or none."""
+    counts = {}
+    for source, _, _ in docs:
+        counts[source] = counts.get(source, 0) + 1
+    return ", ".join(f"{source} {n}" for source, n in counts.items())
+
+
 @torch.no_grad()
 def generate_batch(model, prompts, new_tokens, device, amp, seed, temperature=0.8, top_k=50, top_p=0.95):
     """Continuations of equal-length prompts; (B, P + new) tokens on CPU. KV-cached:
@@ -305,7 +314,7 @@ def main(argv=None):
     start = len(find[0])
     bpb_docs = cm.validation_documents(dataset, args.bpb_docs, 6000, parity=0)
     print(f"{len(find)} prompts to find candidates, {len(dev)} to choose; {args.new_tokens} new tokens each; "
-          f"safety check on {len(bpb_docs)} validation documents", flush=True)
+          f"safety check on {len(bpb_docs)} validation documents ({source_counts(bpb_docs)})", flush=True)
 
     seqs = generate_all(model, find, args.new_tokens, device, amp, args.batch, args.seed)
     base_find = loop_stats(seqs, start, tok.eos_id)

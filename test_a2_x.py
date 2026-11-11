@@ -390,11 +390,12 @@ class Audit2Followers(unittest.TestCase):
         class Reached(Exception):
             pass
 
-        def generate_all(*a, **k):
+        def stop(*a, **k):
             raise Reached
 
-        def asked(main, argv):
-            """The validation_documents calls of a tool's main up to its first generation."""
+        def asked(main, argv, generate=stop):
+            """The validation_documents calls of a tool's main and what it printed, up to its first generation
+            (with another `generate`: up to the first document it scores)."""
             del calls[:]
             with unittest.mock.patch.object(data_prep, "open_token_files",
                                             lambda folder, verify=True: (manifest, arrays)), \
@@ -403,17 +404,19 @@ class Audit2Followers(unittest.TestCase):
                     unittest.mock.patch.object(ew.tg, "load_for_inference",
                                                return_value=(model, T.CharTok(), model.cfg, {"step": 7})), \
                     unittest.mock.patch.object(ew.tg, "resolve_dataset", return_value="dataset"), \
-                    unittest.mock.patch.object(ew, "generate_all", generate_all), \
-                    redirect_stdout(io.StringIO()), self.assertRaises(Reached):
+                    unittest.mock.patch.object(ew, "generate_all", generate), \
+                    unittest.mock.patch.object(compare_models, "document_nll", stop), \
+                    redirect_stdout(io.StringIO()) as out, self.assertRaises(Reached):
                 main(argv)
-            return list(calls)
+            return list(calls), out.getvalue()
 
         sizes_of = ["--device", "cpu", "--prompt-tokens", "8", "--new-tokens", "4"]
-        edit = asked(ew.main, [os.path.join(self.tmp, "x8_source.pt"), os.path.join(self.tmp, "x8_edited.pt"),
-                               "--prompts", "30", "--dev-prompts", "10"] + sizes_of)
-        test = asked(compare_edit.main, [os.path.join(self.tmp, "x8_source.pt"),
-                                         os.path.join(self.tmp, "x8_edited.pt"), "--prompts", "20", "--docs", "5"]
-                     + sizes_of)
+        edit, edit_said = asked(ew.main, [os.path.join(self.tmp, "x8_source.pt"),
+                                          os.path.join(self.tmp, "x8_edited.pt"), "--prompts", "30",
+                                          "--dev-prompts", "10"] + sizes_of)
+        comparison = [os.path.join(self.tmp, "x8_source.pt"), os.path.join(self.tmp, "x8_edited.pt"),
+                      "--prompts", "20", "--docs", "5"] + sizes_of
+        test, _ = asked(compare_edit.main, comparison)
         used, held_out = {d for c in edit for d in c[3]}, {d for c in test for d in c[3]}
         self.assertFalse(used & held_out, "a held-out document was used by the edit")
         self.assertEqual([c[:3] for c in edit], [(40, 4000, 0), (3, 6000, 0)])
@@ -423,6 +426,10 @@ class Audit2Followers(unittest.TestCase):
         # the safety check gets --bpb-docs documents per source (fewer from a source that has fewer even ones)
         per_source = {s: sum(1 for name, _ in edit[1][3] if name == s) for s in sizes}
         self.assertEqual(per_source, {"big": 3, "mid": 3, "one": 1, "two": 1})
+        # both tools print these counts: a source with few documents of one kind gives fewer than asked for, or none
+        self.assertIn("safety check on 8 validation documents (big 3, mid 3, one 1, two 1)\n", edit_said)
+        self.assertIn("original: bits per byte on 9 validation documents (big 5, mid 3, two 1)\n",
+                      asked(compare_edit.main, comparison, generate=lambda *a, **k: [])[1])
         for module in (ew, compare_edit):
             self.assertIn("index within their source", " ".join(module.__doc__.split()))
             self.assertNotIn("numbered", module.__doc__)

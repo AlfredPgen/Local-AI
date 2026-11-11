@@ -85,7 +85,7 @@ def main(argv=None):
             docs = cm.validation_documents(dataset, args.docs, 20_000, parity=1)
         print(f"{label}: {path} ({tg.device_label(device)}, {amp_name}) - generating", flush=True)
         seqs[label] = ew.generate_all(model, prompts, args.new_tokens, device, amp, args.batch, args.seed)
-        print(f"{label}: bits per byte on {len(docs)} validation documents", flush=True)
+        print(f"{label}: bits per byte on {len(docs)} validation documents ({ew.source_counts(docs)})", flush=True)
         nll, nbytes = [], []
         for _, _, text in docs:
             n, b = cm.document_nll(model, tok, text, device, amp)
