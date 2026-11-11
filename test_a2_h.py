@@ -192,10 +192,16 @@ class Audit2PipelineTools(unittest.TestCase):
         self.assertIn("cannot be read", out)
         self.assertIn("training a 4,096-piece SentencePiece tokenizer on the kept sample", out)
         self.assertNotIn("a rebuild from scratch", out)
-        # only a dataset folder falls back: a mistyped path still stops the estimate, as it always did
+        # only a built dataset falls back: a mistyped path still stops the estimate, as it always did
         with self.assertRaises(SystemExit) as stop:
             self.run_estimate(["--tokenizer", os.path.join(self.tmp, "nosuch_folder")] + argv)
         self.assertIn("Could not read tokenizer from", str(stop.exception))
+        # and so does a folder that holds no dataset (`datasets` typed for `datasets/bio_all`)
+        no_dataset = os.path.join(self.tmp, "f191_no_dataset")
+        os.makedirs(no_dataset, exist_ok=True)
+        with self.assertRaises(SystemExit) as stop:
+            self.run_estimate(["--tokenizer", no_dataset] + argv)
+        self.assertIn("is not a prepared dataset (manifest.json missing)", str(stop.exception))
 
     def test_estimate_honours_sample_fraction_and_tokenizer_from(self):
         """F148: data_prep's --sample-fraction scales the web sources before the --*-max-docs cap, and

@@ -400,9 +400,11 @@ def main(argv=None):
     if opts.tokenizer:
         try:
             tok = dp.load_tokenizer_from_any(opts.tokenizer)
-        except (SystemExit, Exception) as exc:  # noqa: BLE001 - a dataset folder whose tokenizer file is gone
-            if not os.path.isdir(opts.tokenizer):
-                raise  # a mistyped path or a file that holds no tokenizer: the estimate would describe another one
+        except (SystemExit, Exception) as exc:  # noqa: BLE001 - a built dataset whose tokenizer file is gone
+            if not os.path.isfile(os.path.join(opts.tokenizer, "manifest.json")):
+                # a mistyped path, a folder that is no dataset or a file that holds no tokenizer: the estimate
+                # would describe another tokenizer than the one asked for
+                raise
             print(f"--tokenizer {opts.tokenizer} cannot be read ({type(exc).__name__}: {exc}); a tokenizer is trained "
                   "on the kept sample instead", flush=True)
     elif args.tokenizer_from:  # data_prep's own option: the build would reuse this tokenizer
