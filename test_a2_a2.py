@@ -5,6 +5,7 @@ commands, signals). Target class in test_tiny_gpt.py: TestFixes.
 """
 import contextlib
 import csv
+import dataclasses
 import io
 import json
 import os
@@ -560,3 +561,116 @@ class Audit2TinyGptB(unittest.TestCase):
             with self.assertRaises(SystemExit) as caught:
                 tiny_gpt.read_safetensors(path)
         self.assertIn("corrupt entry x", str(caught.exception))
+
+    # ---------------- export, benchmark and generate on a toy checkpoint ----------------
+    _tok = None
+
+    @classmethod
+    def _toy_tokenizer(cls):
+        """A small SentencePiece tokenizer in data_prep's 'lines' convention (trained once, in memory)."""
+        if cls._tok is None:
+            import sentencepiece as spm
+            words = ("genetic drift allele frequency population selection mutation gene protein cell the of in "
+                     "is a").split()
+            lines = [" ".join(words[(i * 7 + j * 3) % len(words)] for j in range(8)) for i in range(200)]
+            model = io.BytesIO()
+            spm.SentencePieceTrainer.train(
+                sentence_iterator=iter(lines), model_writer=model, model_type="bpe", vocab_size=300,
+                byte_fallback=True, unk_id=0, bos_id=1, eos_id=2, pad_id=-1, user_defined_symbols=["\n", "\t"],
+                remove_extra_whitespaces=False, allow_whitespace_only_pieces=True,
+                normalization_rule_name="identity", hard_vocab_limit=False, num_threads=1, minloglevel=2)
+            cls._tok = tiny_gpt.data_prep.Tokenizer(model.getvalue())
+        return cls._tok
+
+    def _toy_checkpoint(self, folder, name="A", heads=4, kv_heads=2, **extra):
+        """<folder>/<name>_best.pt: an untrained toy model in the layout of the best file _train writes."""
+        tok = self._toy_tokenizer()
+        torch.manual_seed(1)
+        cfg = tiny_gpt.ModelConfig(vocab_size=tok.vocab_size, ctx=16, d_model=32, n_layers=2, n_heads=heads,
+                                   n_kv_heads=kv_heads)
+        obj = {"format": tiny_gpt.CHECKPOINT_FORMAT, "format_version": tiny_gpt.FORMAT_VERSION,
+               "checkpoint_type": "inference", "model_config": dataclasses.asdict(cfg),
+               "model": tiny_gpt.TinyGPT(cfg).state_dict(), "tokenizer": {"proto": tok.proto, **tok.meta()},
+               "step": 7, "metrics": {"best_val": 5.5, "best_step": 6}, "weights": "raw", **extra}
+        os.makedirs(folder, exist_ok=True)
+        path = os.path.join(folder, f"{name}_best.pt")
+        torch.save(obj, path)
+        return path
+
+    @staticmethod
+    def _args(folder, *argv):
+        return tiny_gpt.parse_args(["--name", "A", "--out-dir", folder, "--device", "cpu", *argv])
+
+    @staticmethod
+    def _quiet(command, args):
+        """What `command(args)` prints."""
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            command(args)
+        return out.getvalue()
+
+    def test_commands_resolve_the_checkpoint_in_one_place(self):
+        """F283 (with F279, F219, F285): --export, --benchmark and --generate take their checkpoint from
+        resolve_checkpoint: a normalised path (an export folder typed with a trailing separator is the folder),
+        and one 'No checkpoint' message that names the other runs of the folder without '--resume' (which would
+        start training) and without the hint to a legacy file."""
+        runs = os.path.join(self.tmp, "resolve")
+        best = self._toy_checkpoint(runs)
+        self.assertEqual(tiny_gpt.resolve_checkpoint(self._args(runs), "pass --checkpoint"), os.path.normpath(best))
+        sloppy = best.replace(os.sep, "/").replace("/resolve/", "/resolve/./")
+        self.assertEqual(tiny_gpt.resolve_checkpoint(self._args(runs, "--checkpoint", sloppy), "x"),
+                         os.path.normpath(best))
+        try:
+            relative = os.path.relpath(best)
+        except ValueError:  # Windows: the temporary folder is on another drive
+            relative = None
+        if relative:
+            self.assertFalse(os.path.isabs(relative))
+            self.assertEqual(tiny_gpt.resolve_checkpoint(self._args(runs, "--checkpoint", relative), "x"), relative,
+                             "a relative path stays relative")
+        os.replace(best, os.path.join(runs, "A.pt"))  # no best file: the training checkpoint
+        self.assertEqual(tiny_gpt.resolve_checkpoint(self._args(runs), "x"), os.path.join(runs, "A.pt"))
+        os.replace(os.path.join(runs, "A.pt"), best)
+        # nothing to work on: the same message from the three commands
+        empty = os.path.join(self.tmp, "resolve_empty")
+        os.makedirs(empty)
+        for name in ("oldrun.pt", "tiny_gpt_bpe_best.pt"):
+            open(os.path.join(empty, name), "wb").close()
+        missing = os.path.join(empty, "A.pt")
+        for command, argv, hint in (
+                (tiny_gpt.cmd_export, ["--export", os.path.join(empty, "out")], "pass --checkpoint"),
+                (tiny_gpt.cmd_benchmark, ["--benchmark"], "pass --checkpoint"),
+                (tiny_gpt.cmd_generate, ["--generate", "x"], "train first or pass --checkpoint")):
+            with self.assertRaises(SystemExit) as caught:
+                command(self._args(empty, *argv))
+            self.assertEqual(str(caught.exception),
+                             f"No checkpoint {missing}; {hint}. Training checkpoints in this folder: oldrun. "
+                             "Pass the right one with --name, e.g. --name oldrun", argv)
+        with self.assertRaises(SystemExit) as caught:
+            tiny_gpt.cmd_generate(self._args(runs, "--generate", "x", "--checkpoint", os.path.join(runs, "no.pt")))
+        self.assertEqual(str(caught.exception),
+                         f"No checkpoint {os.path.join(runs, 'no.pt')}; train first or pass --checkpoint.")
+        # a failed --resume still names --resume
+        self.assertTrue(tiny_gpt._resume_hint(self._args(empty)).endswith("e.g. --name oldrun --resume"))
+        # an export folder typed with a trailing separator (PowerShell tab completion)
+        export = os.path.join(runs, "exp")
+        self._quiet(tiny_gpt.cmd_export, self._args(runs, "--export", export))
+        probes = os.path.join(runs, "probes.tsv")
+        with open(probes, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write("# toy probes\n"
+                         "drift\teasy\tgenetic drift is a\tprotein\tcell|gene\n"
+                         "drift\teasy\tthe allele frequency of\tselection\tmutation|population\n")
+        out = self._quiet(tiny_gpt.cmd_benchmark, self._args(runs, "--benchmark", "--probes", probes, "--checkpoint",
+                                                             export + os.sep))
+        self.assertIn(f" on {export} (step 7, ", out)
+        beside = [name for name in os.listdir(runs) if name.startswith("exp_benchmark_step7_")]
+        self.assertEqual(len(beside), 1, os.listdir(runs))
+        self.assertEqual(sorted(os.listdir(export)), ["config.json", "model.safetensors", "tokenizer.model"])
+        with open(os.path.join(runs, "results", "experiments.csv"), encoding="utf-8-sig", newline="") as handle:
+            rows = list(csv.DictReader(handle))
+        self.assertEqual([(r["event"], r["name"]) for r in rows], [("benchmark", "exp")])
+        self.assertEqual(int(rows[0]["params"]), tiny_gpt.count_params(tiny_gpt.ModelConfig(
+            vocab_size=self._toy_tokenizer().vocab_size, ctx=16, d_model=32, n_layers=2, n_heads=4, n_kv_heads=2))[0])
+        out = self._quiet(tiny_gpt.cmd_generate, self._args(runs, "--generate", "genetic", "--length", "3",
+                                                            "--checkpoint", export + os.sep))
+        self.assertTrue(out.startswith(f"Checkpoint {export} (tinygpt, inference) | step 7 | "), out)

@@ -3874,12 +3874,20 @@ def _home_short(path):
     return path
 
 
+def resolve_checkpoint(args, hint):
+    """The checkpoint --export, --benchmark and --generate work on: --checkpoint, else this run's best file,
+    else its training checkpoint, as a normalised path (an export folder typed with a trailing separator is the
+    folder itself). When it does not exist: SystemExit with `hint` and the other runs of the folder."""
+    ckpt_path, best_path, _ = checkpoint_paths(args)
+    path = os.path.normpath(args.checkpoint or (best_path if os.path.exists(best_path) else ckpt_path))
+    if not os.path.exists(path):
+        raise SystemExit(f"No checkpoint {path}; {hint}.{_resume_hint(args, flag='')}")
+    return path
+
+
 def cmd_export(args):
     """Write <folder>/model.safetensors + config.json + tokenizer.model."""
-    ckpt_path, best_path, _ = checkpoint_paths(args)
-    path = args.checkpoint or (best_path if os.path.exists(best_path) else ckpt_path)
-    if not os.path.exists(path):
-        raise SystemExit(f"No checkpoint {path}; pass --checkpoint.{_resume_hint(args)}")
+    path = resolve_checkpoint(args, "pass --checkpoint")
     out = os.path.abspath(args.export)
     if os.path.exists(out) and os.listdir(out):
         raise SystemExit(f"{out} exists and is not empty; choose a new folder.")
@@ -3926,15 +3934,12 @@ def cmd_export(args):
 def cmd_benchmark(args):
     """Score the cloze fact benchmark on a checkpoint; print a per-category table
     and write every item's result to a CSV next to the checkpoint."""
-    ckpt_path, best_path, _ = checkpoint_paths(args)
-    path = args.checkpoint or (best_path if os.path.exists(best_path) else ckpt_path)
-    if not os.path.exists(path):
-        raise SystemExit(f"No checkpoint {path}; pass --checkpoint.{_resume_hint(args)}")
+    path = resolve_checkpoint(args, "pass --checkpoint")
     probes_file = args.probes or DEFAULT_PROBES
     if not os.path.isfile(probes_file):
         raise SystemExit(f"Probe file not found: {probes_file}")
     device = select_device(args.device)
-    amp_dtype, amp_name, _ = choose_precision(device, args.precision, training=False)
+    amp_dtype, _, _ = choose_precision(device, args.precision, training=False)
     model, tok, cfg, obj = load_for_inference(path, device, args.trust_checkpoint)
     model.set_attention_impl(choose_attention(device, cfg, amp_dtype, args.attn)[0])
     probes = read_probes(probes_file)
@@ -3967,21 +3972,16 @@ def cmd_benchmark(args):
                              f"{r['floor_correct']:.3f}"])
     print(f"Per-item results: {out}")
     record_experiment(os.path.dirname(os.path.abspath(path)), {
-        "event": "benchmark", "name": os.path.basename(path), "step": obj.get("step"), "params": cfg and
-        count_params(cfg)[0], "d_model": cfg.d_model, "layers": cfg.n_layers, "ctx": cfg.ctx, "vocab": cfg.vocab_size,
+        "event": "benchmark", "name": os.path.basename(path), "step": obj.get("step"),
+        "params": count_params(cfg)[0], "d_model": cfg.d_model, "layers": cfg.n_layers, "ctx": cfg.ctx,
+        "vocab": cfg.vocab_size,
         "benchmark_accuracy": f"{acc:.3f}", "benchmark_floor": f"{floor:.3f}", "benchmark_items": n,
         "checkpoint": path, "notes": f"95% interval {low:.3f}-{high:.3f}; chance {chance:.3f}; "
                                     f"{os.path.basename(probes_file)}; items in {os.path.basename(out)}"})
 
 
 def cmd_generate(args):
-    ckpt_path, best_path, _ = checkpoint_paths(args)
-    path = args.checkpoint or (best_path if os.path.exists(best_path) else ckpt_path)
-    if not os.path.exists(path):
-        hint = ""
-        if not args.checkpoint and os.path.exists(os.path.join(args.out_dir, "tiny_gpt_bpe_best.pt")):
-            hint = " Your legacy model is still available: --checkpoint tiny_gpt_bpe_best.pt"
-        raise SystemExit(f"No checkpoint {path}; train first or pass --checkpoint.{hint}")
+    path = resolve_checkpoint(args, "train first or pass --checkpoint")
     device = select_device(args.device)
     amp_dtype, amp_name, _ = choose_precision(device, args.precision, training=False)
     model, tok, cfg, obj = load_for_inference(path, device, args.trust_checkpoint)
@@ -4057,14 +4057,15 @@ def ensure_dataset(args):
     return None
 
 
-def _resume_hint(args):
-    """Name other training checkpoints in the folder (e.g. runs made before the rename to tinyGPT)."""
+def _resume_hint(args, flag=" --resume"):
+    """Name other training checkpoints in the folder (e.g. runs made before the rename to tinyGPT). `flag` ends
+    the example: " --resume" after a failed --resume, nothing for a command that only reads a checkpoint."""
     found = []
     for name in sorted(os.listdir(args.out_dir)):
         if name.endswith(".pt") and not name.endswith("_best.pt") and "_crash" not in name:
             found.append(name[:-3])
     return (" Training checkpoints in this folder: " + ", ".join(found) +
-            ". Pass the right one with --name, e.g. --name " + found[0] + " --resume") if found else ""
+            ". Pass the right one with --name, e.g. --name " + found[0] + flag) if found else ""
 
 
 def newer_fallbacks(path):
