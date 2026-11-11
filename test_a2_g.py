@@ -329,6 +329,37 @@ class Audit2FinetuneTools(unittest.TestCase):
         self.assertEqual(saved, os.path.join(folder, "T.pt"))
         self.assertFalse(os.path.exists(kept))
 
+    def test_finetune_refuses_its_own_epoch_file_as_the_base(self):
+        """F163: --base <out-dir>/<name>_partial.pt with the same --name would write the epoch saves over the base
+        and delete it after the final save. The run stops, also with --overwrite, and the file is kept; under
+        another --name the epoch file is a base like any other."""
+        folder = os.path.join(self.tmp, "own_partial")
+        os.makedirs(folder)
+        tok = self.sentencepiece()
+        partial = self.save_checkpoint(toy_model(8, ctx=64, vocab=tok.vocab_size),
+                                       os.path.join("own_partial", "C_partial.pt"),
+                                       tokenizer={"proto": tok.proto, **tok.meta()},
+                                       finetune={"method": "sft", "base": "B.pt", "epochs": 3, "epochs_done": 1,
+                                                 "history": []})
+        with open(partial, "rb") as f:
+            before = f.read()
+        for extra in ((), ("--overwrite",)):
+            with self.assertRaises(SystemExit) as caught:
+                self.finetune(folder, "sft", partial, "C", extra=extra)
+            message = str(caught.exception.code)
+            self.assertIn("C_partial.pt", message)
+            self.assertIn("--name", message)
+            self.assertFalse(os.path.exists(os.path.join(folder, "C.pt")), "stopped before training")
+            with open(partial, "rb") as f:
+                self.assertEqual(f.read(), before, f"the base was replaced {extra}")
+        saved, _ = self.finetune(folder, "sft", partial, "C2")
+        self.assertEqual(saved, os.path.join(folder, "C2.pt"))
+        with open(partial, "rb") as f:
+            self.assertEqual(f.read(), before)
+        record = torch.load(saved, map_location="cpu", weights_only=True)["finetune"]
+        self.assertEqual(record["base"], os.path.abspath(partial))
+        self.assertEqual(record["previous"]["epochs_done"], 1)
+
     def test_finetune_help_is_not_written_to_the_log(self):
         """F323 (finetune half): --help prints the usage text and neither creates nor appends to the log; an
         argument error is still logged."""

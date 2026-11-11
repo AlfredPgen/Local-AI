@@ -224,6 +224,10 @@ def train(args):
     # without --overwrite only an interrupted fine-tune's own file (it records epochs_done), not a checkpoint that
     # was given this name
     partial_path = os.path.join(args.out_dir, args.name + "_partial.pt")
+    if os.path.normcase(os.path.abspath(args.base)) == os.path.normcase(os.path.abspath(partial_path)):
+        raise SystemExit(f"--base {args.base} is the epoch file of --name {args.name} (this run would replace and "
+                         "then delete its own base); choose another --name, or copy the file and start from the "
+                         "copy.")
     if os.path.exists(partial_path) and not args.overwrite:
         try:
             old = tiny_gpt.safe_load(partial_path, args.trust_checkpoint, mmap=True)
