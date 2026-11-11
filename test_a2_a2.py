@@ -886,8 +886,8 @@ class Audit2TinyGptB(unittest.TestCase):
         shortens the home folder only at the start of a path and only as a whole folder, so a folder beside the
         home folder whose name starts the same way, the home folder itself and a home string in the middle of a
         path read as before. On the paths a checkpoint usually has the two agree."""
-        fake = os.path.join(os.path.splitdrive(self.tmp)[0] + os.sep, "Users", "al")
-        differ = [fake + "fred" + os.sep + os.path.join("runs", "a.pt"),  # a folder beside it, same first letters
+        fake = os.path.join(os.path.splitdrive(self.tmp)[0] + os.sep, "Users", "lab")
+        differ = [fake + "2" + os.sep + os.path.join("runs", "a.pt"),  # a folder beside it, same first letters
                   fake,  # the home folder itself
                   "copy" + os.sep + fake + os.sep + "a.pt"]  # the home string in the middle
         with unittest.mock.patch.object(tiny_gpt.os.path, "expanduser", return_value=fake):
