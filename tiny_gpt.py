@@ -4121,7 +4121,10 @@ def cmd_train(args):
     for name in PAUSE_SIGNALS:  # kill, a closed terminal and logout pause the run (KeyboardInterrupt) like Ctrl+C
         if hasattr(signal, name):
             try:
-                signal.signal(getattr(signal, name), signal.default_int_handler)
+                # a signal the run was started to ignore stays ignored: nohup leaves SIGHUP so, to keep the run
+                # going when its terminal closes
+                if signal.getsignal(getattr(signal, name)) is not signal.SIG_IGN:
+                    signal.signal(getattr(signal, name), signal.default_int_handler)
             except (ValueError, OSError):  # not the main thread, or the platform refuses the signal
                 pass
     lock = acquire_run_lock(args)

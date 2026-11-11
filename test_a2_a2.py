@@ -908,6 +908,48 @@ class Audit2TinyGptB(unittest.TestCase):
         self.assertEqual(proc.stdout.splitlines(), want, proc.stderr[-2000:])
         self.assertEqual(proc.returncode, 0, proc.stderr[-2000:])
 
+    def test_an_ignored_pause_signal_stays_ignored(self):
+        """F296: a signal the run was started to ignore (nohup leaves SIGHUP ignored so that the run survives a
+        closed terminal) is not given the Ctrl+C handler: it stays ignored inside cmd_train, also across an
+        update held by DeferInterrupt, and the other pause signal still pauses. In a child process (it changes
+        the handlers of its process)."""
+        child = textwrap.dedent("""
+            import os, signal, sys
+            sys.path.insert(0, sys.argv[1])
+            import tiny_gpt
+            names = [name for name in tiny_gpt.PAUSE_SIGNALS if hasattr(signal, name)]
+            ignored = getattr(signal, names[-1])  # SIGHUP where it exists (nohup), SIGTERM on Windows
+            signal.signal(ignored, signal.SIG_IGN)
+
+            def fake_train(args):
+                print("handler", signal.getsignal(ignored) is signal.SIG_IGN, flush=True)
+                held = tiny_gpt.DeferInterrupt()
+                with held:
+                    signal.raise_signal(ignored)
+                print("held", held.hit, flush=True)
+                held.deliver()
+                signal.raise_signal(ignored)
+                print("ignored", signal.getsignal(ignored) is signal.SIG_IGN, flush=True)
+                for name in names[:-1]:
+                    try:
+                        signal.raise_signal(getattr(signal, name))
+                    except KeyboardInterrupt:
+                        print(name, "pauses", flush=True)
+
+            tiny_gpt._train = fake_train
+            tiny_gpt.cmd_train(tiny_gpt.parse_args(["--name", "sig", "--out-dir", sys.argv[2]]))
+            print("locks left", [name for name in os.listdir(sys.argv[2]) if name.endswith(".lock")])
+        """)
+        folder = os.path.join(self.tmp, "signal_ignored")
+        os.makedirs(folder)
+        proc = subprocess.run([sys.executable, "-c", child, HERE, folder], cwd=folder, capture_output=True,
+                              text=True, encoding="utf-8", errors="replace", timeout=600,
+                              env=dict(os.environ, PYTHONIOENCODING="utf-8"))
+        names = [name for name in tiny_gpt.PAUSE_SIGNALS if hasattr(signal, name)]
+        want = ["handler True", "held False", "ignored True"] + [f"{name} pauses" for name in names[:-1]]
+        self.assertEqual(proc.stdout.splitlines(), want + ["locks left []"], proc.stderr[-2000:])
+        self.assertEqual(proc.returncode, 0, proc.stderr[-2000:])
+
     def test_compatibility_options_of_the_original_script_are_gone(self):
         """F334, F288, F273: the six options kept for the original script (--data, --wiki-dir, --wiki-articles,
         --include-keywords, --tokenizer-vocab-size, --suppress) and the dataset auto-build behind them are
