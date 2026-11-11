@@ -680,6 +680,40 @@ class Audit2Downloaders(unittest.TestCase):
         self.assertEqual(longest_sleep(429, "999999"), 600)
         self.assertEqual(said[-1], "  the server asks to slow down (429); this request waits 600 s\n")
 
+    def test_f141_pmc_request_waits_ten_minutes_for_the_server_in_all(self):
+        """F141: a server that answers every try with 429/503 and a long Retry-After holds one request
+        for MAX_SERVER_PAUSE seconds in all (plus the backoff it always had), not for that long at every
+        try: the request waits in a worker thread, which Ctrl+C does not reach."""
+        import email.message
+        import urllib.error
+
+        def waits(code, retry_after):
+            """(the waits of over a second, the lines printed) of a request that fails at every try."""
+            def busy(request, timeout=None):
+                headers = email.message.Message()
+                headers["Retry-After"] = retry_after
+                raise urllib.error.HTTPError("https://example.org/x", code, "busy", headers, None)
+
+            with unittest.mock.patch.object(pmc.urllib.request, "urlopen", side_effect=busy), \
+                    unittest.mock.patch.object(pmc.time, "sleep") as sleep, redirect_stdout(io.StringIO()) as buf, \
+                    self.assertRaises(urllib.error.HTTPError):
+                pmc.http_get("https://example.org/x")
+            return [call.args[0] for call in sleep.call_args_list if call.args[0] > 1], buf.getvalue().splitlines()
+
+        backoff = 3 + 6 + 12 + 24 + 48 + 5  # the five waits between six tries, each with up to a second added
+        self.assertEqual(pmc.MAX_SERVER_PAUSE, 600)
+        for code in (429, 503):
+            slept, lines = waits(code, "900")
+            self.assertEqual(len(slept), 5)
+            self.assertEqual(slept[0], 600)
+            self.assertLess(sum(slept), 600 + backoff)
+            self.assertEqual(lines, [f"  the server asks to slow down ({code}); this request waits 600 s"])
+        slept, lines = waits(429, "250")  # 250 + 250 + the 100 that are left, then the backoff alone
+        self.assertEqual(slept[:3], [250, 250, 100])
+        self.assertLess(sum(slept), 600 + backoff)
+        self.assertEqual([line.rsplit("waits ", 1)[1] for line in lines], ["250 s", "250 s", "100 s"])
+        self.assertLess(sum(waits(429, "2")[0]), backoff)  # a short Retry-After: the backoff, as before
+
     KEYWORDS = "genetic*\nallele*\ndrift\nselection\n"
     MATCH = ("Genetic drift and allele frequencies", "Genetic drift changes allele frequencies; selection acts too.")
 
