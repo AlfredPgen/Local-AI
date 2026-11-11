@@ -588,8 +588,8 @@ def parse_args(argv=None):
         # the whole transcript is scanned (not only data_prep's first 100,000 characters), so the matches
         # per 1,000 words are counted over the same words they are divided by, for lectures of any length
         args.kw = data_prep.KeywordFilter(terms, [], args.keyword_min_hits, args.keyword_min_distinct, 3,
-                                          scan_chars=1 << 60)
-        args.kw_loose = data_prep.KeywordFilter(terms, [], 1, 1, 3)
+                                          scan_chars=1 << 60, prefilter=False)
+        args.kw_loose = data_prep.KeywordFilter(terms, [], 1, 1, 3, prefilter=False)
     return args
 
 

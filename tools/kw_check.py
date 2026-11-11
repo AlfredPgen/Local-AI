@@ -73,7 +73,7 @@ def main():
         import pyarrow.parquet as pq
         batch = next(pq.ParquetFile(files[0]).iter_batches(batch_size=n_docs, columns=["text"]))
         texts = batch.column(0).to_pylist()
-        kf = dp.KeywordFilter(good, [], 1, 1)
+        kf = dp.KeywordFilter(good, [], 1, 1, prefilter=False)
         df = collections.Counter()
         for text in texts:
             for term in kf.evaluate("", text)[3]:

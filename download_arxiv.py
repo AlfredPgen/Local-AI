@@ -436,7 +436,7 @@ def paper_group(categories):
 
 
 def build_list(cache_dir, sets, keyword_path, min_hits, min_distinct, path):
-    kw = dp.KeywordFilter(dp.read_terms(keyword_path), [], min_hits, min_distinct, title_weight=3)
+    kw = dp.KeywordFilter(dp.read_terms(keyword_path), [], min_hits, min_distinct, title_weight=3, prefilter=False)
     rows, counts = [], {"records": 0, "no_group": 0, "keywords": 0}
     t0 = time.time()
     for rec in read_cache(cache_dir, sets):

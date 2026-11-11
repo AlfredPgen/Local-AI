@@ -242,7 +242,7 @@ def build_data(args):
     import data_prep as dp
     os.makedirs(args.data_dir, exist_ok=True)
     rng = random.Random(args.seed)
-    kw = dp.KeywordFilter(dp.read_terms(args.keywords), [], min_hits=3, min_distinct=3)
+    kw = dp.KeywordFilter(dp.read_terms(args.keywords), [], min_hits=3, min_distinct=3, prefilter=False)
     t0 = time.time()
     print("evaluation questions (MMLU biology, medicine, genetics and statistics; PubMedQA expert-labelled) ...",
           flush=True)

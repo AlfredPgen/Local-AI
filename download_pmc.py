@@ -431,7 +431,7 @@ def keyword_list(records_path, keyword_path, min_hits, min_distinct, limit, rank
     head = {} if rebuild else _matches_head(cache)
     reused = {k: head.get(k) for k in key} == key and "n" in head and "matched" in head
     if not reused:
-        kw = dp.KeywordFilter(terms, [], min_hits, min_distinct, title_weight=TITLE_WEIGHT)
+        kw = dp.KeywordFilter(terms, [], min_hits, min_distinct, title_weight=TITLE_WEIGHT, prefilter=False)
         head = _score_matches(records_path, kw, rank, key, cache)
     rows = _select_matches(cache, limit, skip)
     with open(path + ".part", "w", encoding="utf-8", newline="\n") as handle:

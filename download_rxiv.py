@@ -274,7 +274,7 @@ def read_cache(cache_path):
 # 2. select
 # ---------------------------------------------------------------------------
 def build_list(cache_path, keyword_path, min_hits, min_distinct, path):
-    kw = dp.KeywordFilter(dp.read_terms(keyword_path), [], min_hits, min_distinct, title_weight=3)
+    kw = dp.KeywordFilter(dp.read_terms(keyword_path), [], min_hits, min_distinct, title_weight=3, prefilter=False)
     rows, n = [], 0
     for rec in read_cache(cache_path):
         n += 1
