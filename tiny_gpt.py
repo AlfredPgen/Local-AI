@@ -4089,32 +4089,40 @@ def newer_fallbacks(path):
     return sorted((f for f in found if os.path.getmtime(f) > since), key=os.path.getmtime)
 
 
+# Signals that pause a training run like Ctrl+C (cmd_train gives them Python's Ctrl+C handler): kill, a closed
+# terminal, logout. Ctrl+Break (SIGBREAK) is not among them: it stays the one unconditional stop on Windows.
+PAUSE_SIGNALS = ("SIGTERM", "SIGHUP")
+
+
 class DeferInterrupt:
-    """Holds Ctrl+C while the optimizer update runs, so a step is applied in full
-    or not at all (an interrupt halfway through Muon's or AdamW's update would
-    save a partly updated model under the previous step number); deliver()
-    raises the held KeyboardInterrupt afterwards. Only possible in the main
-    thread with Python's own Ctrl+C handler; otherwise it does nothing."""
+    """Holds Ctrl+C (and the PAUSE_SIGNALS that cmd_train treats like it) while the
+    optimizer update runs, so a step is applied in full or not at all (an interrupt
+    halfway through Muon's or AdamW's update would save a partly updated model under
+    the previous step number); deliver() raises the held KeyboardInterrupt afterwards.
+    Only possible in the main thread, and only for a signal that has Python's own
+    Ctrl+C handler; otherwise it does nothing."""
 
     def __init__(self):
-        self.hit, self.old = False, None
+        self.hit, self.old = False, {}
 
     def _hold(self, signum, frame):
         self.hit = True
 
     def __enter__(self):
-        self.old = None
+        self.old = {}
         try:
-            if signal.getsignal(signal.SIGINT) is signal.default_int_handler:
-                self.old = signal.signal(signal.SIGINT, self._hold)
+            for name in ("SIGINT",) + PAUSE_SIGNALS:
+                number = getattr(signal, name, None)
+                if number is not None and signal.getsignal(number) is signal.default_int_handler:
+                    self.old[number] = signal.signal(number, self._hold)
         except ValueError:  # not the main thread
             pass
         return self
 
     def __exit__(self, *exc):
-        if self.old is not None:
-            signal.signal(signal.SIGINT, self.old)
-            self.old = None
+        for number, handler in self.old.items():
+            signal.signal(number, handler)
+        self.old = {}
         return False
 
     def deliver(self):
@@ -4156,6 +4164,12 @@ def release_run_lock(lock):
 
 
 def cmd_train(args):
+    for name in PAUSE_SIGNALS:  # kill, a closed terminal and logout pause the run (KeyboardInterrupt) like Ctrl+C
+        if hasattr(signal, name):
+            try:
+                signal.signal(getattr(signal, name), signal.default_int_handler)
+            except (ValueError, OSError):  # not the main thread, or the platform refuses the signal
+                pass
     lock = acquire_run_lock(args)
     try:
         return _train(args)

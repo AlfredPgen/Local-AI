@@ -10,8 +10,11 @@ import io
 import json
 import os
 import shutil
+import signal
+import subprocess
 import sys
 import tempfile
+import textwrap
 import unittest
 import unittest.mock
 
@@ -830,3 +833,51 @@ class Audit2TinyGptB(unittest.TestCase):
             self._quiet(tiny_gpt.cmd_export, self._args(runs, "--export", os.path.join(runs, "exp")))
         with open(os.path.join(runs, "exp", "config.json"), encoding="utf-8") as handle:
             self.assertEqual(json.load(handle)["source_checkpoint"], "~" + best[len(self.tmp):])
+
+    def test_sigterm_and_sighup_pause_like_ctrl_c(self):
+        """F296: cmd_train gives SIGTERM and SIGHUP (kill, a closed terminal, logout) Python's Ctrl+C handler, so
+        they take the pause path, and DeferInterrupt holds them like Ctrl+C until the update is done. Ctrl+Break
+        (SIGBREAK) is left alone: it stays the hard stop. In a child process, because before the change the
+        signal ended the process."""
+        child = textwrap.dedent("""
+            import os, signal, sys
+            sys.path.insert(0, sys.argv[1])
+            import tiny_gpt
+            names = [name for name in ("SIGTERM", "SIGHUP") if hasattr(signal, name)]
+            ctrl_break = getattr(signal, "SIGBREAK", None)
+            before = signal.getsignal(ctrl_break) if ctrl_break is not None else None
+
+            def fake_train(args):
+                for name in names:
+                    number, held = getattr(signal, name), tiny_gpt.DeferInterrupt()
+                    with held:
+                        signal.raise_signal(number)
+                        print(name, "held", held.hit, flush=True)
+                    print(name, "restored", signal.getsignal(number) is signal.default_int_handler, flush=True)
+                    try:
+                        held.deliver()
+                    except KeyboardInterrupt:
+                        print(name, "delivered", flush=True)
+                    held.deliver()  # once only
+                    try:
+                        signal.raise_signal(number)  # outside an update: the pause path at once
+                    except KeyboardInterrupt:
+                        print(name, "pauses", flush=True)
+                print("SIGBREAK untouched", ctrl_break is None or signal.getsignal(ctrl_break) is before, flush=True)
+
+            tiny_gpt._train = fake_train
+            tiny_gpt.cmd_train(tiny_gpt.parse_args(["--name", "sig", "--out-dir", sys.argv[2]]))
+            print("locks left", [name for name in os.listdir(sys.argv[2]) if name.endswith(".lock")])
+        """)
+        folder = os.path.join(self.tmp, "signals")
+        os.makedirs(folder)
+        proc = subprocess.run([sys.executable, "-c", child, HERE, folder], cwd=folder, capture_output=True,
+                              text=True, encoding="utf-8", errors="replace", timeout=600,
+                              env=dict(os.environ, PYTHONIOENCODING="utf-8"))
+        want = []
+        for name in ("SIGTERM", "SIGHUP"):
+            if hasattr(signal, name):
+                want += [f"{name} held True", f"{name} restored True", f"{name} delivered", f"{name} pauses"]
+        want += ["SIGBREAK untouched True", "locks left []"]
+        self.assertEqual(proc.stdout.splitlines(), want, proc.stderr[-2000:])
+        self.assertEqual(proc.returncode, 0, proc.stderr[-2000:])
