@@ -373,7 +373,8 @@ class TestPipeline(unittest.TestCase):
             data_prep.split_long_text = real_split
         self.assertEqual(data_prep._load_state(os.path.join(later, "_work", data_prep.STATE_NAME))["stage"],
                          "tokenizer")
-        # a state written before an option existed does not hold it: the resume takes the parser's default
+        # a state written before an option existed does not hold it: the resume takes the parser's default,
+        # also when the resume command gives the option (it says that it ignores such options)
         state_file = os.path.join(later, "_work", data_prep.STATE_NAME)
         saved = data_prep._load_state(state_file)
         for option in ("leakage_check", "tokenizer_from"):
@@ -381,10 +382,11 @@ class TestPipeline(unittest.TestCase):
         data_prep._save_state(state_file, saved)
         os.remove(os.path.join(later, "tokenizer.model"))
         with redirect_stdout(io.StringIO()):
-            data_prep.prepare(["--out", later, "--resume", "--threads", "2"])
+            data_prep.prepare(["--out", later, "--resume", "--threads", "2", "--leakage-check", "off"])
         self.assertTrue(os.path.isfile(os.path.join(later, "tokenizer.model")))
         self.assertEqual(data_prep.read_manifest(later)["fingerprint"], a["fingerprint"])
         self.assertEqual(data_prep.read_manifest(later)["prep_args"]["leakage_check"], "on")
+        self.assertEqual(sorted(data_prep.read_manifest(later)["prep_args"]), sorted(a["prep_args"]))
         data_prep.open_token_files(later, verify=True)
 
     def test_split_by_group_no_leakage(self):

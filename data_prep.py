@@ -2198,6 +2198,8 @@ def _validate(args, parser):
                   + ", ".join("--" + dest.replace("_", "-") for dest in ignored)
                   + f" given here {'is' if len(ignored) == 1 else 'are'} ignored (only --threads, --workers and "
                   "--keep-work apply).", flush=True)
+        # for _resume_args: what an option gets that the saved build does not hold (never this command's value)
+        args.resume_defaults = {dest: parser.get_default(dest) for dest in vars(args)}
         return
     if not (args.md_dir or args.wiki_dir or args.parquet or args.jsonl):
         parser.error("give at least one source: --md-dir, --wiki-dir, --parquet or --jsonl")
@@ -3502,9 +3504,11 @@ def _resume_args(args):
     """The arguments of the build being resumed (from its state.pkl), with this
     command's machine settings (--threads, --workers, --keep-work) on top. The
     saved value wins for every option the stopped build recorded; an option
-    added to this script since then takes its default."""
+    added to this script since then takes its default, also when this command
+    gives it another value (_validate has said that it is ignored)."""
     saved = _load_state(os.path.join(os.path.abspath(args.out), "_work", STATE_NAME))["args"]
-    merged = argparse.Namespace(**{**vars(args), **saved})
+    defaults = vars(args).pop("resume_defaults", None) or vars(args)
+    merged = argparse.Namespace(**{**defaults, **saved})
     for name in ("threads", "workers", "keep_work", "worker_warmup"):
         setattr(merged, name, getattr(args, name))
     merged.out, merged.resume, merged.overwrite = args.out, True, False
