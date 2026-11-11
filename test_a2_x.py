@@ -246,6 +246,31 @@ class Audit2Followers(unittest.TestCase):
                                  superbpe_extra=lambda vocab, args: 7)[2]["vocab_size"], 593)
         self.assertEqual(extended, [60, 7])
 
+    # ---------------- X4: the estimate's training hours use the planner's efficiency ----------------
+    def test_estimate_hours_use_the_efficiency_of_the_time_budget(self):
+        """X4 (F346, F149): the hours column and the tokens that fit an hours budget are computed with
+        tiny_gpt.TIME_BUDGET_EFFICIENCY (two copies of 0.92 before)."""
+        import tiny_gpt
+        self.assertEqual(tiny_gpt.TIME_BUDGET_EFFICIENCY, 0.92)
+        folder = H.Audit2PipelineTools.text_folder(self, "x4_text")
+        model, _ = self.tokenizer_model("x4_tok")
+        argv = ["--md-dir", folder, "--tokenizer", model, "--tflops", "0.00001", "--hours", "1",
+                "--tokens-per-param", "0.0001"]
+
+        def table(efficiency):
+            with unittest.mock.patch.object(tiny_gpt, "TIME_BUDGET_EFFICIENCY", efficiency):
+                lines = self.run_estimate(argv).splitlines()
+            rows = {line[:16].strip(): line.split() for line in lines if line.startswith(("data only", "1 h budget"))}
+            self.assertEqual(sorted(rows), ["1 h budget", "data only"])
+            return float(rows["data only"][-2].replace(",", "")), rows["1 h budget"]
+
+        hours, budget = table(0.92)
+        half_hours, half_budget = table(0.46)
+        self.assertGreater(hours, 100)
+        self.assertAlmostEqual(half_hours / hours, 2, places=3)
+        self.assertEqual((budget[-2], half_budget[-2]), ("1.0", "1.0"))
+        self.assertNotEqual(budget, half_budget, "half the efficiency: a smaller model fits the hour")
+
 
 if __name__ == "__main__":
     unittest.main()

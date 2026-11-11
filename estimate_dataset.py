@@ -469,7 +469,7 @@ def main(argv=None):
     commands = []
 
     def row(label, n, c, d):
-        hours = d * per_token(c) / flops / 3600 / 0.92 if flops else float("nan")
+        hours = d * per_token(c) / flops / 3600 / tiny_gpt.TIME_BUDGET_EFFICIENCY if flops else float("nan")
         commands.append(f"{label}: python tiny_gpt.py --dataset <folder> --d-model {c.d_model} --layers {c.n_layers} "
                         f"--train-tokens {int(d / 1e7) * 10_000_000}")
         return (f"{label:<16}{n / 1e6:>9.1f}M  d{c.d_model:<5} L{c.n_layers:<3}{d / 1e9:>9.2f}B{d / n:>9.0f}"
@@ -490,7 +490,7 @@ def main(argv=None):
         for hours in (float(h) for h in opts.hours.split(",") if h.strip()):
             best = None
             for n, c in shapes:
-                tokens = min(flops * hours * 3600 * 0.92 / per_token(c), data_tokens)
+                tokens = min(flops * hours * 3600 * tiny_gpt.TIME_BUDGET_EFFICIENCY / per_token(c), data_tokens)
                 if tokens >= r * n:
                     best = (n, c, tokens)
             if best:
