@@ -803,3 +803,30 @@ class Audit2TinyGptB(unittest.TestCase):
         self.assertTrue(header(step=12345).startswith(start + "12,345 | best validation loss 5.5000 @6 | "))
         self.assertEqual(header(metrics={}), start + "12,345")
         self.assertEqual(header(step=None), start + "?")
+
+    def test_one_home_folder_masker(self):
+        """F215 (home-masker half): _home_short, which the export and the tools use, is _hide_home, the masker
+        of the experiments table; the paths a checkpoint can have read the same as before."""
+        home = os.path.expanduser("~")
+        samples = [os.path.join(home, "runs", "A_best.pt"),  # inside the home folder
+                   os.path.join(os.path.splitdrive(home)[0] + os.sep, "data", "runs", "A_best.pt"),  # outside it
+                   os.path.join("runs", "A_best.pt"),  # relative
+                   os.path.join(home, "runs", "exp") + os.sep,  # with a trailing separator
+                   home.replace("\\", "/") + "/runs/A_best.pt"]
+        want = ["~" + os.sep + os.path.join("runs", "A_best.pt"), samples[1], samples[2],
+                "~" + os.sep + os.path.join("runs", "exp") + os.sep, "~/runs/A_best.pt"]
+        if os.name == "nt":  # mixed case on Windows
+            samples.append(os.path.join(home.swapcase(), "Runs", "A_best.pt"))
+            want.append("~" + os.sep + os.path.join("Runs", "A_best.pt"))
+        self.assertEqual([tiny_gpt._home_short(p) for p in samples], want)
+        self.assertEqual([tiny_gpt._hide_home(p) for p in samples], want)
+        with unittest.mock.patch.object(tiny_gpt, "_hide_home", return_value="masked") as hide:
+            self.assertEqual(tiny_gpt._home_short("some path"), "masked")
+        hide.assert_called_once_with("some path")
+        # the export records its source with it
+        runs = os.path.join(self.tmp, "home_mask")
+        best = self._toy_checkpoint(runs)
+        with unittest.mock.patch.object(tiny_gpt.os.path, "expanduser", return_value=self.tmp):
+            self._quiet(tiny_gpt.cmd_export, self._args(runs, "--export", os.path.join(runs, "exp")))
+        with open(os.path.join(runs, "exp", "config.json"), encoding="utf-8") as handle:
+            self.assertEqual(json.load(handle)["source_checkpoint"], "~" + best[len(self.tmp):])
