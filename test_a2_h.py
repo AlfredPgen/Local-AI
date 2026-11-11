@@ -215,6 +215,16 @@ class Audit2PipelineTools(unittest.TestCase):
         md.total, md.sampled, md.kept, md.kept_chars, md.total_bytes, md.sampled_bytes = 10, 10, 10, 900, 1000, 1000
         md.sample_fraction = 0.5
         self.assertEqual(md.estimate(), (10, 900), "data_prep does not sample text folders")
+        # nor a source it reads in 'top' mode: every record is ranked, the fraction is for stream order only
+        top = estimate_dataset.Tally("wiki", "hf_arrow")
+        top.total, top.sampled, top.kept, top.kept_chars = 1000, 100, 50, 5000
+        top.ranked = [(50 - i, 60 + 2 * i) for i in range(50)]  # (rank score, characters): the best are the shortest
+        top.max_docs, top.select = 200, "top"
+        self.assertEqual(top.estimate(), (200, 200 * 79), "the best 2 in 5 of the 500 kept documents")
+        top.sample_fraction = 0.5
+        self.assertEqual(top.estimate(), (200, 200 * 79), "the same 2 in 5: no record is left out before ranking")
+        top.max_docs = 0  # 'top' asked for without a limit: still every record
+        self.assertEqual(top.estimate(), (500, 50000))
         # the sources take the fraction from the data_prep options
         work = os.path.join(self.tmp, "f148")
         os.makedirs(work, exist_ok=True)

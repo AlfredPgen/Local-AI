@@ -89,7 +89,7 @@ class Tally:
         self.store, self.text_chars = [], 0  # a heap of (-random number, kept number, text): see keep
         self.rng = random.Random(f"{seed}/{name}")
         self.max_docs, self.select = 0, "first"
-        self.sample_fraction = 1.0  # data_prep --sample-fraction: the share of a web source's records a build reads
+        self.sample_fraction = 1.0  # data_prep --sample-fraction: the share of records a build reads in stream order
         self.ranked = []          # (keyword score, characters) of kept sample documents, for 'top' selection
 
     def keep(self, text):
@@ -122,8 +122,10 @@ class Tally:
             docs = self.total * self.kept / max(self.sampled, 1)
             chars = self.total_bytes * self.kept_chars / max(self.sampled_bytes, 1)
         else:
-            # data_prep samples the records first and applies the document limit to what is left
-            scale = self.total / max(self.sampled, 1) * self.sample_fraction
+            # data_prep samples the records first and applies the document limit to what is left; a source it
+            # reads in 'top' mode is not sampled (every record is ranked)
+            fraction = 1.0 if self.select == "top" else self.sample_fraction
+            scale = self.total / max(self.sampled, 1) * fraction
             docs, chars = self.kept * scale, self.kept_chars * scale
         if self.max_docs and docs > self.max_docs:
             if self.select == "top" and self.ranked:
