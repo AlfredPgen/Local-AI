@@ -467,22 +467,31 @@ class Audit2DataPrep(unittest.TestCase):
             json.dump({"format": data_prep.FORMAT, "format_version": data_prep.FORMAT_VERSION, "dtype": "uint16",
                        "sources": sources}, f)
         data_prep.open_token_files(ds, verify=True)  # the files are good
-        real, started, lock = data_prep.sha256_file, [], threading.Lock()
+        real, started, hashed, lock = data_prep.sha256_file, [], [], threading.Lock()
 
-        def slow(path, chunk=1 << 22, stop=None):  # every file takes half a second: 3 s for the 24 in 4 threads
+        def slow(path, chunk=1 << 22, stop=None):  # every file takes 4 s, unless its hash is told to stop
             with lock:
                 first = not started
                 started.append(stop)
             time.sleep(0.1)
             if first:  # by now the main thread has queued every file and waits for the hashes
                 _thread.interrupt_main()  # Ctrl+C while the first files are being hashed
-            time.sleep(0.4)
+            if stop is None:
+                time.sleep(4.0)
+            elif stop.wait(4.0):
+                return None
+            with lock:
+                hashed.append(path)
             return real(path, chunk)
 
         t0 = time.time()
         with unittest.mock.patch.object(data_prep, "sha256_file", slow), self.assertRaises(KeyboardInterrupt):
             data_prep.open_token_files(ds, verify=True)
         took = time.time() - t0
+        # "at once" against "when the file being hashed is done": the interrupt is sent 0.1 s into files of 4 s
+        self.assertEqual(hashed, [], f"Ctrl+C is seen while the first files are being hashed, not when one of "
+                                     f"them is done (it took {took:.1f} s)")
+        self.assertLess(took, 4.0, "Ctrl+C stops the check sooner than one file takes")
         self.assertLess(len(started), 24, f"the files not started are dropped (it took {took:.1f} s)")
         self.assertTrue(all(isinstance(stop, threading.Event) and stop.is_set() for stop in started),
                         "the hashes in flight are told to stop")
