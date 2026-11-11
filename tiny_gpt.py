@@ -4427,7 +4427,8 @@ def _train(args):
         args.eval_tokens = default_eval_tokens(args.eval_every, int(settings["tokens_per_step"]), len(arrays["val"]),
                                                largest_val)
     # fixed windows stay fixed on resume; runs from before the key existed used the old default of 65,536
-    eval_tokens = int(settings.setdefault("eval_tokens", args.eval_tokens or 65_536))
+    eval_tokens = int(settings.setdefault("eval_tokens",
+                                          65_536 if resume_obj is not None else args.eval_tokens or 65_536))
     if resume_obj is not None and args.eval_tokens is not None and eval_tokens != args.eval_tokens:
         print(f"Note: --eval-tokens ignored on --resume; this run keeps {eval_tokens:,} (its validation windows).")
     probes_sha = file_sha256(args.probes)[:16] if args.probes else None

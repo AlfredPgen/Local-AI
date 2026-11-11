@@ -593,6 +593,26 @@ class Audit2TinyGptC(unittest.TestCase):
         _, tail, _, _ = self.console_runs()  # a new run without the option
         self.assertIn('"z_loss": 0.0001', tail)
 
+    def test_resume_without_a_stored_eval_tokens_keeps_the_old_windows(self):
+        """F228: a checkpoint from before eval_tokens was stored used 65,536 validation tokens per source; a
+        resume with --eval-tokens keeps those windows and says that the option is ignored."""
+        self.notes_runs()
+        obj = self.load("N.pt")
+        del obj["train_config"]["eval_tokens"]
+        torch.save(obj, os.path.join(self.runs, "N228.pt"))
+        code, out = base.run(["tiny_gpt.py", "--name", "N228", "--out-dir", self.runs, "--log-file", self.log,
+                              "--device", "cpu", "--resume", "--eval-tokens", "1024", "--no-probes",
+                              "--tariff", "25"])
+        self.assertEqual(code, 0, out)
+        self.assertIn("Note: --eval-tokens ignored on --resume; this run keeps 65,536 (its validation windows).", out)
+        _, arrays = data_prep.open_token_files(self.ds, verify=False)
+
+        def windows(tokens):
+            return sum(w.shape[0] for w in tiny_gpt.EvalSet(arrays["val"], 64, tokens).windows.values())
+
+        self.assertNotEqual(windows(65_536), windows(1024), "the toy sources must be long enough to tell")
+        self.assertIn(f"| validation: {windows(65_536)} fixed windows of 64 tokens from 3 sources", out)
+
 
 if __name__ == "__main__":
     unittest.main()
