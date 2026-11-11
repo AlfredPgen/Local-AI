@@ -3891,8 +3891,8 @@ def cmd_export(args):
     out = os.path.abspath(args.export)
     if os.path.exists(out) and os.listdir(out):
         raise SystemExit(f"{out} exists and is not empty; choose a new folder.")
-    obj = safe_load(path, args.trust_checkpoint)
-    model, tok, cfg = model_from_checkpoint(obj)
+    model, tok, cfg, obj = load_for_inference(path, "cpu", args.trust_checkpoint)  # one copy of the weights
+    obj.pop("optimizer", None)
     tensors = {k: v for k, v in model.state_dict().items() if not (cfg.tie_embeddings and k == "lm_head.weight")}
     os.makedirs(out, exist_ok=True)
     write_safetensors(tensors, os.path.join(out, "model.safetensors"),

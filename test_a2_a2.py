@@ -674,3 +674,35 @@ class Audit2TinyGptB(unittest.TestCase):
         out = self._quiet(tiny_gpt.cmd_generate, self._args(runs, "--generate", "genetic", "--length", "3",
                                                             "--checkpoint", export + os.sep))
         self.assertTrue(out.startswith(f"Checkpoint {export} (tinygpt, inference) | step 7 | "), out)
+
+    def test_export_loads_the_checkpoint_once(self):
+        """F281: --export builds its model with load_for_inference (the model holds the checkpoint's own tensors:
+        one copy of the weights, and the optimizer state of a training checkpoint is dropped at once). The
+        exported tensors are the checkpoint's, and an export folder can itself be exported."""
+        runs = os.path.join(self.tmp, "export_once")
+        best = self._toy_checkpoint(runs, optimizer={"state": torch.zeros(1000)}, checkpoint_type="training")
+        source = torch.load(best, map_location="cpu", weights_only=True)["model"]
+        first, second = os.path.join(runs, "exp1"), os.path.join(runs, "exp2")
+        seen = {}
+        real = tiny_gpt.model_from_checkpoint
+
+        def spy(obj, *a, **k):
+            seen["assign"] = k.get("assign", a[1] if len(a) > 1 else False)
+            return real(obj, *a, **k)
+
+        with unittest.mock.patch.object(tiny_gpt, "model_from_checkpoint", spy):
+            out = self._quiet(tiny_gpt.cmd_export, self._args(runs, "--export", first))
+        self.assertIs(seen["assign"], True, "the model takes the checkpoint's tensors instead of copying them")
+        self.assertIn(f"verified {len(source) - 1} tensors by reading them back", out)
+        self._quiet(tiny_gpt.cmd_export, self._args(runs, "--export", second, "--checkpoint", first))
+        for folder in (first, second):
+            tensors, meta = tiny_gpt.read_safetensors(os.path.join(folder, "model.safetensors"))
+            self.assertEqual(sorted(tensors), sorted(k for k in source if k != "lm_head.weight"), folder)
+            for name, t in tensors.items():
+                self.assertEqual(t.dtype, torch.float32, name)
+                self.assertTrue(torch.equal(t, source[name]), (folder, name))
+            self.assertEqual(meta["tie_embeddings"], "True")
+            with open(os.path.join(folder, "config.json"), encoding="utf-8") as handle:
+                config = json.load(handle)
+            self.assertEqual((config["step"], config["weights"], config["metrics"]),
+                             (7, "raw", {"best_val": 5.5, "best_step": 6}), folder)
