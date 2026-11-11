@@ -1654,10 +1654,12 @@ def last_dashboard_push(png_name):
 
 
 def launch_dashboard(path, args, state):
-    """Draw view_pt.py's dashboard for a new best checkpoint in the background
-    (CPU, idle priority; training does not wait). Skipped while the previous
-    one is still drawing. view_pt.py pushes it to GitHub (for checkpoints in this
-    repository's folder) at most every --dashboard-push-hours."""
+    """Draw view_pt.py's dashboard of the best checkpoint in the background (CPU,
+    idle priority; training does not wait): after every evaluation, since
+    view_pt.py adds the evaluations after the best file's last step from
+    <name>_metrics.jsonl. Skipped while the previous one is still drawing.
+    view_pt.py pushes it to GitHub (for checkpoints in this repository's
+    folder) at most every --dashboard-push-hours."""
     if state["proc"] is not None and state["proc"].poll() is None:
         return
     now = time.time()
@@ -3675,8 +3677,8 @@ def parse_args(argv=None):
     g.add_argument("--log-every", "--report-every", type=int, default=0,
                    help="extra training-only progress lines between evaluations (0 = none)")
     g.add_argument("--dashboard", choices=("auto", "on", "off"), default="auto",
-                   help="redraw view_pt.py's dashboard in the background after each new best checkpoint (auto: "
-                        "for runs saved in this script's folder; test runs elsewhere are skipped)")
+                   help="redraw view_pt.py's dashboard of the best checkpoint in the background after each "
+                        "evaluation (auto: for runs saved in this script's folder; test runs elsewhere are skipped)")
     g.add_argument("--dashboard-push-hours", type=float, default=3.0,
                    help="push the dashboard to GitHub at most this often (0 = every time; default 3, since every "
                         "1.6 MB version stays in the repository's history)")
@@ -4714,7 +4716,11 @@ def _train(args):
                         "entropy": ev["entropy"], "confidence": ev["confidence"], "top1": ev["top1"],
                         "ece": ev["ece"], "probe_acc": None, "grad_norm": None, "is_best": False,
                         "baseline": True, "time": now_iso()})
-        write_metrics(history[-1])
+        try:
+            write_metrics(history[-1])
+        except OSError as exc:  # the row is in the history that the checkpoints carry
+            print(f"WARNING: could not write {metrics_path} ({type(exc).__name__}: {str(exc)[:160]}); the baseline "
+                  "evaluation is missing from it")
         print(f"step {start_step:>6}/{total_steps} | baseline before training | val {ev['loss']:.4f} @{start_step}"
               f" | bpb {ev['bpb']:.3f} | uniform-guess loss would be {math.log(cfg.vocab_size):.3f} "
               "(not counted as best)")
@@ -4746,6 +4752,7 @@ def _train(args):
     interval_z = torch.zeros((), device=device)
     aux = None
     save_failures = 0  # periodic saves failed in a row (disk full, locked file, no memory for the copy)
+    best_failures = 0  # saves of the best file failed in a row
     oom_retries = 0  # out-of-memory retries of the current step (after the first step)
     peak_mem = 0  # bytes: the process's peak memory on the device so far, sampled after every step (peak_mem_gib)
     fail_note = None  # the exception that ended the run, for the experiments table
@@ -5108,21 +5115,40 @@ def _train(args):
                 if is_best:  # before printing or sampling, so Ctrl+C can never leave an announced best unsaved
                     try:
                         save(best_path, True, step, best_source)
-                    except BaseException:
-                        # not written (Ctrl+C, full disk): record no best that no file holds
-                        best_val, best_step, entry["is_best"] = prev_best, prev_step, False
-                        try:  # the evaluation stays in history (and the saved training state): keep the file in step
-                            write_metrics(entry)
-                        except Exception:  # noqa: BLE001 - the disk may be the problem; the first error matters
-                            pass
-                        raise
-                    if dashboard_on:
-                        launch_dashboard(best_path, args, dashboard)
-                write_metrics(entry)
+                        best_failures = 0
+                    except BaseException as exc:
+                        # not written (Ctrl+C, full disk, no memory for the copy): record no best that no file holds
+                        best_val, best_step = prev_best, prev_step
+                        entry["is_best"], entry["best_weights"] = False, None
+                        best_failures += 1
+                        if not isinstance(exc, Exception) or best_failures >= 3:
+                            # the evaluation stays in history (and the saved training state): keep the file in step
+                            try:
+                                write_metrics(entry)
+                            except Exception:  # noqa: BLE001 - the disk may be the problem; the first error matters
+                                pass
+                            raise
+                        # like a failed periodic save, this must not end a run that is training fine: the evaluation
+                        # counts as no best, so the next one that beats the best file on disk is saved in its place
+                        is_best = False
+                        print(f"WARNING: could not save {best_path} ({type(exc).__name__}: {str(exc)[:160]}); "
+                              f"training continues, the next better evaluation tries again ({best_failures}/3)")
+                        free_device_memory(device)
+                try:
+                    write_metrics(entry)
+                except OSError as exc:  # the row is in the history that the checkpoints carry
+                    print(f"WARNING: could not write {metrics_path} ({type(exc).__name__}: {str(exc)[:160]}); "
+                          f"the evaluation of step {step} is missing from it")
+                # after the row is written (view_pt.py adds the rows after the best file's last step), and at every
+                # evaluation: the curves go on when the run stops improving
+                if dashboard_on and os.path.exists(best_path):
+                    launch_dashboard(best_path, args, dashboard)
                 if is_best:
                     status_text = (f"NEW BEST (prev {prev_best:.4f} @{prev_step})" if prev_step is not None
                                    else "NEW BEST (first evaluation)") + (" (ema weights)" if best_source == "ema"
                                                                            else "")
+                elif best_step is None:
+                    status_text = "no best saved yet"  # only after a failed first save of the best file
                 else:
                     status_text = f"best {best_val:.4f} @{best_step}"
                 print(f"step {step:>6}/{total_steps} | train {train_loss:.3f} | val {ev['loss']:.4f} @{step}"

@@ -15,6 +15,8 @@ import unittest
 import unittest.mock
 from contextlib import redirect_stdout
 
+import torch
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import data_prep  # noqa: E402
@@ -22,6 +24,38 @@ import tiny_gpt  # noqa: E402
 import test_tiny_gpt as base  # noqa: E402 - as a module: a TestCase class imported by name would run twice
 
 CLOCK = r"[A-Za-z]{2,4} \d{2}:\d{2}"  # clock(): 'Tue 12:41'
+# tiny_gpt.main(args) in a child process with --dashboard on: the best-file saves whose numbers (from 1) are in the
+# comma list fail, and every dashboard launch is printed instead of started
+DASHBOARD_RUN = r'''
+import os
+import sys
+
+sys.path.insert(0, sys.argv[1])
+import tiny_gpt  # noqa: E402
+
+fail = {int(v) for v in sys.argv[2].split(",") if v}
+calls = {"best": 0}
+real_save = tiny_gpt.atomic_save
+
+
+def save(obj, path):
+    if obj.get("checkpoint_type") == "inference" and not path.endswith("_crash.pt"):
+        calls["best"] += 1
+        if calls["best"] in fail:
+            raise OSError(28, "No space left on device (simulated)")
+    return real_save(obj, path)
+
+
+def launch(path, args, state):
+    print(f"DASHBOARD LAUNCH {os.path.basename(path)} exists={os.path.exists(path)}")
+
+
+tiny_gpt.device_memory_budget = lambda device: (8 * 2 ** 30, "8.0 GiB (test)")
+tiny_gpt.atomic_save = save
+tiny_gpt.launch_dashboard = launch
+tiny_gpt.last_dashboard_push = lambda png_name: 0.0  # no git call
+tiny_gpt.main(sys.argv[3:])
+'''
 
 
 class Audit2TinyGptC(unittest.TestCase):
@@ -297,6 +331,81 @@ class Audit2TinyGptC(unittest.TestCase):
         self.assertNotIn("inf @None", out + out_r)
         self.assertRegex(out_r, r"(?m)^RUN \S+ completed at \S+ \| step 8/8 \| best val \d+\.\d{4} @\d \| last val "
                                 r"\d+\.\d{4} @8 \| ")
+
+    # ---------------- best-file save, dashboard launch ----------------
+    def load(self, name):
+        return torch.load(os.path.join(self.runs, name), map_location="cpu", weights_only=True)
+
+    def test_a_failed_best_save_is_tolerated_three_times(self):
+        """F249 (with F235): a save of the best file that fails (full disk, no memory for the copy) no longer ends
+        the run. The evaluation is recorded as no best, the next better evaluation tries again, and three
+        failures in a row end the run, as three failed periodic saves do."""
+        self.pipeline()
+        args = list(self.common[1:]) + ["--steps", "16", "--eval-every", "4", "--no-probes"]
+        code, out = self.patched_run("bestfail", 2, args + ["--name", "BF"])
+        self.assertEqual(code, 0, out)
+        warned = [line for line in out.splitlines() if line.startswith("WARNING: could not save")]
+        self.assertEqual(len(warned), 2, out)
+        for i, line in enumerate(warned, 1):
+            self.assertIn("BF_best.pt (OSError: ", line)
+            self.assertIn(f"training continues, the next better evaluation tries again ({i}/3)", line)
+        self.assertNotIn("inf @None", out)
+        lines = self.metric_lines(out)
+        self.assertEqual(len(lines), 4, out)
+        self.assertTrue(lines[0].endswith(" | no best saved yet"), lines[0])
+        self.assertTrue(lines[1].endswith(" | no best saved yet"), lines[1])
+        self.assertTrue(lines[2].endswith(" | NEW BEST (first evaluation)"), lines[2])
+        self.assertRegex(lines[3], r" \| (NEW BEST \(prev \d+\.\d{4} @12\)|best \d+\.\d{4} @12)$")
+        rows = self.rows("BF")
+        self.assertEqual([row["step"] for row in rows], [0, 4, 8, 12, 16], "one row per evaluation")
+        for row in rows[1:3]:  # the evaluations whose best save failed
+            self.assertIs(row["is_best"], False)
+            self.assertIsNone(row["best_weights"])
+        self.assertEqual((rows[3]["is_best"], rows[3]["best_weights"]), (True, "raw"))
+        state, best = self.load("BF.pt"), self.load("BF_best.pt")
+        self.assertEqual(state["step"], 16)
+        self.assertIn(best["step"], (12, 16))
+        self.assertEqual([(h["step"], h["is_best"]) for h in state["metrics"]["history"][1:4]],
+                         [(4, False), (8, False), (12, True)])
+        self.assertEqual(state["metrics"]["best_step"], best["step"])
+        # three failures in a row end the run: a crash file, no best file, the third evaluation in the metrics
+        code, out_f = self.patched_run("bestfail", 3, args + ["--name", "BG"])
+        self.assertNotEqual(code, 0)
+        self.assertEqual(out_f.count("WARNING: could not save"), 2, out_f)
+        self.assertIn("(2/3)", out_f)
+        self.assertIn("OSError", out_f)
+        self.assertTrue(os.path.isfile(os.path.join(self.runs, "BG_crash.pt")))
+        self.assertFalse(os.path.exists(os.path.join(self.runs, "BG_best.pt")))
+        rows_f = self.rows("BG")
+        self.assertEqual([(row["step"], row["is_best"], row.get("best_weights")) for row in rows_f[1:]],
+                         [(4, False, None), (8, False, None), (12, False, None)])
+        self.assertRegex(out_f, r"(?m)^RUN \S+ failed at \S+ \| step 12/16 \| best val none \| ")
+
+    def test_dashboard_is_drawn_after_every_evaluation_with_a_best_file(self):
+        """F368 (tiny_gpt.py half): the dashboard of the best file is launched after every evaluation, a new best
+        or not, once that file exists, and after the evaluation's row is in the metrics file."""
+        self.pipeline()
+        script = os.path.join(self.tmp, "dashboard_run.py")
+        with open(script, "w", encoding="utf-8") as f:
+            f.write(DASHBOARD_RUN)
+        args = list(self.common[1:]) + ["--steps", "12", "--eval-every", "4", "--no-probes", "--dashboard", "on"]
+        # the second best save fails: that evaluation is no new best, and the best file of step 4 is drawn again
+        code, out = base.run([script, HERE, "2"] + args + ["--name", "DA"])
+        self.assertEqual(code, 0, out)
+        self.assertEqual(out.count("DASHBOARD LAUNCH DA_best.pt exists=True"), 3, out)
+        lines = [line for line in out.splitlines()
+                 if line.startswith(("DASHBOARD LAUNCH", "WARNING: could not save")) or self.metric_lines(line)]
+        self.assertEqual([line.split(" ")[0] for line in lines],
+                         ["DASHBOARD", "step", "WARNING:", "DASHBOARD", "step", "DASHBOARD", "step"], out)
+        self.assertRegex(lines[4], r" \| best \d+\.\d{4} @4$")
+        # the first best save fails: nothing to draw until a best file exists
+        code, out_n = base.run([script, HERE, "1"] + args + ["--name", "DB"])
+        self.assertEqual(code, 0, out_n)
+        self.assertEqual(out_n.count("DASHBOARD LAUNCH"), 2, out_n)
+        self.assertNotIn("exists=False", out_n)
+        first = self.metric_lines(out_n)[0]
+        self.assertTrue(first.endswith(" | no best saved yet"), first)
+        self.assertLess(out_n.index(first), out_n.index("DASHBOARD LAUNCH"))
 
 
 if __name__ == "__main__":

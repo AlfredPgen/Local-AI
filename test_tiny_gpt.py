@@ -47,7 +47,7 @@ sys.path.insert(0, sys.argv[1])
 import tiny_gpt  # noqa: E402
 
 mode, n = sys.argv[2], int(sys.argv[3])
-calls = {"next": 0, "clip": 0, "save": 0, "gen": 0}
+calls = {"next": 0, "clip": 0, "save": 0, "gen": 0, "best": 0}
 real_next, real_clip = tiny_gpt.TokenBatcher.next, torch.nn.utils.clip_grad_norm_
 real_save, real_gen = tiny_gpt.atomic_save, tiny_gpt.generate
 before = {}
@@ -90,6 +90,10 @@ def save(obj, path):
         # savefail: the first n training-state saves fail; saveflaky: of the first n, two in every three fail
         if (mode == "savefail" and calls["save"] <= n) or (
                 mode == "saveflaky" and calls["save"] <= n and calls["save"] % 3 != 0):
+            raise OSError(28, "No space left on device (simulated)")
+    if obj.get("checkpoint_type") == "inference" and not path.endswith("_crash.pt"):
+        calls["best"] += 1  # its own counter: savefail and saveflaky count the training-state saves
+        if mode == "bestfail" and calls["best"] <= n:  # the first n saves of the best file fail
             raise OSError(28, "No space left on device (simulated)")
     return real_save(obj, path)
 
