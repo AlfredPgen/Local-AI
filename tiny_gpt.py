@@ -5638,13 +5638,15 @@ def cmd_plan(args):
 
 
 def _log_path_from(argv):
-    """--log-file is read before full parsing so argument errors are logged too."""
-    for i, item in enumerate(argv):
-        if item == "--log-file" and i + 1 < len(argv):
-            return argv[i + 1]
-        if item.startswith("--log-file="):
-            return item.split("=", 1)[1]
-    return os.path.join(HERE, "log.txt")
+    """--log-file is read before full parsing so argument errors are logged too: by a parser that knows this one
+    option, so that an abbreviation ('--log-f X') means here what it means to parse_args."""
+    default = os.path.join(HERE, "log.txt")
+    pre = argparse.ArgumentParser(add_help=False, exit_on_error=False)
+    pre.add_argument("--log-file", default=default)
+    try:
+        return pre.parse_known_args(argv)[0].log_file
+    except argparse.ArgumentError:  # no value after it: parse_args reports that, into the default log
+        return default
 
 
 def main(argv=None):

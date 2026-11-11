@@ -898,6 +898,29 @@ class Audit2TinyGptC(unittest.TestCase):
             torch._dynamo.reset()
         self.assertFalse(os.path.exists(os.path.join(HERE, ".compile_cache")), "the eager backend writes no cache")
 
+    # ---------------- the log file and the command line ----------------
+    def test_abbreviated_log_file_option_reaches_the_logger(self):
+        """F332 (with F216): the log is opened before the arguments are parsed, from a look at --log-file alone.
+        That look now abbreviates the way the full parser does, so '--log-f X' no longer logs to the default file
+        while the parser takes X."""
+        default = os.path.join(tiny_gpt.HERE, "log.txt")
+        self.assertEqual(tiny_gpt._log_path_from(["--log-fi", "x.txt"]), "x.txt")
+        self.assertEqual(tiny_gpt._log_path_from(["--name", "a", "--log-f", "X", "--resume"]), "X")
+        self.assertEqual(tiny_gpt._log_path_from(["--log-fi=Y"]), "Y")
+        self.assertEqual(tiny_gpt._log_path_from(["--log-every", "5"]), default)
+        self.assertEqual(tiny_gpt._log_path_from(["--log-file", "a.txt", "--steps", "3"]), "a.txt")
+        self.assertEqual(tiny_gpt._log_path_from(["--log-file=b.txt"]), "b.txt")
+        self.assertEqual(tiny_gpt._log_path_from([]), default)
+        self.assertEqual(tiny_gpt._log_path_from(["--plan", "--dataset", "d"]), default)
+        # no value: the default log, where the full parser then reports the error
+        with redirect_stdout(io.StringIO()) as out, unittest.mock.patch("sys.stderr", new=io.StringIO()) as err:
+            self.assertEqual(tiny_gpt._log_path_from(["--name", "a", "--log-file"]), default)
+        self.assertEqual((out.getvalue(), err.getvalue()), ("", ""))
+        # the two parsers agree
+        for argv in (["--log-fi", "x.txt"], ["--log-f=Y"], ["--log-file", "a", "--log-file", "b"], []):
+            args = tiny_gpt.parse_args(["--name", "x", "--out-dir", self.tmp] + argv)
+            self.assertEqual(tiny_gpt._log_path_from(argv), args.log_file, argv)
+
 
 if __name__ == "__main__":
     unittest.main()
