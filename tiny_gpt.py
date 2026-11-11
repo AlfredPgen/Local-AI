@@ -15,7 +15,7 @@ Workflow
    speed on this device and picks the largest model the data AND the time allow):
        python tiny_gpt.py --dataset datasets\bio_all --plan --time-budget-hours 48
        python tiny_gpt.py --dataset datasets\bio_all --name bio_48h --time-budget-hours 48
-       python tiny_gpt.py --dataset datasets\bio_all --name bio_small --d-model 256 --layers 6 --steps 5000
+       python tiny_gpt.py --dataset datasets\bio_all --name bio_small --d-model 256 --layers 6 --steps 5000 --tokens-per-step 65536
 3. Resume after Ctrl+C (same name; the dataset path is stored in the checkpoint):
        python tiny_gpt.py --name tinyGPT_muon --resume
        python tiny_gpt.py --name tinyGPT_muon --resume --steps 70000     # extend the run
@@ -55,6 +55,7 @@ import os
 import platform
 import random
 import re
+import shutil
 import signal
 import subprocess
 import sys
@@ -94,10 +95,13 @@ class Tee:
             self.console.flush()
         except (OSError, ValueError):
             pass
-        if not self.log.closed:
-            self.log.write(text)
-            if "\n" in text:
-                self.log.flush()
+        try:
+            if not self.log.closed:
+                self.log.write(text)
+                if "\n" in text:
+                    self.log.flush()
+        except (OSError, ValueError):  # a full or lost disk: the line is missing from the log, the run goes on
+            pass
         return len(text)
 
     def flush(self):
@@ -156,6 +160,25 @@ def stop_log():
     handle.close()
 
 
+def log_only(text):
+    """A line for log.txt only: detail that makes a run reproducible but that nobody reads on screen.
+    Without an open log file it is printed, so nothing is ever lost."""
+    handle = _LOG_STATE.get("handle")
+    if handle is None or handle.closed:
+        print(text)
+        return
+    try:
+        handle.write(text + "\n")
+        handle.flush()
+    except (OSError, ValueError):
+        pass
+
+
+def clock():
+    """'Tue 12:41': when a line was printed."""
+    return time.strftime("%a %H:%M")
+
+
 def now_iso():
     return datetime.datetime.now().astimezone().isoformat(timespec="seconds")
 
@@ -166,8 +189,10 @@ def fmt_hms(seconds):
 
 
 def fmt_dur(seconds):
-    """Duration as '9h 50m' / '12m 03s' (never confused with a clock time)."""
+    """Duration as '17d 04h' / '9h 50m' / '12m 03s' (never confused with a clock time)."""
     seconds = int(max(seconds, 0))
+    if seconds >= 172_800:  # from two days on: '17d 04h'
+        return f"{seconds // 86_400}d {seconds % 86_400 // 3600:02d}h"
     if seconds >= 3600:
         return f"{seconds // 3600}h {seconds % 3600 // 60:02d}m"
     return f"{seconds // 60}m {seconds % 60:02d}s"
@@ -176,6 +201,17 @@ def fmt_dur(seconds):
 def file_sha256(path):
     try:
         return data_prep.sha256_file(path)
+    except OSError:
+        return "?"
+
+
+def source_sha256(path):
+    """sha256 of a source file with its CRLF line ends read as LF, so the same code has the same hash in a
+    Windows checkout and elsewhere (the run header's hash of this script); '?' when it cannot be read.
+    file_sha256 hashes the bytes as they are: dataset and probe files, and the stored probes_sha, use that."""
+    try:
+        with open(path, "rb") as handle:
+            return hashlib.sha256(handle.read().replace(b"\r\n", b"\n")).hexdigest()
     except OSError:
         return "?"
 
@@ -293,19 +329,22 @@ GPU_BUSY_MESSAGE = ("The GPU is busy (another training run?): two training jobs 
                     "driver). Wait for the other job or stop it first.")
 
 
-def gpu_busy(*out_dirs):
+def gpu_busy(*out_dirs, smi=True):
     """True when another training job is running, on any device: a <name>.train.lock
     whose process is alive in one of `out_dirs` (default: this script's folder), or,
     where nvidia-smi exists, more than 2500 MiB of GPU memory in use or a utilization
     of 20 % or more (a training run holds gigabytes even while it saves). Without
     nvidia-smi (macOS) the lock files are the only signal, so every trainer in this
-    project takes one."""
+    project takes one. smi=False asks the lock files alone: nvidia-smi's figures are
+    also that high on desktop load, which is too weak a reason to warn every run."""
     for folder in out_dirs or (HERE,):
         try:
             if any(data_prep._lock_owner_alive(lock) for lock in glob.glob(os.path.join(folder, "*.train.lock"))):
                 return True
         except OSError:
             pass
+    if not smi:
+        return False
     try:
         out = subprocess.run(["nvidia-smi", "--query-gpu=memory.used,utilization.gpu",
                               "--format=csv,noheader,nounits"], capture_output=True, text=True, timeout=15).stdout
@@ -420,10 +459,10 @@ def choose_attention(device, cfg, amp_dtype, preference="auto"):
 
     'gqa_native' passes enable_gqa=True to SDPA; 'repeat_kv' expands K/V to all
     query heads (a small copy) first. Both compute the same attention. Which is
-    faster depends on which SDPA kernels this PyTorch build dispatches to: on
-    PyTorch 2.5.1 for Windows, enable_gqa falls back to the MATH kernel and was
-    measured ~13x slower per attention call (RTX 3070 Laptop GPU). So on CUDA
-    the two are simply timed on the model's real head shape and the faster wins.
+    faster depends on which SDPA kernels this PyTorch build dispatches to: some
+    builds (measured on Windows CUDA) send enable_gqa to the slow MATH kernel, so
+    on CUDA the two are timed on the model's real head shape and the faster wins;
+    the run header prints the timing.
     """
     if cfg.n_kv_heads == cfg.n_heads:
         return "repeat_kv", "multi-head attention (no K/V sharing)"
@@ -488,7 +527,7 @@ class ModelConfig:
     dropout: float = 0.0
     norm_eps: float = 1e-6
     tie_embeddings: bool = True
-    # QK-norm (an RMSNorm over each query and key head before RoPE). False is the dense default every checkpoint
+    # QK-norm (an RMSNorm over each query and key head before RoPE). False is the default every checkpoint
     # written before the field existed loads with; the planner turns it on for new runs.
     qk_norm: bool = False
     # Mixture of experts (n_experts 0 = the dense SwiGLU every checkpoint written before these fields existed
@@ -612,8 +651,8 @@ class RotaryEmbedding(nn.Module):
         """pos: the absolute position of the first token in q and k (KV-cached decoding)."""
         t = q.size(-2)
         cos, sin = self.cos[:, :, pos:pos + t], self.sin[:, :, pos:pos + t]
-        # The rotation is done in fp32 and rounded once at the end: cos/sin stay exact and the products are not
-        # rounded to bf16 twice (about a quarter less rounding error). torch.compile fuses the casts, so under
+        # The rotation is done in fp32 and rounded once at the end: cos/sin stay exact, so the products are
+        # rounded to bf16 once instead of twice. torch.compile fuses the casts, so under
         # autocast this costs nothing; in eager mode it is about 1% more memory traffic.
         qf, kf = q.float(), k.float()
         return ((qf * cos + rotate_half(qf) * sin).to(q.dtype), (kf * cos + rotate_half(kf) * sin).to(k.dtype))
@@ -807,7 +846,7 @@ class GroupedQueryAttention(nn.Module):
 
     def _qkv(self, x, rope, pos=0):
         """Rotated queries and keys plus values, (B, heads, T, head_dim). The single path for training,
-        KV-cached decoding and attention_weights, so QK-norm reaches all three alike."""
+        KV-cached decoding and the viewer's attention entropy, so QK-norm reaches all three alike."""
         b, t, _ = x.shape
         q = self.q_proj(x).view(b, t, self.n_heads, self.head_dim).transpose(1, 2)
         k = self.k_proj(x).view(b, t, self.n_kv_heads, self.head_dim).transpose(1, 2)
@@ -884,17 +923,6 @@ class GroupedQueryAttention(nn.Module):
             allowed = torch.ones(t, past + t, dtype=torch.bool, device=x.device).tril(past)
             y = F.scaled_dot_product_attention(q, k, v, attn_mask=allowed)
         return self.o_proj(y.transpose(1, 2).contiguous().view(b, t, -1))
-
-    @torch.no_grad()
-    def attention_weights(self, x, rope):
-        """Explicit causal softmax(QK^T/sqrt(d)) per head, shape (B, H, T, T) (for the
-        viewer; plain causal, without the optional document mask)."""
-        q, k, _ = self._qkv(x, rope)
-        k = k.repeat_interleave(self.n_rep, dim=1)
-        t = q.size(-2)
-        scores = (q.float() @ k.float().transpose(-1, -2)) / math.sqrt(self.head_dim)
-        mask = torch.ones(t, t, dtype=torch.bool, device=x.device).triu(1)
-        return scores.masked_fill(mask, float("-inf")).softmax(-1)
 
 
 class TransformerBlock(nn.Module):
@@ -1046,8 +1074,8 @@ class TinyGPT(nn.Module):
         embed = self.token_embedding.weight.numel()
         if not self.cfg.tie_embeddings:
             embed += self.lm_head.weight.numel()
-        cfg = self.cfg
-        idle = cfg.n_moe_blocks * 3 * cfg.d_model * cfg.expert_hidden * (cfg.n_experts - cfg.experts_per_token)
+        counted = count_params(self.cfg)
+        idle = counted[0] - counted[2]  # the experts a token does not use (0 for a dense model)
         return total, total - embed, total - idle, total - idle - embed
 
 
@@ -1148,9 +1176,9 @@ def count_params(cfg):
     d, h = cfg.d_model, cfg.ffn_hidden
     kv = cfg.n_kv_heads * cfg.head_dim
     per_layer = d * d * 2 + d * kv * 2 + 2 * d  # attention and the two norms
-    if getattr(cfg, "qk_norm", False):
+    if cfg.qk_norm:
         per_layer += 2 * cfg.head_dim  # the query and key norm gains, shared across heads
-    n_moe = getattr(cfg, "n_moe_blocks", 0)
+    n_moe = cfg.n_moe_blocks
     e, k, h_e, shared = cfg.n_experts, cfg.experts_per_token, cfg.expert_hidden, cfg.shared_hidden
     moe_ffn = e * 3 * d * h_e + e * d + 3 * d * shared if n_moe else 0  # experts, router, shared SwiGLU
     body = per_layer * cfg.n_layers + 3 * d * h * (cfg.n_layers - n_moe) + moe_ffn * n_moe + d
@@ -1202,9 +1230,12 @@ class LRSchedule:
 
     def describe(self):
         if self.kind == "wsd":
-            return (f"WSD: warmup 1-{self.warmup} (linear), stable to {self.decay_start} at {self.peak:.2e}, "
-                    f"decay {self.decay_start + 1}-{self.total} ({self.shape}) to {self.min_lr:.2e}")
-        return f"cosine: warmup 1-{self.warmup}, cosine to {self.min_lr:.2e} at {self.total}"
+            warmup = "no warmup" if self.warmup == 0 else f"warmup 1-{self.warmup} (linear)"
+            decay = ("no decay" if self.decay_start >= self.total
+                     else f"decay {self.decay_start + 1}-{self.total} ({self.shape}) to {self.min_lr:.2e}")
+            return f"WSD: {warmup}, stable to {self.decay_start} at {self.peak:.2e}, {decay}"
+        warmup = "no warmup" if self.warmup == 0 else f"warmup 1-{self.warmup}"
+        return f"cosine: {warmup}, cosine to {self.min_lr:.2e} at {self.total}"
 
 
 # ---------------------------------------------------------------------------
@@ -1331,7 +1362,9 @@ def model_from_checkpoint(obj, device="cpu", assign=False):
     if assign:
         model = _model_assigned(obj, cfg, device)
         if model is not None:
-            return model, tokenizer_from_checkpoint(obj), cfg
+            tok = tokenizer_from_checkpoint(obj)
+            apply_doc_mask(model, obj, tok)
+            return model, tok, cfg
     model = TinyGPT(cfg)
     missing, unexpected = model.load_state_dict(obj["model"], strict=False)
     missing = [m for m in missing if not (m == "lm_head.weight" and cfg.tie_embeddings)]
@@ -1339,7 +1372,19 @@ def model_from_checkpoint(obj, device="cpu", assign=False):
         raise SystemExit(f"Checkpoint weights do not match the architecture "
                          f"(missing {missing[:4]}, unexpected {unexpected[:4]}).")
     model.to(device).eval()
-    return model, tokenizer_from_checkpoint(obj), cfg
+    tok = tokenizer_from_checkpoint(obj)
+    apply_doc_mask(model, obj, tok)
+    return model, tok, cfg
+
+
+def apply_doc_mask(model, obj, tok):
+    """Give a model built from checkpoint `obj` the document mask its run trained with
+    (train_config "doc_mask", --doc-mask on): attention again stays within each document
+    of a window, so scoring outside training measures what training measured. Off for
+    every other checkpoint and for a tokenizer without a BOS id. KV-cached decoding
+    takes no mask, so generation is unchanged."""
+    bos = getattr(tok, "bos_id", None) if (obj.get("train_config") or {}).get("doc_mask") else None
+    model.doc_sep_id = bos if bos is not None and bos >= 0 else None
 
 
 def load_for_inference(path, device="cpu", trust=False):
@@ -1430,8 +1475,9 @@ def resolve_ema(settings, requested, resumed):
     evaluation), so the average is an opt-in for long runs, where its stable-phase
     gain is still to be measured. A resumed run keeps what its checkpoint says, and
     a checkpoint from before the key existed says off: a run never gains an average
-    silently. --ema on a resume overrides (a decay starts the average from the
-    current weights, off removes it)."""
+    silently. --ema on a resume overrides: a decay replaces the run's decay and its
+    saved average continues (a run without one starts it from the current weights);
+    off removes it."""
     if resumed:
         settings.setdefault("ema", 0.0)
         if requested is not None:
@@ -1463,11 +1509,8 @@ def ema_decay_at(decay, n):
     b_n = d (1 - d^(n-1)) / (1 - d^n). So b_1 = 0 (the first update copies the
     weights, whatever the average held before), b_2 = d / (1 + d) (two snapshots
     nearly equal), and b_n -> d once d^n is small (after ~460 updates at d = 0.990).
-    Without it the average started as a copy of the initial weights still held
-    d^n of them: 74 % after 30 updates (step 300), which made the EMA score 1.1
-    bits per byte worse than the raw weights in the 2026-11-05 A/B. n None: the
-    plain decay d (an average restored from a checkpoint written before the update
-    count was saved, which continues exactly as it did)."""
+    n None: the plain decay d (an average restored from a checkpoint written before
+    the update count was saved, which continues exactly as it did)."""
     if n is None:
         return decay
     if n <= 1:
@@ -1538,7 +1581,7 @@ def weights_for_checkpoint(model, device, bf16=False):
     torch.save moves one storage at a time to the CPU and writes shared storage once,
     so unified memory never holds a second full copy of the state (26-39 GB at 3B).
     bf16=True (--best-bf16, inference-only copies): half-size bfloat16 weights, cast
-    on the device, tied weights still one tensor."""
+    on the CPU for a CUDA model and on the device otherwise, tied weights still one tensor."""
     if not bf16 and device.type != "mps":
         return cpu_state_dict(model)
     out, seen = {}, {}
@@ -1547,7 +1590,8 @@ def weights_for_checkpoint(model, device, bf16=False):
         if ident not in seen:
             v = value.detach()
             if bf16 and v.is_floating_point():
-                v = v.to(torch.bfloat16)
+                # on CUDA straight to a CPU copy: a bf16 copy on the GPU would need memory the run may not have
+                v = v.to("cpu" if device.type == "cuda" else v.device, torch.bfloat16)
             seen[ident] = v
         out[key] = seen[ident]
     return out
@@ -1600,11 +1644,25 @@ def atomic_save(obj, path):
                 pass
 
 
+def last_dashboard_push(png_name):
+    """Unix time of the last commit of dashboards/<png_name> in this script's repository; 0.0 when there is
+    none (or no git, or no repository). A session starts its --dashboard-push-hours clock from it, so that a
+    --resume does not push again at its first new best."""
+    try:
+        out = subprocess.run(["git", "-C", HERE, "log", "-1", "--format=%ct", "--", f"dashboards/{png_name}"],
+                             capture_output=True, text=True, timeout=10)
+        return float(out.stdout.strip()) if out.returncode == 0 and out.stdout.strip() else 0.0
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return 0.0
+
+
 def launch_dashboard(path, args, state):
-    """Draw view_pt.py's dashboard for a new best checkpoint in the background
-    (CPU, idle priority; training does not wait). Skipped while the previous
-    one is still drawing. view_pt.py pushes it to GitHub (for checkpoints in this
-    repository's folder) at most every --dashboard-push-hours."""
+    """Draw view_pt.py's dashboard of the best checkpoint in the background (CPU,
+    idle priority; training does not wait): after every evaluation, since
+    view_pt.py adds the evaluations after the best file's last step from
+    <name>_metrics.jsonl. Skipped while the previous one is still drawing.
+    view_pt.py pushes it to GitHub (for checkpoints in this repository's
+    folder) at most every --dashboard-push-hours."""
     if state["proc"] is not None and state["proc"].poll() is None:
         return
     now = time.time()
@@ -1621,9 +1679,11 @@ def launch_dashboard(path, args, state):
                 state["proc"] = subprocess.Popen(cmd, cwd=HERE, stdout=log, stderr=subprocess.STDOUT,
                                                  env={**os.environ, "CUDA_VISIBLE_DEVICES": "-1"}, creationflags=flags)
             else:
-                state["proc"] = subprocess.Popen(cmd, cwd=HERE, stdout=log, stderr=subprocess.STDOUT,
-                                                 env={**os.environ, "CUDA_VISIBLE_DEVICES": "-1"},
-                                                 preexec_fn=lambda: os.nice(19))
+                # through the nice command, not preexec_fn: code run between fork and exec can deadlock the
+                # child of a process that has threads (the energy meter, torch)
+                niced = (["nice", "-n", "19"] + cmd) if shutil.which("nice") else cmd
+                state["proc"] = subprocess.Popen(niced, cwd=HERE, stdout=log, stderr=subprocess.STDOUT,
+                                                 env={**os.environ, "CUDA_VISIBLE_DEVICES": "-1"})
         if push:
             state["pushed"] = now
     except OSError as exc:
@@ -1767,8 +1827,8 @@ def parse_mix(text, sources):
             weights[name] = float(value)
         except ValueError:
             raise SystemExit(f"--mix: weight for {name} is not a number: {value!r}")
-        if weights[name] < 0:
-            raise SystemExit("--mix weights must be >= 0")
+        if not math.isfinite(weights[name]) or weights[name] < 0:
+            raise SystemExit("--mix weights must be finite numbers >= 0")
     if sum(weights.values()) <= 0:
         raise SystemExit("--mix: at least one weight must be positive")
     return weights
@@ -1902,13 +1962,18 @@ class EnergyMeter:
 
     def _sample_locked(self):
         now = time.perf_counter()
-        hours = (now - self._last_t) / 3600
+        dt = now - self._last_t
+        # a gap far longer than the period means the machine slept with the run alive: no power was drawn
+        # then, so at most three periods (plus 15 s of slack) are counted. Known limit: this thread also asks
+        # for the tariff (_price, at most one request per 10 minutes); a request that hangs for longer than
+        # that with no evaluation or save sampling meanwhile loses the excess, although power was drawn
+        hours = min(dt, 3 * self.period + 15) / 3600
         gpu_w = self._gpu_watts() if self.gpu_measured else None
         cpu_w = ram_w = 0.0
         if self._proc is not None:
             try:
                 cpu_time = sum(self._proc.cpu_times()[:2])
-                share = (cpu_time - self._cpu_time) / max((now - self._last_t) * self._ncpu, 1e-9)
+                share = (cpu_time - self._cpu_time) / max(dt * self._ncpu, 1e-9)
                 self._cpu_time = cpu_time
                 cpu_w = self.cpu_watts * min(max(share, 0.0), 1.0)
                 ram_w = RAM_W_PER_GB * self._proc.memory_info().rss / 2 ** 30
@@ -1918,8 +1983,9 @@ class EnergyMeter:
             added = 0.0
             if gpu_w is not None:  # trapezoid between samples
                 previous = self._last_gpu_w if self._last_gpu_w is not None else gpu_w
-                added += (previous + gpu_w) / 2 * hours
-                self.wh["gpu"] += (previous + gpu_w) / 2 * hours
+                gpu_wh = (previous + gpu_w) / 2 * hours
+                added += gpu_wh
+                self.wh["gpu"] += gpu_wh
                 self._last_gpu_w = gpu_w
             self.wh["cpu"] += cpu_w * hours
             self.wh["ram"] += ram_w * hours
@@ -1988,9 +2054,11 @@ class EnergyMeter:
     def co2e_g(self):
         return self.kwh() * self.grid
 
-    def short(self):
+    def short(self, co2e=True):
+        """'11.25 kWh, 1,407 g CO2e, £2.98'; co2e=False leaves out the carbon (the energy x a fixed intensity)."""
         cost = self.cost_gbp()
-        return f"{self.kwh():.2f} kWh, {self.co2e_g():,.0f} g CO2e" + (f", £{cost:.2f}" if cost is not None else "")
+        return (f"{self.kwh():.2f} kWh" + (f", {self.co2e_g():,.0f} g CO2e" if co2e else "")
+                + (f", £{cost:.2f}" if cost is not None else ""))
 
     def describe(self):
         gpu = (f"GPU {self.gpu_index} measured with nvidia-smi every {self.period:g} s" if self.gpu_measured
@@ -2047,7 +2115,7 @@ class TokenBatcher:
         if self.pin:
             t = t.pin_memory()
         t = t.to(self.device, non_blocking=True)
-        return t[:, :-1], t[:, 1:]
+        return input_and_target(t)
 
     def state_dict(self):
         return {"generator": self.gen.get_state()}
@@ -2056,6 +2124,13 @@ class TokenBatcher:
         if state and "generator" in state:
             self.gen.set_state(state["generator"].cpu() if isinstance(state["generator"], torch.Tensor)
                                else state["generator"])
+
+
+def input_and_target(windows):
+    """(x, y) of a (batch, ctx + 1) tensor of token windows: the first and the last ctx columns. Both are views,
+    so their strides are (ctx + 1, 1). torch.compile guards on the strides of its input: the warm-up of
+    maybe_compile cuts its batch here too, or the first training step would compile the model once more."""
+    return windows[:, :-1], windows[:, 1:]
 
 
 class EvalSet:
@@ -2077,11 +2152,8 @@ class EvalSet:
             self.windows[name] = torch.from_numpy(
                 np.asarray(array[starts[:, None] + np.arange(ctx + 1)[None, :]], dtype=np.int64))
         if not self.windows:
-            raise SystemExit(f"No validation source has more than ctx+1 = {ctx + 1} tokens; "
+            raise SystemExit(f"No validation source has at least ctx+1 = {ctx + 1} tokens; "
                              "rebuild the dataset with a larger --val-fraction or lower --ctx.")
-
-    def describe(self):
-        return ", ".join(f"{n} {w.shape[0]} x {w.shape[1] - 1}" for n, w in self.windows.items())
 
 
 @torch.no_grad()
@@ -2110,6 +2182,8 @@ def evaluate(model, evalset, device, amp_dtype, batch_windows, bins=10, byte_tab
     acc_sum = torch.zeros(bins, dtype=torch.float64)
     count = torch.zeros(bins, dtype=torch.float64)
     bpb_source = {}
+    # MPS has no float64: there the tensors go to the CPU first
+    to64 = (lambda t: t.cpu().double()) if device.type == "mps" else (lambda t: t.double())  # noqa: E731
     for name, windows in evalset.windows.items():
         nll_total, tokens, n_bytes = 0.0, 0, 0
         for start in range(0, windows.shape[0], batch_windows):
@@ -2122,18 +2196,20 @@ def evaluate(model, evalset, device, amp_dtype, batch_windows, bins=10, byte_tab
             probs = logp.exp()
             entropy = -(probs * logp).sum(-1)
             conf, pred = probs.max(-1)
-            correct = (pred == y).double()
-            nll_total += nll.double().sum().item()
+            correct = to64(pred == y)
+            nll_total += to64(nll).sum().item()
             tokens += y.numel()
             if byte_tables is not None:
                 size, marked, line_break = byte_tables
                 yc, xc = y.cpu(), x.cpu()
                 n_bytes += int(size[yc].sum()) - int((marked[yc] & line_break[xc]).sum())
-            sums["entropy"] += entropy.double().sum().item()
-            sums["confidence"] += conf.double().sum().item()
+            sums["entropy"] += to64(entropy).sum().item()
+            c = to64(conf)
+            sums["confidence"] += c.sum().item()
             sums["top1"] += correct.sum().item()
-            which = (conf.double().clamp(0, 1 - 1e-9) * bins).long().flatten().cpu()
-            conf_sum += torch.bincount(which, conf.double().flatten().cpu(), bins)
+            # a non-finite logit (NaN confidence) lands in bin 0: the loss then reads nan instead of bincount raising
+            which = (c.nan_to_num(0.0).clamp(0, 1 - 1e-9) * bins).long().clamp(0, bins - 1).flatten().cpu()
+            conf_sum += torch.bincount(which, c.flatten().cpu(), bins)
             acc_sum += torch.bincount(which, correct.flatten().cpu(), bins)
             count += torch.bincount(which, minlength=bins).double()
         per_source[name] = nll_total / max(tokens, 1)
@@ -2181,9 +2257,11 @@ def read_probes(path):
             if not line.strip() or line.lstrip().startswith("#"):
                 continue
             parts = [p.strip() for p in line.rstrip("\n").split("\t")]
+            while parts and not parts[-1]:  # trailing tabs are not columns
+                parts.pop()
             if len(parts) >= 5:
                 category, difficulty, prompt, answer, options = parts[:5]
-            elif len(parts) >= 3:
+            elif len(parts) == 3:  # exactly three: four columns are a long-form line without its distractors
                 category, difficulty, (prompt, answer, options) = "general", "unrated", parts[:3]
             else:
                 raise SystemExit(f"{path}:{line_no}: expected category<TAB>difficulty<TAB>prompt<TAB>answer<TAB>"
@@ -2242,25 +2320,24 @@ def score_probes(model, tok, probes, device, amp_dtype, batch_size=64, floor=Tru
         chunk = seqs[start:start + batch_size]
         width = max(len(s[3]) for s in chunk) - 1
         x = torch.zeros((len(chunk), width), dtype=torch.long)
-        rows, cols, targets, owner = [], [], [], []
+        rows, cols, targets = [], [], []
         for b, (_, _, _, ids, n_cont, _) in enumerate(chunk):
             x[b, :len(ids) - 1] = torch.tensor(ids[:-1])
             rows += [b] * n_cont
             cols += range(len(ids) - 1 - n_cont, len(ids) - 1)
             targets += ids[len(ids) - n_cont:]
-            owner += [b] * n_cont
+        rows_t = torch.tensor(rows, device=device)  # the batch row of each scored position
         with torch.autocast(device.type, dtype=amp_dtype or torch.float32, enabled=amp_dtype is not None):
             if isinstance(model, TinyGPT):  # the output layer only at the scored positions, not everywhere
                 hidden = model(x.to(device), return_hidden=True)
-                picked = model.lm_head(hidden[torch.tensor(rows, device=device), torch.tensor(cols, device=device)])
+                picked = model.lm_head(hidden[rows_t, torch.tensor(cols, device=device)])
             else:
                 logits = model(x.to(device))
-                picked = logits[torch.tensor(rows, device=device), torch.tensor(cols, device=device)]
+                picked = logits[rows_t, torch.tensor(cols, device=device)]
         picked = picked.float()
         target_logp = (picked.gather(-1, torch.tensor(targets, device=device)[:, None]).squeeze(-1)
                        - torch.logsumexp(picked, dim=-1))  # only the scored positions, not the whole vocabulary
-        sums = torch.zeros(len(chunk), device=device).index_add_(0, torch.tensor(owner, device=device),
-                                                                 target_logp).cpu()
+        sums = torch.zeros(len(chunk), device=device).index_add_(0, rows_t, target_logp).cpu()
         for b, (i, v, j, _, _, n_chars) in enumerate(chunk):
             scores[i][v][j] = float(sums[b]) / n_chars
     results = []
@@ -2329,7 +2406,7 @@ def watermark_green(key, prev_token, vocab_size, gamma=0.25, _cache={}):
         perm = torch.randperm(vocab_size, generator=torch.Generator().manual_seed(seed))
         mask = torch.zeros(vocab_size, dtype=torch.bool)
         mask[perm[: int(gamma * vocab_size)]] = True
-        if len(_cache) > 50_000:
+        if len(_cache) >= max(256, 64 * 2 ** 20 // vocab_size):  # at most about 64 MiB of masks (1 byte per token)
             _cache.clear()
         _cache[k] = mask
     return _cache[k]
@@ -2337,11 +2414,9 @@ def watermark_green(key, prev_token, vocab_size, gamma=0.25, _cache={}):
 
 class IncrementalDecoder:
     """Next-token logits for a growing token list, with a KV cache for TinyGPT models:
-    the prompt is processed once, then one token per step. When the text outgrows the
-    context window, the cache restarts from the last 7/8 of a window (the old way
-    recomputed the last full window at every step, so texts longer than the context
-    can differ slightly from it). Other models (wrappers, legacy) are recomputed in
-    full at every step, as before."""
+    the prompt is processed once, then one token per step. Texts longer than the
+    context are approximated by restarting the cache from the last 7/8 window;
+    non-TinyGPT models (wrappers, legacy) are recomputed in full each step."""
 
     def __init__(self, model, device, amp_dtype=None):
         self.model, self.device, self.amp_dtype = model, device, amp_dtype
@@ -2367,6 +2442,24 @@ class IncrementalDecoder:
             return model.lm_head(h[:, -1])[0].float().cpu()
 
 
+def sample_next(logits_2d, generator, temperature, top_k, top_p):
+    """One sampled token id per row of logits_2d (B, V): the logits divided by the temperature, cut to the
+    top_k largest (0 = no cut) and then to the smallest set whose probability reaches top_p (nucleus sampling;
+    outside 0..1 = no cut), and one draw per row from `generator`. A temperature below 1e-6 counts as 1e-6
+    (as good as greedy), so the division cannot overflow; generate() decodes greedily at 0 and below."""
+    logits = logits_2d.float() / max(temperature, 1e-6)
+    if top_k and top_k < logits.size(-1):
+        kth = torch.topk(logits, top_k, dim=-1).values[:, -1:]
+        logits = logits.masked_fill(logits < kth, float("-inf"))
+    probs = logits.softmax(-1)
+    if 0 < top_p < 1:
+        sp, order = probs.sort(dim=-1, descending=True)
+        sp = sp.masked_fill(sp.cumsum(-1) - sp > top_p, 0)
+        probs = torch.zeros_like(probs).scatter(-1, order, sp)
+        probs = probs / probs.sum(-1, keepdim=True)
+    return torch.multinomial(probs, 1, generator=generator).squeeze(-1)
+
+
 @torch.no_grad()
 def generate(model, tok, prompt, max_new_tokens, device, amp_dtype=None, temperature=0.8, top_k=50,
              top_p=0.95, generator=None, watermark=None):
@@ -2388,18 +2481,7 @@ def generate(model, tok, prompt, max_new_tokens, device, amp_dtype=None, tempera
         if temperature <= 0:
             nxt = int(logits.argmax())
         else:
-            logits = logits / temperature
-            if top_k and top_k < logits.numel():
-                kth = torch.topk(logits, top_k).values[-1]
-                logits[logits < kth] = float("-inf")
-            probs = logits.softmax(-1)
-            if 0 < top_p < 1:
-                sorted_p, order = probs.sort(descending=True)
-                drop = sorted_p.cumsum(0) - sorted_p > top_p
-                sorted_p[drop] = 0
-                probs = torch.zeros_like(probs).scatter(0, order, sorted_p)
-                probs /= probs.sum()
-            nxt = int(torch.multinomial(probs, 1, generator=generator))
+            nxt = int(sample_next(logits[None], generator, temperature, top_k, top_p)[0])
         if nxt == tok.eos_id:
             break
         ids.append(nxt)
@@ -2411,12 +2493,10 @@ def generate(model, tok, prompt, max_new_tokens, device, amp_dtype=None, tempera
 # ---------------------------------------------------------------------------
 # Planner
 # ---------------------------------------------------------------------------
-# Twice the published rates (see heuristic_lr); the factor 2 comes from the 2026-11-05 sweep
+# LR_TABLE_FACTOR x the published rates: the sweep behind the factor is in heuristic_lr's docstring
 LR_TABLE_FACTOR = 2.0
 LR_TABLE = [(1e6, 4.0e-3), (1e7, 2.4e-3), (1e8, 1.2e-3), (1e9, 6.0e-4)]
-# lr x weight decay is the shrink per step of decoupled weight decay (p <- p (1 - lr wd), AdamW and Muon alike)
-# and 1 / (lr wd) its timescale (Wang and Aitchison 2024); the published 0.1 belongs to the published rates, so
-# with the table at LR_TABLE_FACTOR x those rates the default is 0.1 / LR_TABLE_FACTOR
+# the published 0.1 divided by the same factor, so lr x weight decay (the shrink per step) stays as published
 WEIGHT_DECAY_DEFAULT = 0.1 / LR_TABLE_FACTOR
 
 
@@ -2436,8 +2516,7 @@ def heuristic_lr(n_params):
     above x4; a 500-step optimum over-states the rate of a run 60x longer by about
     1.7x (DeepSeek LLM's C^-0.125 compute term), 4 / 1.7 = 2.35, so the measured
     arm below that, 2, is applied. x1 was not run at d 512 (time cap) and AdamW
-    alone was not swept; the first long run with this table is checked against an
-    old-table run at 2,000 steps. Runs planned before it keep their recorded rate
+    alone was not swept. Runs planned before the sweep keep their recorded rate
     (--resume never re-plans the rate)."""
     x = math.log10(max(n_params, 1))
     pts = [(math.log10(n), math.log10(lr)) for n, lr in LR_TABLE]
@@ -2455,10 +2534,10 @@ def default_layers(d_model):
 
 def default_ctx(d_model):
     """Context length by width: the one rule plan_run, plan_table and
-    estimate_dataset share. 1024 up to d 1024 (the laptop plan), 2048 up to
-    d 2048 (the 1.45B Mac shape), 4096 above. Attention is 12 x layers x ctx x d
-    FLOPs per token on top of 6 N, so a longer context costs a growing share
-    (attention_flop_share); --ctx overrides."""
+    estimate_dataset share. 256 up to d 192, 512 up to d 512, 1024 up to d 1024
+    (the laptop plan), 2048 up to d 2048 (the 1.45B Mac shape), 4096 above.
+    Attention is 12 x layers x ctx x d FLOPs per token on top of 6 N, so a longer
+    context costs a growing share (attention_flop_share); --ctx overrides."""
     if d_model <= 192:
         return 256
     if d_model <= 512:
@@ -2470,10 +2549,12 @@ def default_ctx(d_model):
 
 def default_rope_base(ctx):
     """RoPE base for a context: 10,000 up to ctx 2048, then growing as ctx^2
-    (10,000 x (ctx / 2048)^2 rounded to thousands: 4k 40k, 8k 160k, 16k 640k),
-    at or above the lower bound of Men et al. 2024 ("Base of RoPE bounds
-    context length") and Llama 3's 500k at 8k. Below the bound the model keeps
-    its perplexity but loses long-range retrieval."""
+    (10,000 x (ctx / 2048)^2 rounded to thousands: 4k 40k, 8k 160k, 16k 640k).
+    Against the lower bound of Men et al. 2024 ("Base of RoPE bounds context
+    length", Table 2: 1k 4.3e3, 2k 1.6e4, 4k 2.7e4, 8k 8.4e4, 16k 3.1e5) the
+    default is at or above it at every length except ctx 2048, where 10,000 is
+    below the 1.6e4 bound. Below the bound the model keeps its perplexity but
+    loses long-range retrieval."""
     if ctx <= 2048:
         return 10_000.0
     return float(round(10_000 * (ctx / 2048) ** 2, -3))
@@ -2482,8 +2563,7 @@ def default_rope_base(ctx):
 def attention_flop_share(cfg):
     """Share of the training FLOPs per token spent on attention scores:
     12 L ctx d / (6 N + 12 L ctx d) (see flops_per_token)."""
-    attn = 12 * cfg.n_layers * cfg.ctx * cfg.d_model
-    return attn / (6 * count_params(cfg)[2] + attn)
+    return 12 * cfg.n_layers * cfg.ctx * cfg.d_model / flops_per_token(cfg)
 
 
 def default_head_dim(d_model):
@@ -2491,7 +2571,8 @@ def default_head_dim(d_model):
 
 
 def default_kv_heads(n_heads):
-    """GQA with 4 query heads per K/V head once there are >= 8 heads."""
+    """GQA with 4 query heads per K/V head once there are >= 8 heads, when the
+    head count is divisible by 4 (otherwise ordinary multi-head attention)."""
     return n_heads // 4 if n_heads >= 8 and n_heads % 4 == 0 else n_heads
 
 
@@ -2506,9 +2587,9 @@ def shape_ladder(vocab_size, ctx=512):
 
 
 def tokens_per_step_legacy(n_params):
-    """The rule before the 2026-11 audit: ~16 sqrt(N) tokens per optimizer step,
-    rounded to a power of two between 16k and 512k. Kept as the reference
-    batch of the learning-rate table (lr_batch_factor)."""
+    """The reference batch the learning-rate table was calibrated at (the old
+    16 sqrt(N) rule): ~16 sqrt(N) tokens per optimizer step, rounded to a power
+    of two between 16k and 512k (lr_batch_factor)."""
     raw = 16 * math.sqrt(n_params)
     return int(min(max(2 ** round(math.log2(raw)), 16_384), 524_288))
 
@@ -2556,11 +2637,11 @@ def resume_min_lr(settings, step, ratio):
     schedule = LRSchedule(settings["schedule"], settings["steps"], settings["lr"], settings["min_lr"],
                           settings["warmup_steps"], settings["decay_frac"], settings["decay_shape"])
     new_min = float(settings["lr"]) * float(ratio)
+    if new_min == float(settings["min_lr"]):
+        return False, f"Note: --min-lr-ratio {ratio:g}: this run's min_lr is already {new_min:.2e}."
     if schedule.phase(int(step)) == "decay":
         return False, (f"Note: --min-lr-ratio {ratio:g} ignored (already in the decay phase); the schedule keeps "
                        f"min_lr {settings['min_lr']:.2e}.")
-    if new_min == float(settings["min_lr"]):
-        return False, f"Note: --min-lr-ratio {ratio:g}: this run's min_lr is already {new_min:.2e}."
     settings["min_lr"] = new_min
     return True, (f"Note: --min-lr-ratio {ratio:g}: min_lr {new_min:.2e} from the decay phase on; nothing changes "
                   "before it.")
@@ -2705,11 +2786,10 @@ def estimate_train_bytes(cfg, micro_batch, amp=True, checkpointing=False, loss_c
     state (AdamW 8; Muon 4 for the block matrices), activations kept for the
     backward pass (only each block's FP32 input with activation checkpointing,
     plus one block being recomputed) and the output-layer logits (one piece of
-    loss_chunk tokens when the loss is computed in pieces). The activation and
-    logit terms are calibrated to the CUDA allocator's RESERVED peak (measured
-    estimate/peak 0.98-1.21 eager, 1.05-1.3 compiled, on the 216M run's shapes);
-    the 0.8 budget factor is the margin and the first-step out-of-memory handler
-    the safety net, so no further factor is applied here. With `device` given and
+    loss_chunk tokens when the loss is computed in pieces). The reference is the
+    CUDA allocator's ALLOCATED peak (peak_memory_bytes); the 0.8 budget factor is
+    the margin and the first-step out-of-memory handler the safety net, so no
+    further factor is applied here. With `device` given and
     attention_keeps_scores(device) true (MPS), each layer also keeps its causal
     scores: n_heads x ctx x 6 bytes per token (the bf16 cast copy, 2, and the fp32
     softmax output, 4); with checkpointing the `+ t * per_token_layer` term already
@@ -2750,7 +2830,7 @@ def estimate_train_bytes(cfg, micro_batch, amp=True, checkpointing=False, loss_c
         logits += t * cfg.d_model * (4 + 4)  # the (FP32) hidden states and their gradient, kept whole
     state = 8 * n_total if optimizer != "muon" else 8 * (n_total - n_nonembed) + 4 * n_nonembed
     weight_cache = (2 if amp else 0) * n_total
-    return int((activations + logits) * 1.0 + n_total * 8 + weight_cache + state + 400 * 2 ** 20)
+    return int(activations + logits + n_total * 8 + weight_cache + state + 400 * 2 ** 20)
 
 
 def memory_options(checkpointing="auto", loss_chunk=None):
@@ -2760,6 +2840,7 @@ def memory_options(checkpointing="auto", loss_chunk=None):
     (measured on the RTX 3070 at the 216M shape)."""
     ck = [False, True] if checkpointing == "auto" else [checkpointing == "on"]
     lc = [0, LOSS_CHUNK_TOKENS] if loss_chunk is None else [loss_chunk]
+    # cheapest first (the comprehension already yields that order; the key states the rule)
     return sorted(((c, l) for c in ck for l in lc), key=lambda o: (o[0], o[1] != 0))
 
 
@@ -2815,15 +2896,13 @@ def split_batch(target, largest, smallest=1):
     return best
 
 
-def choose_micro_batch(cfg, tokens_per_step, budget_bytes, amp):
-    micro, accum, _, _ = choose_memory_plan(cfg, tokens_per_step, budget_bytes, amp)
-    return micro, accum
-
-
-def plan_run(args, manifest, device, amp_dtype, token_cap=None, fixed_cfg=None):
+def plan_run(args, manifest, device, amp_dtype, token_cap=None, fixed_cfg=None, verbose=True):
     """Fill every unset hyper-parameter from the dataset and device.
 
     token_cap limits the training-token budget (used by --time-budget-hours).
+    verbose=False: the explanation lines for a run header, without what the
+    header prints itself (the per-source token list, the batch, the weights and
+    source shares that are all equal); warnings and notes are always kept.
     fixed_cfg: an architecture that is not up for planning (--init-from: the
     checkpoint's ModelConfig, experts included); memory, batch, steps and the
     learning rate are then sized for exactly it. The compute rules (tokens per
@@ -2839,7 +2918,7 @@ def plan_run(args, manifest, device, amp_dtype, token_cap=None, fixed_cfg=None):
     max_epochs = args.max_epochs
     # the document mask stays opt-in at every context: at ctx 512 it changed bits per byte by -0.0016 (noise) for
     # ~8 % more forward+backward time (2026-11-05 A/B); ctx >= 2048 is unmeasured, so no planner default yet
-    doc_mask = getattr(args, "doc_mask", None) == "on"
+    doc_mask = args.doc_mask == "on"
 
     # --- training-token budget D ---
     # D is fixed by the data (or by an explicit token count). --steps alone decides
@@ -2866,7 +2945,7 @@ def plan_run(args, manifest, device, amp_dtype, token_cap=None, fixed_cfg=None):
     fitting = [c for c in ladder if count_params(c)[2] * r <= planned]
     target = planned / r
     explicit_shape = any(v is not None for v in (args.d_model, args.layers, args.heads, args.kv_heads))
-    n_experts = int(getattr(args, "experts", 0) or 0)
+    n_experts = int(args.experts)
 
     def shaped(base):
         if fixed_cfg is not None:
@@ -2886,19 +2965,19 @@ def plan_run(args, manifest, device, amp_dtype, token_cap=None, fixed_cfg=None):
         cfg.ffn_hidden = args.ffn_hidden or swiglu_hidden(cfg.d_model)
         # the RoPE base follows the context unless given (10,000 up to ctx 2048, then ctx^2)
         cfg.rope_base = args.rope_base if args.rope_base else default_rope_base(cfg.ctx)
-        cfg.tie_embeddings = getattr(args, "tie_embeddings", "on") != "off"
+        cfg.tie_embeddings = args.tie_embeddings != "off"
         # new runs get QK-norm unless told otherwise: -0.106 bits per byte against the same run without it at the
         # same rate (d 384, 500 steps, 2026-11-05 A/B), at no step time that the clock noise could resolve
-        cfg.qk_norm = getattr(args, "qk_norm", None) != "off"
+        cfg.qk_norm = args.qk_norm != "off"
         # mixture of experts only when asked (--experts N); dense stays the default
         cfg.n_experts = n_experts
-        cfg.experts_per_token = int(getattr(args, "experts_per_token", 2) or 2)
-        cfg.expert_hidden = (int(getattr(args, "expert_hidden", 0) or 0)
+        cfg.experts_per_token = int(args.experts_per_token)
+        cfg.expert_hidden = (int(args.expert_hidden)
                              or expert_hidden_for(cfg.ffn_hidden, cfg.experts_per_token)) if n_experts else 0
-        cfg.shared_hidden = int(getattr(args, "shared_hidden", 0) or 0) if n_experts else 0
-        cfg.moe_every = int(getattr(args, "moe_every", 1) or 1)
-        cfg.router = getattr(args, "router", None) or "softmax"
-        cfg.balance = getattr(args, "balance", None) or "bias"
+        cfg.shared_hidden = int(args.shared_hidden) if n_experts else 0
+        cfg.moe_every = int(args.moe_every)
+        cfg.router = args.router or "softmax"
+        cfg.balance = args.balance or "bias"
         cfg.validate()
         return cfg
 
@@ -2914,6 +2993,11 @@ def plan_run(args, manifest, device, amp_dtype, token_cap=None, fixed_cfg=None):
         tps = target_tps(cfg)
         amp, opt_kind = amp_dtype is not None, args.optimizer or "adamw"
         if args.batch_size:
+            if fixed_cfg is None and not explicit_shape:
+                # a ladder shape must fit at batch 1 with some memory option whatever --batch-size says: the
+                # SystemExit of this call sends the candidate loop below to the next smaller shape
+                choose_memory_plan(cfg, tps, budget_bytes, amp, opt_kind, args.activation_checkpointing,
+                                   args.loss_chunk_tokens, device=device, doc_mask=doc_mask)
             micro, accum, ck, lc = choose_memory_plan(cfg, tps, budget_bytes, amp, opt_kind,
                                                       args.activation_checkpointing, args.loss_chunk_tokens,
                                                       micro=args.batch_size, device=device, doc_mask=doc_mask)
@@ -2962,22 +3046,20 @@ def plan_run(args, manifest, device, amp_dtype, token_cap=None, fixed_cfg=None):
     epochs = train_tokens / max(unique, 1)
     dropout = args.dropout if args.dropout is not None else (0.0 if epochs <= 4 else 0.1)
     cfg.dropout = dropout
-    # the LR table was calibrated at the old batch rule; a doubled or halved batch moves the rate by sqrt(2). The
-    # factor follows the batch the run will use (micro x accumulation x ctx: --batch-size and --grad-accum may fix it
-    # far from the planner's target), and its power-of-two rounding leaves accumulation rounding alone
+    # lr_batch_factor on the batch the run will use (micro x accumulation x ctx): about x1.4 / x0.7 for double / half
     lr_factor = 1.0 if args.lr else lr_batch_factor(n_active, tokens_per_step)
-    # --lr-scale: the sweep knob on the heuristic rate (LR_TABLE moves only by a factor that two sizes agree on, with
-    # lr x weight_decay kept constant: see heuristic_lr and WEIGHT_DECAY_DEFAULT)
-    lr_scale = float(getattr(args, "lr_scale", 1.0) or 1.0)
+    # --lr-scale: the sweep knob on the heuristic rate
+    lr_scale = float(args.lr_scale)
     if args.lr and lr_scale != 1.0:  # recorded as the factor the run's rate actually carries
         lines.append(f"--lr-scale {lr_scale:g} has no effect: --lr sets the peak learning rate (recorded as 1)")
         lr_scale = 1.0
     lr = args.lr or heuristic_lr(n_active) * lr_factor * lr_scale
     min_lr_ratio = resolve_min_lr_ratio(args.min_lr_ratio, args.schedule)
     warmup = args.warmup_steps if args.warmup_steps is not None else int(min(max(round(0.02 * steps), 50), 2000, max(1, steps // 10)))
-    mix_alpha = getattr(args, "mix_alpha", None)
-    mix_alpha = 1.0 if mix_alpha is None else float(mix_alpha)
-    weights = mix_weights(getattr(args, "mix", None), train_by_source, train_by_source, mix_alpha)
+    if args.warmup_steps is not None and args.warmup_steps >= steps:  # validate_args can only compare with --steps
+        raise SystemExit(f"--warmup-steps {args.warmup_steps:,} must be smaller than the {steps:,} planned steps.")
+    mix_alpha = 1.0 if args.mix_alpha is None else float(args.mix_alpha)
+    weights = mix_weights(args.mix, train_by_source, train_by_source, mix_alpha)
     raw_share = {s: weights[s] * n for s, n in train_by_source.items()}
     share = {s: v / max(sum(raw_share.values()), 1e-12) for s, v in raw_share.items()}
     source_epochs = {s: train_tokens * share[s] / max(n, 1) for s, n in train_by_source.items()}
@@ -2990,28 +3072,31 @@ def plan_run(args, manifest, device, amp_dtype, token_cap=None, fixed_cfg=None):
         "lr_scale": lr_scale, "doc_mask": doc_mask,
     }
     if cfg.n_experts:  # the mixture-of-experts training terms (see the training loop)
-        settings["lb_loss"] = float(getattr(args, "lb_loss", LB_LOSS_DEFAULT))
-        settings["router_z_loss"] = float(getattr(args, "router_z_loss", ROUTER_Z_LOSS_DEFAULT))
-        settings["bias_rate"] = float(getattr(args, "bias_rate", BIAS_RATE_DEFAULT))
-    resolve_ema(settings, getattr(args, "ema", None), resumed=False)
+        settings["lb_loss"] = float(args.lb_loss)
+        settings["router_z_loss"] = float(args.router_z_loss)
+        settings["bias_rate"] = float(args.bias_rate)
+    resolve_ema(settings, args.ema, resumed=False)
     moe_text = ""
     if cfg.n_experts:
         moe_text = (f", MoE: {cfg.n_experts} experts of hidden {cfg.expert_hidden}, {cfg.experts_per_token} per "
                     f"token" + (f" in every {cfg.moe_every}. block" if cfg.moe_every > 1 else "")
                     + (f", shared SwiGLU {cfg.shared_hidden}" if cfg.shared_hidden else "")
                     + f", {cfg.router} router, balance {cfg.balance}")
-    lines += [
-        f"unique training tokens U = {unique:,} ({', '.join(f'{k} {v:,}' for k, v in train_by_source.items())}); "
-        f"vocabulary {vocab:,}; {budget_text}",
+    ctx_why = ("--ctx" if args.ctx else "from the checkpoint" if fixed_cfg is not None
+               else f"default for d_model {cfg.d_model}")
+    attention = f"attention {attention_flop_share(cfg):.0%} of the training FLOPs per token"
+    block = [
+        f"unique training tokens U = {unique:,}"
+        + (f" ({', '.join(f'{k} {v:,}' for k, v in train_by_source.items())})" if verbose else "")
+        + f"; vocabulary {vocab:,}; {budget_text}",
         f"token budget D = {planned:,} ({why}); shape: {shape_why}",
         f"model: d_model {cfg.d_model}, layers {cfg.n_layers}, heads {cfg.n_heads}/{cfg.n_kv_heads} kv "
-        f"(head {cfg.head_dim}), SwiGLU {cfg.ffn_hidden}{', QK-norm' if cfg.qk_norm else ''}{moe_text}, ctx {cfg.ctx}, "
-        f"RoPE base {cfg.rope_base:,.0f}"
+        f"(head {cfg.head_dim}), SwiGLU {cfg.ffn_hidden}{', QK-norm' if cfg.qk_norm else ''}{moe_text}, ctx {cfg.ctx}"
+        f"{'' if verbose else f' ({ctx_why}; {attention})'}, RoPE base {cfg.rope_base:,.0f}"
         f"{'' if args.rope_base or fixed_cfg is not None else ' (default for this ctx)'}; parameters {n_total:,} total, "
         + (f"{n_active:,} active per token, " if cfg.n_experts else "")
         + f"{n_nonembed:,} excluding the ({'tied' if cfg.tie_embeddings else 'untied'}) embedding",
-        f"ctx {cfg.ctx} ({'--ctx' if args.ctx else 'from the checkpoint' if fixed_cfg is not None else f'default for d_model {cfg.d_model}'}): attention "
-        f"{attention_flop_share(cfg):.0%} of the training FLOPs per token",
+        f"ctx {cfg.ctx} ({ctx_why}): {attention}",
         f"batch: {micro} x {cfg.ctx} tokens x {accum} accumulation = {tokens_per_step:,} tokens/step; "
         f"{steps:,} steps = {train_tokens:,} training tokens",
         f"ratios: {train_tokens / n_active:,.1f} training tokens per {'active ' if cfg.n_experts else ''}parameter "
@@ -3043,14 +3128,29 @@ def plan_run(args, manifest, device, amp_dtype, token_cap=None, fixed_cfg=None):
         f"of {budget_text})",
         "weights: " + (f"EMA with decay {settings['ema']:g} per step (updated every {EMA_EVERY} steps), scored beside "
                        "the raw weights at each evaluation; the better of the two is saved as the best model"
-                       if settings["ema"] else "no EMA (--ema off)" if getattr(args, "ema", None) is not None
+                       if settings["ema"] else "no EMA (--ema off)" if args.ema is not None
                        else "no EMA (opt-in: --ema 0.999)")
         + ("; document mask on: attention stays within each document of a window (B x T x T bytes of mask)"
            if doc_mask else ""),
     ]
+    if not verbose:
+        # the run header has the batch and the weights; the ratios of a dense model follow from its budget line, and
+        # source shares are news only when the sources are not all read the same number of times
+        hidden = ("ctx ", "batch:", "weights:") + (() if cfg.n_experts else ("ratios:",))
+        if len({f"{e:.2f}" for e in source_epochs.values()}) <= 1:
+            hidden += ("sources:",)
+        block = [line for line in block if not line.startswith(hidden)]
+    lines += block
     if args.steps and train_tokens > max_epochs * unique:
         lines.append(f"note: --steps {args.steps:,} trains {epochs:.2f} epochs, more than --max-epochs {max_epochs:g}.")
-    floor = float(getattr(args, "tokens_per_total_param", 0) or 0)
+    usual_tps = tokens_per_step_for(n_active, planned)
+    if args.steps and not args.tokens_per_step and tokens_per_step > 4 * usual_tps:
+        # --steps alone shares the whole budget D among the steps: nothing bounds the step (target_tps)
+        lines.append(f"WARNING: --steps {args.steps:,} alone divides the token budget D by the steps: "
+                     f"{tokens_per_step:,} tokens per step, {tokens_per_step / usual_tps:,.0f}x the {usual_tps:,} the "
+                     "planner would choose for this model and budget. For a short run add --tokens-per-step (the "
+                     "budget is then --steps x --tokens-per-step), or give --train-tokens instead of --steps.")
+    floor = float(args.tokens_per_total_param)
     if cfg.n_experts and floor > 0 and train_tokens / n_total < floor:
         lines.append(f"WARNING: {train_tokens / n_total:,.1f} training tokens per TOTAL parameter is below the "
                      f"--tokens-per-total-param floor {floor:g}: every published mixture-of-experts gain was "
@@ -3156,8 +3256,13 @@ def sustained_speed(out_dir, device):
     """(FLOP/s, description) that this computer sustained in its last training run
     of at least 12 minutes on this kind of device (experiments.csv), or (None,
     reason). A short benchmark on a cool laptop GPU runs at boost clocks; over
-    hours the power and heat limits slow it down (1.7x on this RTX 3070), so a
-    real run is the better guide. Rows from before the device column are CUDA."""
+    hours the power and heat limits slow it down (about 1.6x on this RTX 3070), so a
+    real run is the better guide. Rows from before the device column are CUDA.
+    The rows of a resumed run are cumulative: when an earlier row of the same
+    run exists (same name, device and shape, written less than the run's whole
+    training time before this one, so that it cannot be an older run of that
+    name) the speed is that of the last session alone, the difference between
+    the two rows, if it lasted 12 minutes or more."""
     import csv
     try:
         path = experiments_path(out_dir)
@@ -3168,7 +3273,8 @@ def sustained_speed(out_dir, device):
                     and (r.get("device") or "cuda").startswith(device.type)]
     except OSError:
         return None, "no experiments.csv"
-    for r in reversed(rows):
+    for i in range(len(rows) - 1, -1, -1):
+        r = rows[i]
         try:
             moe = parse_moe_label(r.get("moe"))  # "8x2/1" from the moe column; blank or absent = dense
             cfg = ModelConfig(vocab_size=int(r["vocab"]), ctx=int(r["ctx"]), d_model=int(r["d_model"]),
@@ -3180,10 +3286,26 @@ def sustained_speed(out_dir, device):
         if hours >= 0.2 and tokens > 0:
             # the run's own FLOP count: a checkpointed run did more work per token than its tokens/s suggest
             recompute = (r.get("activation_checkpointing") or "off") == "on"
+            session = ""
+            same_run = ("name", "device", "params", "d_model", "layers", "ctx", "vocab")
+            earlier = next((p for p in reversed(rows[:i]) if all(p.get(k) == r.get(k) for k in same_run)), None)
+            if earlier is not None:
+                try:
+                    more_tokens = tokens - float(earlier["tokens_seen"])
+                    more_hours = hours - float(earlier["train_hours"])
+                    between = (datetime.datetime.fromisoformat(r["time"])
+                               - datetime.datetime.fromisoformat(earlier["time"])).total_seconds() / 3600
+                except (KeyError, TypeError, ValueError):  # a row without a usable time: the whole run
+                    more_tokens = more_hours = between = 0.0
+                # the table has no run id, and a run started again from scratch under its name and shape can pass
+                # the earlier row in tokens and hours. The clock tells the two apart: all the training of a new run
+                # fits between the two rows; of a resumed run only the last session does (0.01 h: the rounding)
+                if more_tokens > 0 and 0.2 <= more_hours <= between + 0.01 < hours:
+                    tokens, hours, session = more_tokens, more_hours, ", last session"
             speed = tokens / (hours * 3600) * flops_per_token(cfg, recompute)
             return speed, (f"{speed / 1e12:.1f} TFLOP/s sustained by run '{r.get('name')}' of {r.get('time', '')[:10]} "
                            f"({int(r['params']) / 1e6:.1f}M parameters, {tokens / hours / 3600:,.0f} tokens/s"
-                           f"{', activation checkpointing' if recompute else ''})")
+                           f"{', activation checkpointing' if recompute else ''}{session})")
     return None, f"no training run of 12 minutes or more on a {device.type} device yet"
 
 
@@ -3201,6 +3323,8 @@ def parse_moe_label(text):
 
 # compiled / eager training speed, measured on the RTX 3070 (1.31x at 6 layers, 1.45x at the 216M shape)
 COMPILE_SPEEDUP = 1.35
+# share of a time budget that goes to training steps: evaluation, sampling and checkpoints take about 8 %
+TIME_BUDGET_EFFICIENCY = 0.92
 # how much slower hours of training run than a short test on a cool device: a laptop GPU's power and heat limits
 # (sm clock 430-1290 MHz across runs on this RTX 3070); a desktop-class Mac or a CPU hardly throttles
 SLOW_FACTOR = {"cuda": 1.6, "mps": 1.1, "cpu": 1.1}
@@ -3216,19 +3340,20 @@ def have_triton():
         return False
 
 
-def plan_with_time_budget(args, manifest, device, amp_dtype, fixed_cfg=None):
+def plan_with_time_budget(args, manifest, device, amp_dtype, fixed_cfg=None, verbose=True):
     """plan_run, then (with --time-budget-hours) choose the largest ladder shape
     whose parameter count N still satisfies tokens >= r * N when tokens are
     limited by BOTH the data cap and what fits in the time budget at the speed
     measured on this device. Binary search over the ladder (bigger = slower, so
     the condition is monotone); evaluation/sampling/checkpoint overhead 8%.
     fixed_cfg (--init-from): the architecture is given, so only its tokens are
-    capped by the budget (N is its active parameter count)."""
-    cfg, settings, lines = plan_run(args, manifest, device, amp_dtype, fixed_cfg=fixed_cfg)
-    hours = getattr(args, "time_budget_hours", None)
+    capped by the budget (N is its active parameter count). verbose: as in
+    plan_run, for the lines that are returned."""
+    cfg, settings, lines = plan_run(args, manifest, device, amp_dtype, fixed_cfg=fixed_cfg, verbose=verbose)
+    hours = args.time_budget_hours
     if not hours:
         return cfg, settings, lines
-    budget_s = hours * 3600 * 0.92
+    budget_s = hours * 3600 * TIME_BUDGET_EFFICIENCY
     r = args.tokens_per_param
     speed, speed_note = sustained_speed(args.out_dir, device)
     slow = SLOW_FACTOR.get(device.type, SLOW_FACTOR["cuda"])
@@ -3244,7 +3369,8 @@ def plan_with_time_budget(args, manifest, device, amp_dtype, fixed_cfg=None):
                      f"by {COMPILE_SPEEDUP:g} (compiled/eager measured on this GPU)")
 
     def trial(shape_args):
-        """(reaches tokens >= r x N, tokens that fit, peak memory of the speed test in bytes) for this shape."""
+        """(reaches tokens >= r x N, tokens that fit, peak memory of the speed test in bytes, whether the time
+        and not the data limits the tokens) for this shape."""
         c, st, _ = plan_run(shape_args, manifest, device, amp_dtype, fixed_cfg=fixed_cfg)
         raw, peak = measure_seconds_per_step(c, st["micro_batch"], st["grad_accum"], device, amp_dtype, args.attn,
                                              checkpointing=st["activation_checkpointing"],
@@ -3262,7 +3388,7 @@ def plan_with_time_budget(args, manifest, device, amp_dtype, fixed_cfg=None):
                      + f"; {st['tokens_per_step']:,} tokens/step) -> {fit_tokens:,} tokens fit in time; memory: "
                      f"estimated {est / 2 ** 30:.2f} GiB, probe measured {peak / 2 ** 30:.2f} GiB "
                      f"(ratio {peak / max(est, 1):.2f})")
-        return n * r <= tokens, tokens, peak
+        return n * r <= tokens, tokens, peak, fit_tokens < st["planned_train_tokens"]
 
     def is_oom(exc):  # torch.cuda.OutOfMemoryError and the MPS "out of memory" error are RuntimeErrors
         if "out of memory" not in str(exc).lower():
@@ -3276,22 +3402,48 @@ def plan_with_time_budget(args, manifest, device, amp_dtype, fixed_cfg=None):
 
     explicit = fixed_cfg is not None or any(v is not None for v in (args.d_model, args.layers, args.heads,
                                                                      args.kv_heads))
-    if explicit:
-        chosen_args = args
-        while True:  # the given shape must be measured: on out-of-memory, halve the micro-batch and measure again
+
+    def measured(a):
+        """(reaches the target, tokens, peak, time binds, args): trial(a), and when the speed test runs out of
+        memory the same shape again with activation checkpointing on (unless the command line turned it off),
+        then with the micro-batch halved down to 1, before the shape counts as not fitting (tokens None). Without
+        the retries an out-of-memory error would silently pick a smaller MODEL, or refuse a given shape, where a
+        memory option would do. A given shape (explicit) first halves its micro-batch down to 1, which costs
+        no compute: a plan that halving alone makes fit stays the plan it always was and keeps all its tokens
+        (checkpointing costs about a quarter of them in the same time). Only where that used to be the end,
+        checkpointing follows, with the batch options as given, and its own halving."""
+        given = a
+        while True:
             try:
-                _, tokens, peak = trial(chosen_args)
-                break
+                return trial(a) + (a,)
+            except SystemExit:
+                if explicit:  # a given shape the planner refuses: its own message
+                    raise
+                return False, None, 0, True, a
             except RuntimeError as exc:
                 if not is_oom(exc):
                     raise
-                micro = plan_run(chosen_args, manifest, device, amp_dtype, fixed_cfg=fixed_cfg)[1]["micro_batch"]
-                if micro == 1:
-                    raise SystemExit("time budget: this model shape runs out of memory on this device even at "
-                                     "micro-batch 1; choose a smaller --d-model/--layers/--ctx.")
-                notes.append(f"time budget: micro-batch {micro} ran out of memory in the speed test; using "
-                             f"{micro // 2}")
-                chosen_args = halved(chosen_args, micro)
+                c, st, _ = plan_run(a, manifest, device, amp_dtype, fixed_cfg=fixed_cfg)
+                halve_first = explicit and st["micro_batch"] > 1
+                if not st["activation_checkpointing"] and a.activation_checkpointing != "off" and not halve_first:
+                    notes.append(f"time budget: d_model {c.d_model} ran out of memory in the speed test; "
+                                 "measured again with activation checkpointing on")
+                    a = argparse.Namespace(**{**vars(a), "activation_checkpointing": "on",
+                                              "batch_size": given.batch_size, "grad_accum": given.grad_accum})
+                elif st["micro_batch"] > 1:
+                    notes.append(f"time budget: d_model {c.d_model} ran out of memory in the speed test at "
+                                 f"micro-batch {st['micro_batch']}; measured again with {st['micro_batch'] // 2}")
+                    a = halved(a, st["micro_batch"])
+                else:
+                    notes.append(f"time budget: d_model {c.d_model} does not fit in memory even at micro-batch "
+                                 "1 with activation checkpointing; a smaller shape is used")
+                    return False, None, 0, True, a
+
+    if explicit:
+        _, tokens, peak, time_binds, chosen_args = measured(args)  # the given shape must be measured
+        if tokens is None:
+            raise SystemExit("time budget: this model shape runs out of memory on this device even at "
+                             "micro-batch 1; choose a smaller --d-model/--layers/--ctx.")
     else:
         ladder = shape_ladder(int(manifest["tokenizer"]["vocab_size"]))
         top = max(i for i, c in enumerate(ladder) if c.d_model <= cfg.d_model)
@@ -3302,33 +3454,6 @@ def plan_with_time_budget(args, manifest, device, amp_dtype, fixed_cfg=None):
                                          "heads": c.n_heads, "kv_heads": c.n_kv_heads})
 
         results = {}
-
-        def measured(a):
-            """(reaches the target, tokens, peak, args measured): trial(a), and when the speed test runs out of
-            memory the same shape again with activation checkpointing on (unless the command line turned it off),
-            then with the micro-batch halved down to 1, before the shape counts as not fitting. Without the
-            retries an out-of-memory error would silently pick a smaller MODEL where a memory option would do."""
-            while True:
-                try:
-                    return trial(a) + (a,)
-                except SystemExit:
-                    return False, 0, 0, a
-                except RuntimeError as exc:
-                    if not is_oom(exc):
-                        raise
-                    st = plan_run(a, manifest, device, amp_dtype)[1]
-                    if not st["activation_checkpointing"] and a.activation_checkpointing != "off":
-                        notes.append(f"time budget: d_model {a.d_model} ran out of memory in the speed test; "
-                                     "measured again with activation checkpointing on")
-                        a = argparse.Namespace(**{**vars(a), "activation_checkpointing": "on"})
-                    elif st["micro_batch"] > 1:
-                        notes.append(f"time budget: d_model {a.d_model} ran out of memory in the speed test at "
-                                     f"micro-batch {st['micro_batch']}; measured again with {st['micro_batch'] // 2}")
-                        a = halved(a, st["micro_batch"])
-                    else:
-                        notes.append(f"time budget: d_model {a.d_model} does not fit in memory even at micro-batch "
-                                     "1 with activation checkpointing; a smaller shape is used")
-                        return False, 0, 0, a
 
         def ok(i):
             if i not in results:
@@ -3349,12 +3474,20 @@ def plan_with_time_budget(args, manifest, device, amp_dtype, fixed_cfg=None):
                 best = 0
                 ok(0)
                 notes.append("time budget: even the smallest shape cannot reach the tokens-per-parameter target "
-                             "in time; it trains on what fits")
-        _, tokens, peak, chosen_args = results[best]  # with the memory options the retries settled on
-    cfg, settings, lines = plan_run(chosen_args, manifest, device, amp_dtype, token_cap=tokens, fixed_cfg=fixed_cfg)
-    lines[1] = lines[1].replace("command-line values, ladder defaults for the rest",
-                                "largest ladder shape that satisfies the data AND the time budget"
-                                if not explicit else "command-line values, tokens capped by the time budget")
+                             + ("in time; it trains on what fits" if results[0][3] else
+                                "on this data; it trains on what the data supports"))
+        _, tokens, peak, time_binds, chosen_args = results[best]  # with the memory options the retries settled on
+    # the cap is passed (and named in the plan) only when the time, not the data, limits the tokens; without it the
+    # plan is the one the speed test measured (tokens None: the smallest ladder shape did not fit, nothing to train)
+    cfg, settings, lines = plan_run(chosen_args, manifest, device, amp_dtype,
+                                    token_cap=(tokens or 0) if time_binds else None, fixed_cfg=fixed_cfg,
+                                    verbose=verbose)
+    # the shape note sits in the 'token budget D' line, which a warning or note printed before it can shift
+    shape_note = ("largest ladder shape that satisfies the data AND the time budget" if not explicit
+                  else "command-line values, tokens capped by the time budget" if time_binds
+                  else "command-line values, ladder defaults for the rest")
+    lines = [line.replace("command-line values, ladder defaults for the rest", shape_note)
+             if line.startswith("token budget D") else line for line in lines]
     if peak > budget_bytes:
         # the estimate was too low for this shape: step to the next memory option now, instead of leaving the
         # first step to run out of memory and find it
@@ -3371,8 +3504,10 @@ def plan_with_time_budget(args, manifest, device, amp_dtype, fixed_cfg=None):
     return cfg, settings, lines + notes
 
 
-def plan_table(vocab, device, amp_dtype, r, max_epochs):
-    """What the planner would choose for other corpus sizes (same vocabulary)."""
+def plan_table(vocab, device, amp_dtype, r, max_epochs, optimizer="adamw"):
+    """What the planner would choose for other corpus sizes (same vocabulary): the
+    batch is the memory plan of `optimizer` on `device` (choose_memory_plan), the
+    learning rate follows the batch that plan reaches."""
     rows = []
     budget, _ = device_memory_budget(device)
     for unique in (5e6, 2e7, 1e8, 3e8, 1e9, 1e10):
@@ -3384,18 +3519,26 @@ def plan_table(vocab, device, amp_dtype, r, max_epochs):
         cfg.rope_base = default_rope_base(cfg.ctx)
         n = count_params(cfg)[0]
         tps = tokens_per_step_for(n, planned)
+        reached = tps  # the target when nothing fits
         try:
-            micro, accum = choose_micro_batch(cfg, tps, budget, amp_dtype is not None)
+            micro, accum, _, _ = choose_memory_plan(cfg, tps, budget, amp_dtype is not None, optimizer, device=device)
             fits = f"{micro}x{accum}"
+            reached = micro * accum * cfg.ctx
         except SystemExit:
             fits = "does not fit"
-        rows.append((unique, planned, cfg, n, tps, fits, heuristic_lr(n) * lr_batch_factor(n, tps)))
+        rows.append((unique, planned, cfg, n, tps, fits, heuristic_lr(n) * lr_batch_factor(n, reached)))
     return rows
 
 
 # ---------------------------------------------------------------------------
 # Argument parsing
 # ---------------------------------------------------------------------------
+# The defaults of the options a run fixes when it starts and --resume does not take. parse_args reads them from
+# here, and a resumed run compares a value with them: one that is neither the default nor the run's own was typed.
+FIXED_OPTION_DEFAULTS = {"schedule": "wsd", "decay_frac": 0.2, "decay_shape": "1-sqrt",
+                         "weight_decay": WEIGHT_DECAY_DEFAULT, "beta1": 0.9, "beta2": 0.95, "grad_clip": 1.0}
+
+
 def parse_args(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     g = p.add_argument_group("mode")
@@ -3411,12 +3554,6 @@ def parse_args(argv=None):
     g.add_argument("--mix-alpha", type=float,
                    help="sampling share of a source ~ its --mix weight x its tokens^alpha (default 1: proportional "
                         "to size; below 1 flattens a mix one source dominates; honoured on --resume like --mix)")
-    g.add_argument("--data", help="(compat) folder of .md files: builds datasets/<name> with data_prep defaults")
-    g.add_argument("--wiki-dir", default=os.path.join(os.path.expanduser("~"), "ai_training_data", "wikipedia"),
-                   help="(compat)")
-    g.add_argument("--wiki-articles", type=int, default=0, help="(compat) Wikipedia articles to add")
-    g.add_argument("--include-keywords", help="(compat) keyword filter passed to data_prep")
-    g.add_argument("--tokenizer-vocab-size", type=int, default=0, help="(compat) vocabulary for auto-prep")
     g = p.add_argument_group("run")
     g.add_argument("--name", default=DEFAULT_NAME, help="checkpoint base name")
     g.add_argument("--out-dir", default=HERE, help="folder for checkpoints and metrics")
@@ -3434,17 +3571,17 @@ def parse_args(argv=None):
     g.add_argument("--layers", type=int, help="transformer blocks (default: d_model / 64 + 2, between 4 and 32)")
     g.add_argument("--heads", type=int, help="query heads (default: heads of width 32, 64 or 128 by d_model)")
     g.add_argument("--kv-heads", type=int,
-                   help="key/value heads (default: heads / 4 from 8 heads on, grouped-query attention); equal to "
-                        "--heads gives ordinary multi-head attention, about 10 %% slower for about 10 %% more "
-                        "parameters")
+                   help="key/value heads (default: heads / 4 from 8 heads on when the head count is divisible by 4, "
+                        "grouped-query attention; otherwise ordinary multi-head attention); equal to --heads gives "
+                        "ordinary multi-head attention, about 10 %% slower for about 10 %% more parameters")
     g.add_argument("--ctx", type=int,
                    help="context length in tokens (default by width: 256 up to d 192, 512 up to d 512, 1024 up to "
                         "d 1024, 2048 up to d 2048, 4096 above)")
     g.add_argument("--ffn-hidden", type=int, help="SwiGLU hidden width (default: 8 d_model / 3 rounded up to 64)")
     g.add_argument("--rope-base", type=float, help="default: 10,000 up to ctx 2048, then 10,000 x (ctx/2048)^2")
     g.add_argument("--tie-embeddings", choices=("on", "off"), default="on",
-                   help="share the input embedding with the output layer (default on, as Llama 3.2, Qwen2.5 and "
-                        "Gemma do at every size); off trains a separate output matrix")
+                   help="share the input embedding with the output layer (default on, as Llama 3.2 and Gemma do "
+                        "(Qwen2.5 in its small models)); off trains a separate output matrix")
     g.add_argument("--qk-norm", choices=("on", "off"),
                    help="RMSNorm over each query and key head before RoPE (QK-norm, as in Gemma 3, Qwen3 and OLMo 2; "
                         "keeps high learning rates stable): default on for new runs; a checkpoint keeps its own "
@@ -3485,7 +3622,7 @@ def parse_args(argv=None):
                         "a forward+backward probe passes at model build, else the loop)")
     g.add_argument("--tokens-per-total-param", type=float, default=0.0,
                    help="warn when an MoE run plans fewer training tokens per TOTAL parameter than this "
-                        "(0 = off; the value is to be set from the MoE-versus-dense A/B)")
+                        "(0 = off)")
     g = p.add_argument_group("budget")
     g.add_argument("--steps", type=int, help="optimizer steps (on --resume: new total)")
     g.add_argument("--train-tokens", type=float, help="training tokens instead of --steps")
@@ -3510,20 +3647,25 @@ def parse_args(argv=None):
                         "cosine); on --resume it may still be changed before the decay phase begins")
     g.add_argument("--warmup-steps", type=int,
                    help="default: 2 %% of the steps, between 50 and 2,000 and at most a tenth of the steps")
-    g.add_argument("--schedule", choices=("wsd", "cosine"), default="wsd")
-    g.add_argument("--decay-frac", type=float, default=0.2, help="WSD: share of steps in the final decay")
-    g.add_argument("--decay-shape", choices=("1-sqrt", "cosine", "linear"), default="1-sqrt")
-    g.add_argument("--weight-decay", type=float, default=WEIGHT_DECAY_DEFAULT,
+    g.add_argument("--schedule", choices=("wsd", "cosine"), default=FIXED_OPTION_DEFAULTS["schedule"])
+    g.add_argument("--decay-frac", type=float, default=FIXED_OPTION_DEFAULTS["decay_frac"],
+                   help="WSD: share of steps in the final decay")
+    g.add_argument("--decay-shape", choices=("1-sqrt", "cosine", "linear"),
+                   default=FIXED_OPTION_DEFAULTS["decay_shape"])
+    g.add_argument("--weight-decay", type=float, default=FIXED_OPTION_DEFAULTS["weight_decay"],
                    help="decoupled weight decay on the matrices (default %g: lr x weight decay as at the published "
                         "rates, the table rate being %g times those); resumed runs keep their setting"
                         % (WEIGHT_DECAY_DEFAULT, LR_TABLE_FACTOR))
-    g.add_argument("--beta1", type=float, default=0.9)
-    g.add_argument("--beta2", type=float, default=0.95)
-    g.add_argument("--grad-clip", type=float, default=1.0, help="clip the gradient norm to this (0 = off)")
+    g.add_argument("--beta1", type=float, default=FIXED_OPTION_DEFAULTS["beta1"])
+    g.add_argument("--beta2", type=float, default=FIXED_OPTION_DEFAULTS["beta2"])
+    g.add_argument("--grad-clip", type=float, default=FIXED_OPTION_DEFAULTS["grad_clip"],
+                   help="clip the gradient norm to this (0 = off)")
     g.add_argument("--activation-checkpointing", choices=("auto", "on", "off"), default="auto",
                    help="recompute each block in the backward pass instead of storing its activations: much less "
                         "memory, 21-32 %% more step time (auto: only when the model would not otherwise fit with a "
-                        "micro-batch of about 2,048 tokens, 2 sequences at ctx 1024); may be changed on --resume")
+                        "micro-batch of about 2,048 tokens, 2 sequences at ctx 1024; on Apple GPUs (MPS) at ctx >= "
+                        "2048 auto prefers it, since the attention scores dominate memory); may be changed on "
+                        "--resume")
     g.add_argument("--loss-chunk-tokens", type=int,
                    help="compute the output layer and loss this many tokens at a time, so the full tokens x "
                         "vocabulary table never exists (0 = off; default: auto, %d when it is needed to fit); may be "
@@ -3532,14 +3674,15 @@ def parse_args(argv=None):
                    help="adamw (default), or muon: Muon for the matrices inside the blocks and AdamW for the embedding "
                         "and norm gains, both driven by --lr and the schedule (Muon's step is scaled to AdamW's "
                         "update size); resumed runs keep their optimizer")
-    g.add_argument("--z-loss", type=float, default=1e-4,
+    g.add_argument("--z-loss", type=float,
                    help="weight of the z-loss stability term (0 disables; resumed runs keep their setting)")
     g.add_argument("--ema", metavar="DECAY|on|off",
                    help="exponential moving average of the weights (fp32, on the CPU, debiased so it never holds the "
                         "initial weights), scored beside the raw weights at each evaluation and saved as "
                         "<name>_best.pt when it is the better of the two (default off; on = %g per step; a resumed "
-                        "run keeps its setting unless this is given: a decay starts an average from the current "
-                        "weights, off removes it)" % EMA_DECAY_DEFAULT)
+                        "run keeps its setting unless this is given: a decay replaces the run's decay and its saved "
+                        "average continues, a run without one starts it from the current weights; off removes it)"
+                        % EMA_DECAY_DEFAULT)
     g.add_argument("--doc-mask", choices=("on", "off"),
                    help="confine attention to each document of a training window (documents start with BOS): default "
                         "off; it is the training objective, so fixed for a run and ignored on --resume")
@@ -3553,10 +3696,10 @@ def parse_args(argv=None):
     g.add_argument("--log-every", "--report-every", type=int, default=0,
                    help="extra training-only progress lines between evaluations (0 = none)")
     g.add_argument("--dashboard", choices=("auto", "on", "off"), default="auto",
-                   help="redraw view_pt.py's dashboard in the background after each new best checkpoint (auto: "
-                        "for runs saved in this script's folder; test runs elsewhere are skipped)")
-    g.add_argument("--dashboard-push-hours", type=float, default=3.0,
-                   help="push the dashboard to GitHub at most this often (0 = every time; default 3, since every "
+                   help="redraw view_pt.py's dashboard of the best checkpoint in the background after each "
+                        "evaluation (auto: for runs saved in this script's folder; test runs elsewhere are skipped)")
+    g.add_argument("--dashboard-push-hours", type=float, default=12.0,
+                   help="push the dashboard to GitHub at most this often (0 = every time; default 12, since every "
                         "1.6 MB version stays in the repository's history)")
     g.add_argument("--sample-every", type=int,
                    help="write a sample at evaluations whose step is a multiple of N (default: every evaluation; 0 = off)")
@@ -3596,7 +3739,6 @@ def parse_args(argv=None):
                    help="grouped-query attention path (auto: on CUDA the faster of the two, timed once per head shape; "
                         "repeat_kv elsewhere)")
     g.add_argument("--threads", type=int, help="CPU threads for PyTorch")
-    g.add_argument("--suppress", action="store_true", help=argparse.SUPPRESS)  # old script's option: accepted, no effect
     g = p.add_argument_group("generation")
     g.add_argument("--checkpoint",
                    help="checkpoint for --generate/--benchmark/--export (default <name>_best.pt, else <name>.pt)")
@@ -3607,6 +3749,12 @@ def parse_args(argv=None):
     g.add_argument("--watermark-key", help="secret key: embed a detectable watermark in generated text")
     g.add_argument("--watermark-gamma", type=float, default=0.25, help="green-list share of the vocabulary")
     g.add_argument("--watermark-delta", type=float, default=2.0, help="logit boost for green tokens")
+    argv = sys.argv[1:] if argv is None else list(argv)
+    # --data went with the options of the original script; argparse would now read it as an abbreviation of
+    # --dataset and take an old '--data <md folder>' for a prepared dataset, so it is refused like the others
+    removed = [item for item in argv if item == "--data" or item.startswith("--data=")]
+    if removed:
+        p.error("unrecognized arguments: " + " ".join(removed))
     args = p.parse_args(argv)
     validate_args(args, p)
     return args
@@ -3617,7 +3765,7 @@ def validate_args(args, parser):
         parser.error("--name may contain letters, digits, '.', '_' and '-' only (no folders)")
     positive = ["steps", "d_model", "layers", "heads", "kv_heads", "ctx", "ffn_hidden", "batch_size", "grad_accum",
                 "tokens_per_step", "threads", "eval_every", "eval_tokens", "save_every", "sample_tokens", "length",
-                "experts_per_token", "moe_every"]
+                "experts_per_token", "moe_every", "stop_after_steps"]
     for name in positive:
         value = getattr(args, name)
         if value is not None and value <= 0:
@@ -3628,7 +3776,8 @@ def validate_args(args, parser):
                          ("tokens_per_param", 0.1, 1e6), ("max_epochs", 0.01, 1e4), ("temperature", 0.0, 10.0),
                          ("mix_alpha", 0.0, 2.0), ("lr_scale", 0.01, 100.0), ("lb_loss", 0.0, 10.0),
                          ("router_z_loss", 0.0, 10.0), ("bias_rate", 0.0, 1.0), ("tokens_per_total_param", 0.0, 1e6),
-                         ("expert_hidden", 0, 1e6), ("shared_hidden", 0, 1e6)):
+                         ("expert_hidden", 0, 1e6), ("shared_hidden", 0, 1e6), ("rope_base", 1, 1e9),
+                         ("z_loss", 0, 10)):
         value = getattr(args, name)
         if value is not None and not lo <= value <= hi:
             parser.error(f"--{name.replace('_', '-')} must be between {lo} and {hi}")
@@ -3638,6 +3787,8 @@ def validate_args(args, parser):
         parser.error("--experts-per-token must not exceed --experts")
     if not 0 < args.watermark_gamma < 1:
         parser.error("--watermark-gamma must be between 0 and 1")
+    if args.top_k < 0:
+        parser.error("--top-k must be >= 0 (0 = no cut)")
     if args.ema is not None:  # "off", "on" or a per-step decay; None = the default for the run (see resolve_ema)
         if str(args.ema).lower() == "off":
             args.ema = 0.0
@@ -3664,6 +3815,8 @@ def validate_args(args, parser):
         parser.error("--log-every/--sample-every must be >= 0")
     if args.resume and args.init_from:
         parser.error("use either --resume or --init-from, not both")
+    if any(value is not None and not math.isfinite(value) for value in (args.train_tokens, args.epochs)):
+        parser.error("--train-tokens/--epochs must be finite numbers")
     if args.train_tokens is not None and args.train_tokens <= 0 or args.epochs is not None and args.epochs <= 0:
         parser.error("--train-tokens/--epochs must be positive")
     if sum(x is not None for x in (args.steps, args.train_tokens, args.epochs)) > 1:
@@ -3671,14 +3824,10 @@ def validate_args(args, parser):
     args.out_dir = os.path.abspath(args.out_dir)
     if args.loss_chunk_tokens is not None and not (args.loss_chunk_tokens == 0 or 64 <= args.loss_chunk_tokens):
         parser.error("--loss-chunk-tokens must be 0 (off) or at least 64")
-    if args.stop_after_steps is not None and args.stop_after_steps <= 0:
-        parser.error("--stop-after-steps must be positive")
     if not os.path.isdir(args.out_dir):
         parser.error(f"--out-dir does not exist: {args.out_dir}")
     if args.dataset and not os.path.isdir(args.dataset):
         parser.error(f"--dataset folder not found: {args.dataset}")
-    if args.data and not os.path.isdir(args.data):
-        parser.error(f"--data folder not found: {args.data}")
     if args.sample_every is None:
         args.sample_every = args.eval_every
     if args.no_probes:
@@ -3705,15 +3854,15 @@ def write_safetensors(tensors, path, metadata=None):
     """Minimal writer for the safetensors format (8-byte header length, JSON
     header, raw little-endian data). No pickle, so loading can never run code."""
     import struct
-    header, blobs, offset = {}, [], 0
+    header, kept, offset = {}, [], 0
     for name in sorted(tensors):
         t = tensors[name].detach().cpu().contiguous()
         if t.dtype not in _ST_DTYPES:
             raise ValueError(f"unsupported dtype {t.dtype} for {name}")
-        raw = (t.view(torch.int16) if t.dtype == torch.bfloat16 else t).numpy().tobytes()
-        header[name] = {"dtype": _ST_DTYPES[t.dtype], "shape": list(t.shape), "data_offsets": [offset, offset + len(raw)]}
-        blobs.append(raw)
-        offset += len(raw)
+        size = t.numel() * t.element_size()
+        header[name] = {"dtype": _ST_DTYPES[t.dtype], "shape": list(t.shape), "data_offsets": [offset, offset + size]}
+        kept.append(t)
+        offset += size
     header["__metadata__"] = {str(k): str(v) for k, v in (metadata or {}).items()}
     encoded = json.dumps(header, separators=(",", ":")).encode("utf-8")
     encoded += b" " * (-len(encoded) % 8)
@@ -3721,8 +3870,9 @@ def write_safetensors(tensors, path, metadata=None):
     with open(tmp, "wb") as handle:
         handle.write(struct.pack("<Q", len(encoded)))
         handle.write(encoded)
-        for raw in blobs:
-            handle.write(raw)
+        for t in kept:  # each tensor's own memory, without a bytes copy of the model (numpy has no bfloat16)
+            flat = (t.view(torch.int16) if t.dtype == torch.bfloat16 else t).reshape(-1)
+            handle.write(memoryview(flat.numpy()).cast("B"))
     os.replace(tmp, path)
 
 
@@ -3734,19 +3884,24 @@ def read_safetensors(path):
         if size > 100 * 2 ** 20:
             raise SystemExit(f"{path}: implausible safetensors header ({size:,} bytes)")
         header = json.loads(handle.read(size))
-        data = handle.read()
-    metadata = header.pop("__metadata__", {})
-    tensors = {}
-    for name, info in header.items():
-        begin, end = info["data_offsets"]
-        if not 0 <= begin <= end <= len(data) or info["dtype"] not in by_name:
-            raise SystemExit(f"{path}: corrupt entry {name}")
-        dtype = by_name[info["dtype"]]
-        if begin == end:  # torch.frombuffer refuses an empty buffer
-            tensors[name] = torch.empty(info["shape"], dtype=dtype)
-            continue
-        buf = torch.frombuffer(bytearray(data[begin:end]), dtype=torch.int16 if dtype == torch.bfloat16 else dtype)
-        tensors[name] = (buf.view(torch.bfloat16) if dtype == torch.bfloat16 else buf).reshape(info["shape"])
+        metadata = header.pop("__metadata__", {})
+        base = 8 + size
+        file_len = os.fstat(handle.fileno()).st_size
+        tensors = {}
+        for name, info in header.items():
+            begin, end = info["data_offsets"]
+            if not 0 <= begin <= end <= file_len - base or info["dtype"] not in by_name:
+                raise SystemExit(f"{path}: corrupt entry {name}")
+            dtype = by_name[info["dtype"]]
+            if begin == end:  # torch.frombuffer refuses an empty buffer
+                tensors[name] = torch.empty(info["shape"], dtype=dtype)
+                continue
+            raw = bytearray(end - begin)  # read into the tensor's own memory, without holding the whole file too
+            handle.seek(base + begin)
+            if handle.readinto(raw) != end - begin:
+                raise SystemExit(f"{path}: corrupt entry {name}")
+            buf = torch.frombuffer(raw, dtype=torch.int16 if dtype == torch.bfloat16 else dtype)
+            tensors[name] = (buf.view(torch.bfloat16) if dtype == torch.bfloat16 else buf).reshape(info["shape"])
     return tensors, metadata
 
 
@@ -3762,35 +3917,47 @@ def load_exported(folder):
     return {"format": CHECKPOINT_FORMAT, "format_version": FORMAT_VERSION, "checkpoint_type": "inference",
             "model_config": config["model_config"], "model": tensors,
             "tokenizer": {**config["tokenizer"], "proto": proto}, "step": config.get("step"),
-            "metrics": config.get("metrics", {}), "exported_from": config.get("source_checkpoint")}
+            "metrics": config.get("metrics", {}), "exported_from": config.get("source_checkpoint"),
+            "dataset": config.get("dataset"), "train_config": config.get("train_config"),
+            "weights": config.get("weights", "raw")}
 
 
-def load_any(path, trust=False):
-    """A .pt checkpoint (safe loader) or an --export folder."""
+def load_any(path, trust=False, mmap=False):
+    """A .pt checkpoint (safe loader; mmap as in safe_load) or an --export folder."""
     if os.path.isdir(path) and os.path.isfile(os.path.join(path, "model.safetensors")):
         return load_exported(path)
-    return safe_load(path, trust)
+    return safe_load(path, trust, mmap)
 
 
 def _home_short(path):
-    """`path` with the home folder shown as ~, so a file meant for sharing does not carry the user name."""
+    """`path` with the home folder shown as ~, so a file meant for sharing does not carry the user name.
+    For one path: only a home folder at its start, as a whole folder (_hide_home, for the text of the experiments
+    table, replaces the home string wherever it stands)."""
     home = os.path.expanduser("~")
     if os.path.normcase(path).startswith(os.path.normcase(home) + os.sep):
         return "~" + path[len(home):]
     return path
 
 
+def resolve_checkpoint(args, hint):
+    """The checkpoint --export, --benchmark and --generate work on: --checkpoint, else this run's best file,
+    else its training checkpoint, as a normalised path (an export folder typed with a trailing separator is the
+    folder itself). When it does not exist: SystemExit with `hint` and the other runs of the folder."""
+    ckpt_path, best_path, _ = checkpoint_paths(args)
+    path = os.path.normpath(args.checkpoint or (best_path if os.path.exists(best_path) else ckpt_path))
+    if not os.path.exists(path):
+        raise SystemExit(f"No checkpoint {path}; {hint}.{_resume_hint(args, flag='')}")
+    return path
+
+
 def cmd_export(args):
     """Write <folder>/model.safetensors + config.json + tokenizer.model."""
-    ckpt_path, best_path, _ = checkpoint_paths(args)
-    path = args.checkpoint or (best_path if os.path.exists(best_path) else ckpt_path)
-    if not os.path.exists(path):
-        raise SystemExit(f"No checkpoint {path}; pass --checkpoint.{_resume_hint(args)}")
+    path = resolve_checkpoint(args, "pass --checkpoint")
     out = os.path.abspath(args.export)
     if os.path.exists(out) and os.listdir(out):
         raise SystemExit(f"{out} exists and is not empty; choose a new folder.")
-    obj = safe_load(path, args.trust_checkpoint)
-    model, tok, cfg = model_from_checkpoint(obj)
+    model, tok, cfg, obj = load_for_inference(path, "cpu", args.trust_checkpoint)  # one copy of the weights
+    obj.pop("optimizer", None)
     tensors = {k: v for k, v in model.state_dict().items() if not (cfg.tie_embeddings and k == "lm_head.weight")}
     os.makedirs(out, exist_ok=True)
     write_safetensors(tensors, os.path.join(out, "model.safetensors"),
@@ -3800,7 +3967,8 @@ def cmd_export(args):
         handle.write(tok.proto)
     metrics = obj.get("metrics", {}) if isinstance(obj.get("metrics"), dict) else {}
     config = {"architecture": "tinyGPT decoder-only Transformer: interleaved-pair RoPE, RMSNorm, SwiGLU, "
-                              "grouped-query attention"
+                              + (f"grouped-query attention ({cfg.n_heads} query / {cfg.n_kv_heads} key-value heads)"
+                                 if cfg.n_kv_heads < cfg.n_heads else "multi-head attention")
                               + (", QK-norm (RMSNorm with a shared gain on each query and key head, before RoPE)"
                                  if cfg.qk_norm else "")
                               + (f", mixture of experts ({cfg.n_experts} SwiGLU experts of hidden "
@@ -3817,6 +3985,14 @@ def cmd_export(args):
               "metrics": {"best_val": metrics.get("best_val", obj.get("best_val")),
                           "best_step": metrics.get("best_step", obj.get("best_val_step"))},
               "exported": now_iso()}
+    dataset = obj.get("dataset")
+    if isinstance(dataset, dict) and dataset.get("path"):
+        # the folder's name and the fingerprint find the dataset again (resolve_dataset); no folder of this machine.
+        # The name by resolve_dataset's rule: the path may have been stored on the other kind of system
+        config["dataset"] = {"path": re.split(r"[\\/]", str(dataset["path"]).rstrip("\\/"))[-1],
+                             "fingerprint": dataset.get("fingerprint")}
+    if obj.get("train_config"):
+        config["train_config"] = obj["train_config"]
     with open(os.path.join(out, "config.json"), "w", encoding="utf-8") as handle:
         json.dump(config, handle, indent=2)
     back, _ = read_safetensors(os.path.join(out, "model.safetensors"))
@@ -3832,18 +4008,17 @@ def cmd_export(args):
 def cmd_benchmark(args):
     """Score the cloze fact benchmark on a checkpoint; print a per-category table
     and write every item's result to a CSV next to the checkpoint."""
-    ckpt_path, best_path, _ = checkpoint_paths(args)
-    path = args.checkpoint or (best_path if os.path.exists(best_path) else ckpt_path)
-    if not os.path.exists(path):
-        raise SystemExit(f"No checkpoint {path}; pass --checkpoint.{_resume_hint(args)}")
+    path = resolve_checkpoint(args, "pass --checkpoint")
     probes_file = args.probes or DEFAULT_PROBES
     if not os.path.isfile(probes_file):
         raise SystemExit(f"Probe file not found: {probes_file}")
     device = select_device(args.device)
-    amp_dtype, amp_name, _ = choose_precision(device, args.precision, training=False)
+    amp_dtype, _, _ = choose_precision(device, args.precision, training=False)
     model, tok, cfg, obj = load_for_inference(path, device, args.trust_checkpoint)
     model.set_attention_impl(choose_attention(device, cfg, amp_dtype, args.attn)[0])
     probes = read_probes(probes_file)
+    if not probes:
+        raise SystemExit(f"{probes_file}: no probes found")
     acc, results = score_probes(model, tok, probes, device, amp_dtype)
     k, n = sum(r["correct"] for r in results), len(results)
     low, high = wilson_interval(k, n)
@@ -3873,21 +4048,16 @@ def cmd_benchmark(args):
                              f"{r['floor_correct']:.3f}"])
     print(f"Per-item results: {out}")
     record_experiment(os.path.dirname(os.path.abspath(path)), {
-        "event": "benchmark", "name": os.path.basename(path), "step": obj.get("step"), "params": cfg and
-        count_params(cfg)[0], "d_model": cfg.d_model, "layers": cfg.n_layers, "ctx": cfg.ctx, "vocab": cfg.vocab_size,
+        "event": "benchmark", "name": os.path.basename(path), "step": obj.get("step"),
+        "params": count_params(cfg)[0], "d_model": cfg.d_model, "layers": cfg.n_layers, "ctx": cfg.ctx,
+        "vocab": cfg.vocab_size,
         "benchmark_accuracy": f"{acc:.3f}", "benchmark_floor": f"{floor:.3f}", "benchmark_items": n,
         "checkpoint": path, "notes": f"95% interval {low:.3f}-{high:.3f}; chance {chance:.3f}; "
                                     f"{os.path.basename(probes_file)}; items in {os.path.basename(out)}"})
 
 
 def cmd_generate(args):
-    ckpt_path, best_path, _ = checkpoint_paths(args)
-    path = args.checkpoint or (best_path if os.path.exists(best_path) else ckpt_path)
-    if not os.path.exists(path):
-        hint = ""
-        if not args.checkpoint and os.path.exists(os.path.join(args.out_dir, "tiny_gpt_bpe_best.pt")):
-            hint = " Your legacy model is still available: --checkpoint tiny_gpt_bpe_best.pt"
-        raise SystemExit(f"No checkpoint {path}; train first or pass --checkpoint.{hint}")
+    path = resolve_checkpoint(args, "train first or pass --checkpoint")
     device = select_device(args.device)
     amp_dtype, amp_name, _ = choose_precision(device, args.precision, training=False)
     model, tok, cfg, obj = load_for_inference(path, device, args.trust_checkpoint)
@@ -3897,9 +4067,11 @@ def cmd_generate(args):
     metrics = obj.get("metrics", {}) if family == "tinygpt" else {}
     best = metrics.get("best_val", obj.get("best_val"))
     best_step = metrics.get("best_step", obj.get("best_val_step"))
-    print(f"Checkpoint {path} ({family}, {kind}) | step {obj.get('step', '?'):,} | best validation loss "
+    step = obj.get("step")
+    step_s = f"{step:,}" if isinstance(step, int) else "?"
+    print(f"Checkpoint {path} ({family}, {kind}) | step {step_s} | best validation loss "
           f"{best:.4f} @{best_step} | {device_label(device)} | {amp_name}" if best is not None else
-          f"Checkpoint {path} ({family}, {kind}) | step {obj.get('step', '?')}")
+          f"Checkpoint {path} ({family}, {kind}) | step {step_s}")
     if family != "tinygpt":
         print("Note: legacy checkpoints use the old tokenizer (runs of spaces collapse; no end-of-document token).")
     gen = torch.Generator().manual_seed(args.seed)
@@ -3909,67 +4081,34 @@ def cmd_generate(args):
     print(f"\n{args.generate}{text}" if args.generate and not text.startswith(args.generate) else f"\n{text}")
 
 
-def compat_dataset_dir(args):
-    """datasets/<md folder>_wiki<N>[_kw]_<hash of all settings>. The name encodes
-    the settings, so a different --wiki-articles, keyword file or vocabulary
-    builds a new dataset instead of silently reusing an old one (the bug that
-    trained a "--wiki-articles 50000" run on 30,000 articles)."""
-    canon = lambda p: os.path.normcase(os.path.realpath(p))  # noqa: E731 - C:\X and c:\x are one folder
-    options = {"md_dir": canon(args.data) if args.data else None,
-               "wiki_dir": canon(args.wiki_dir) if args.wiki_articles else None,
-               "wiki_max_docs": args.wiki_articles or 0, "include_keywords": args.include_keywords,
-               "vocab_size": args.tokenizer_vocab_size or 0}
-    digest = hashlib.sha256(json.dumps(options, sort_keys=True).encode()).hexdigest()[:6]
-    parts = [os.path.basename(os.path.normpath(args.data)) if args.data else "nomd"]
-    if args.wiki_articles:
-        parts.append(f"wiki{args.wiki_articles}")
-    if args.include_keywords:
-        parts.append("kw")
-    return os.path.join(HERE, "datasets", "_".join(parts + [digest]))
-
-
 def ensure_dataset(args):
-    """--dataset, or the dataset path stored in a checkpoint, or (compat) build one from --data."""
-    if args.dataset:
-        return os.path.abspath(args.dataset)
-    if args.data or args.wiki_articles:
-        path = compat_dataset_dir(args)
-        if os.path.exists(os.path.join(path, "manifest.json")):
-            manifest = data_prep.read_manifest(path)
-            kept = {n: s.get("kept_docs") for n, s in manifest["sources"].items()}
-            print(f"Reusing dataset {path}, built earlier with the same --data/--wiki-articles/"
-                  f"--include-keywords/--tokenizer-vocab-size (documents kept: {kept}).")
-            return path
-        prep = ["--out", path]
-        if args.data:
-            has_subfolders = any(os.path.isdir(os.path.join(args.data, d)) and not d.startswith((".", "_"))
-                                 and d.lower() not in ("wikipedia", "web", "images") for d in os.listdir(args.data))
-            prep += ["--text-root", args.data] if has_subfolders else ["--md-dir", args.data]
-        if args.wiki_articles:
-            prep += ["--wiki-dir", args.wiki_dir, "--wiki-max-docs", str(args.wiki_articles)]
-            if not args.include_keywords:
-                prep += ["--wiki-select", "first"]
-        if args.include_keywords:
-            prep += ["--include-keywords", args.include_keywords]
-        if args.tokenizer_vocab_size:
-            prep += ["--vocab-size", str(args.tokenizer_vocab_size)]
-        print("Building dataset: python data_prep.py " + " ".join(f'"{x}"' if " " in x else x for x in prep))
-        # its own process: data_prep's worker processes would otherwise re-import this script (and torch)
-        code = subprocess.run([sys.executable, os.path.join(HERE, "data_prep.py"), *prep]).returncode
-        if code:
-            raise SystemExit(f"data_prep.py failed (exit code {code}); see its messages above.")
-        return path
-    return None
+    """--dataset as an absolute path, or None (a resumed run takes the path from its checkpoint in _train)."""
+    return os.path.abspath(args.dataset) if args.dataset else None
 
 
-def _resume_hint(args):
-    """Name other training checkpoints in the folder (e.g. runs made before the rename to tinyGPT)."""
+def resume_dataset_dir(given, obj):
+    """The dataset folder of a resumed run as an absolute path: --dataset when it is given, else the folder
+    resolve_dataset finds for the checkpoint (its stored path, tried from this script's folder too, or
+    datasets/<name> with the same fingerprint). The checkpoint stores what is returned here, so a relative
+    --dataset does not make the run depend on the folder it was resumed from. A dataset that is found nowhere
+    keeps the stored text: _train's own messages then explain a missing or a rebuilt dataset."""
+    if given:
+        return os.path.abspath(given)
+    try:
+        return os.path.abspath(resolve_dataset(obj))
+    except SystemExit:
+        return obj["dataset"]["path"]
+
+
+def _resume_hint(args, flag=" --resume"):
+    """Name other training checkpoints in the folder (e.g. runs made before the rename to tinyGPT). `flag` ends
+    the example: " --resume" after a failed --resume, nothing for a command that only reads a checkpoint."""
     found = []
     for name in sorted(os.listdir(args.out_dir)):
         if name.endswith(".pt") and not name.endswith("_best.pt") and "_crash" not in name:
             found.append(name[:-3])
     return (" Training checkpoints in this folder: " + ", ".join(found) +
-            ". Pass the right one with --name, e.g. --name " + found[0] + " --resume") if found else ""
+            ". Pass the right one with --name, e.g. --name " + found[0] + flag) if found else ""
 
 
 def newer_fallbacks(path):
@@ -3982,32 +4121,40 @@ def newer_fallbacks(path):
     return sorted((f for f in found if os.path.getmtime(f) > since), key=os.path.getmtime)
 
 
+# Signals that pause a training run like Ctrl+C (cmd_train gives them Python's Ctrl+C handler): kill, a closed
+# terminal, logout. Ctrl+Break (SIGBREAK) is not among them: it stays the one unconditional stop on Windows.
+PAUSE_SIGNALS = ("SIGTERM", "SIGHUP")
+
+
 class DeferInterrupt:
-    """Holds Ctrl+C while the optimizer update runs, so a step is applied in full
-    or not at all (an interrupt halfway through Muon's or AdamW's update would
-    save a partly updated model under the previous step number); deliver()
-    raises the held KeyboardInterrupt afterwards. Only possible in the main
-    thread with Python's own Ctrl+C handler; otherwise it does nothing."""
+    """Holds Ctrl+C (and the PAUSE_SIGNALS that cmd_train treats like it) while the
+    optimizer update runs, so a step is applied in full or not at all (an interrupt
+    halfway through Muon's or AdamW's update would save a partly updated model under
+    the previous step number); deliver() raises the held KeyboardInterrupt afterwards.
+    Only possible in the main thread, and only for a signal that has Python's own
+    Ctrl+C handler; otherwise it does nothing."""
 
     def __init__(self):
-        self.hit, self.old = False, None
+        self.hit, self.old = False, {}
 
     def _hold(self, signum, frame):
         self.hit = True
 
     def __enter__(self):
-        self.old = None
+        self.old = {}
         try:
-            if signal.getsignal(signal.SIGINT) is signal.default_int_handler:
-                self.old = signal.signal(signal.SIGINT, self._hold)
+            for name in ("SIGINT",) + PAUSE_SIGNALS:
+                number = getattr(signal, name, None)
+                if number is not None and signal.getsignal(number) is signal.default_int_handler:
+                    self.old[number] = signal.signal(number, self._hold)
         except ValueError:  # not the main thread
             pass
         return self
 
     def __exit__(self, *exc):
-        if self.old is not None:
-            signal.signal(signal.SIGINT, self.old)
-            self.old = None
+        for number, handler in self.old.items():
+            signal.signal(number, handler)
+        self.old = {}
         return False
 
     def deliver(self):
@@ -4049,8 +4196,21 @@ def release_run_lock(lock):
 
 
 def cmd_train(args):
+    for name in PAUSE_SIGNALS:  # kill, a closed terminal and logout pause the run (KeyboardInterrupt) like Ctrl+C
+        if hasattr(signal, name):
+            try:
+                # a signal the run was started to ignore stays ignored: nohup leaves SIGHUP so, to keep the run
+                # going when its terminal closes
+                if signal.getsignal(getattr(signal, name)) is not signal.SIG_IGN:
+                    signal.signal(getattr(signal, name), signal.default_int_handler)
+            except (ValueError, OSError):  # not the main thread, or the platform refuses the signal
+                pass
     lock = acquire_run_lock(args)
     try:
+        # another run (another --name) training here: said, not refused, and from the lock files alone, so that a
+        # plain --resume is never stopped or warned by what else the desktop is doing
+        if args.device != "cpu" and gpu_busy(args.out_dir, HERE, smi=False):
+            print("WARNING: " + GPU_BUSY_MESSAGE)
         return _train(args)
     finally:
         release_run_lock(lock)
@@ -4096,7 +4256,7 @@ def _train(args):
         if family != "tinygpt" or kind != wanted or "train_config" not in resume_obj:
             raise SystemExit(f"{resume_path} is a {family} {kind} checkpoint; --resume needs a tinyGPT checkpoint "
                              "written by a training run. Start a new run from its weights with --init-from instead.")
-        dataset_dir = args.dataset or resume_obj["dataset"]["path"]
+        dataset_dir = resume_dataset_dir(args.dataset, resume_obj)
     else:
         existing = [p for p in (ckpt_path, best_path) if os.path.exists(p)]
         if existing and not args.overwrite:
@@ -4106,9 +4266,14 @@ def _train(args):
         if args.init_from:
             init_obj = safe_load(args.init_from, args.trust_checkpoint, mmap=True)
     if not dataset_dir:
-        raise SystemExit("No training data: pass --dataset <folder from data_prep.py> (or --data <md folder>).")
+        raise SystemExit("No training data: pass --dataset <folder from data_prep.py>.")
     if not os.path.isdir(dataset_dir):
         raise SystemExit(f"Dataset folder not found: {dataset_dir} (moved? pass --dataset).")
+    # said before the silent part (hashing the token files, building and compiling the model), and before the
+    # header's bar: view_pt splits the sessions of a log at the bar followed by 'RUN '
+    source_path = resume_path if args.resume else args.init_from
+    print((f"loading {os.path.basename(os.path.normpath(source_path))}, " if source_path else "")
+          + "checking the dataset and compiling the model ...")
     manifest, arrays = data_prep.open_token_files(dataset_dir, verify=True)
     tok_meta = manifest["tokenizer"]
     tok = data_prep.Tokenizer.from_file(os.path.join(dataset_dir, tok_meta["file"]), tok_meta.get("encode_mode", "lines"))
@@ -4163,12 +4328,19 @@ def _train(args):
                 print(f"Note: micro-batch {old_micro} x {old_accum} -> {new_micro} x {new_accum} (same {tps:,} tokens "
                       "per step; the random windows drawn after this resume differ from an uninterrupted run, "
                       "same mixture).")
-        ignored = [f"--{k.replace('_', '-')}" for k in ("d_model", "layers", "heads", "kv_heads", "ctx", "lr",
+        ignored = [f"--{k.replace('_', '-')}" for k in ("d_model", "layers", "heads", "kv_heads", "ctx",
+                                                        "ffn_hidden", "rope_base", "lr",
                                                         "dropout", "warmup_steps",
                                                         "epochs", "train_tokens", "time_budget_hours",
                                                         "tokens_per_step")
                    if getattr(args, k) is not None]
-        if getattr(args, "tie_embeddings", "on") == "off" and cfg.tie_embeddings:
+        # options with a default: named when the value is neither that default (not typed, as far as can be told)
+        # nor the run's own, so a plain --resume of a run started under an older default says nothing
+        betas = list(settings.get("betas") or (None, None))
+        kept = {**{k: settings.get(k) for k in FIXED_OPTION_DEFAULTS}, "beta1": betas[0], "beta2": betas[1]}
+        ignored += [f"--{k.replace('_', '-')}" for k, default in FIXED_OPTION_DEFAULTS.items()
+                    if getattr(args, k) != default and getattr(args, k) != kept[k]]
+        if args.tie_embeddings == "off" and cfg.tie_embeddings:
             ignored.append("--tie-embeddings off")
         if args.qk_norm is not None and (args.qk_norm == "on") != cfg.qk_norm:
             ignored.append(f"--qk-norm {args.qk_norm}")
@@ -4213,16 +4385,31 @@ def _train(args):
         stored_ctx = config_from_checkpoint(init_obj).ctx
         cfg = config_from_checkpoint(init_obj, ctx=args.ctx)
         # the planner sizes memory, batch, steps and learning rate for exactly this architecture (experts included)
-        _, settings, plan_lines = plan_with_time_budget(args, manifest, device, amp_dtype, fixed_cfg=cfg)
+        # verbose=False here and for a fresh run: the plan lines without what the run header says itself
+        _, settings, plan_lines = plan_with_time_budget(args, manifest, device, amp_dtype, fixed_cfg=cfg,
+                                                        verbose=False)
         if args.experts and args.experts != cfg.n_experts:
             plan_lines.append(f"--experts {args.experts} ignored: the architecture is the checkpoint's "
                               f"({cfg.n_experts or 'no'} experts); start a fresh run to change it")
         for flag, value, have in (("--router", args.router, cfg.router), ("--balance", args.balance, cfg.balance)):
             if value is not None and value != have:
                 plan_lines.append(f"{flag} {value} ignored: the checkpoint's model keeps {have}")
+        for flag, value, have in (("--d-model", args.d_model, cfg.d_model), ("--layers", args.layers, cfg.n_layers),
+                                  ("--heads", args.heads, cfg.n_heads), ("--kv-heads", args.kv_heads, cfg.n_kv_heads),
+                                  ("--ffn-hidden", args.ffn_hidden, cfg.ffn_hidden),
+                                  ("--rope-base", args.rope_base, cfg.rope_base)):
+            if value is not None and value != have:
+                plan_lines.append(f"{flag} {value:g} ignored: the checkpoint's model keeps {have:g}")
+        if args.tie_embeddings == "off" and cfg.tie_embeddings:
+            plan_lines.append("--tie-embeddings off ignored: the checkpoint's model keeps its tied embedding")
         if cfg.ctx != stored_ctx:
             plan_lines.append(f"model was trained at ctx {stored_ctx}; continuing at {cfg.ctx} (RoPE tables rebuilt "
                               "for the new length, weights unchanged)")
+        if cfg.rope_base < default_rope_base(cfg.ctx):
+            # the weights were trained with this base, so it is not changed; a new run at this context would get more
+            plan_lines.append(f"RoPE base stays at the checkpoint's {cfg.rope_base:,.0f}, below the rule for ctx "
+                              f"{cfg.ctx} ({default_rope_base(cfg.ctx):,.0f}): long-range retrieval may be weaker "
+                              "than in a run started at this context")
         cfg.dropout = args.dropout if args.dropout is not None else 0.0
         if args.qk_norm is not None and (args.qk_norm == "on") != cfg.qk_norm:
             plan_lines.append(f"--qk-norm {args.qk_norm} ignored: the architecture is the checkpoint's (QK-norm "
@@ -4237,7 +4424,7 @@ def _train(args):
             plan_lines.append(f"steps: the schedule continues at the --init-from checkpoint's step {init_step:,}, "
                               f"so the planned steps run from there: {settings['steps']:,} in total")
     else:
-        cfg, settings, plan_lines = plan_with_time_budget(args, manifest, device, amp_dtype)
+        cfg, settings, plan_lines = plan_with_time_budget(args, manifest, device, amp_dtype, verbose=False)
     if cfg.vocab_size != tok.vocab_size:
         raise SystemExit(f"Model vocabulary {cfg.vocab_size} != dataset tokenizer {tok.vocab_size}.")
     total_steps = int(settings["steps"])
@@ -4249,18 +4436,23 @@ def _train(args):
         mix_alpha = float(settings.get("mix_alpha", 1.0)) if resume_obj is not None else 1.0
     mix = mix_weights(mix_text, arrays["train"], {n: len(a) for n, a in arrays["train"].items()}, mix_alpha)
     byte_tables = tuple(torch.from_numpy(t) for t in tok.byte_tables())
-    z_loss = float(settings.setdefault("z_loss", args.z_loss if resume_obj is None else 0.0))
-    if resume_obj is not None and args.z_loss != settings["z_loss"] and args.z_loss != 1e-4:
+    # a new run: 1e-4 unless --z-loss says otherwise; a resumed run from before the setting existed had none
+    z_loss = float(settings.setdefault("z_loss", (1e-4 if args.z_loss is None else args.z_loss)
+                                       if resume_obj is None else 0.0))
+    if resume_obj is not None and args.z_loss is not None and args.z_loss != settings["z_loss"]:
         print(f"Note: --z-loss ignored on --resume; this run keeps z_loss {settings['z_loss']:g}.")
     if resume_obj is None and args.eval_tokens is None:  # new run: the size follows the tokens between evaluations
         largest_val = max((len(a) - 1 for a in arrays["val"].values()), default=0)
         args.eval_tokens = default_eval_tokens(args.eval_every, int(settings["tokens_per_step"]), len(arrays["val"]),
                                                largest_val)
     # fixed windows stay fixed on resume; runs from before the key existed used the old default of 65,536
-    eval_tokens = int(settings.setdefault("eval_tokens", args.eval_tokens or 65_536))
+    eval_tokens = int(settings.setdefault("eval_tokens",
+                                          65_536 if resume_obj is not None else args.eval_tokens or 65_536))
     if resume_obj is not None and args.eval_tokens is not None and eval_tokens != args.eval_tokens:
         print(f"Note: --eval-tokens ignored on --resume; this run keeps {eval_tokens:,} (its validation windows).")
-    probes_sha = file_sha256(args.probes)[:16] if args.probes else None
+    # hashed once: the settings keep the first 16 characters, the probe report of each evaluation the whole digest
+    probes_full = file_sha256(args.probes) if args.probes else None
+    probes_sha = probes_full[:16] if probes_full else None
     if resume_obj is not None and settings.get("probes_sha") and probes_sha and settings["probes_sha"] != probes_sha:
         print(f"Note: {os.path.basename(args.probes)} has changed since this run started: fact-probe accuracies "
               "from now on are not comparable with the earlier ones.")
@@ -4288,7 +4480,7 @@ def _train(args):
         torch.cuda.reset_peak_memory_stats(device)  # peak_mem_gib on the metrics lines counts from the built model
     source_obj = resume_obj or init_obj
     if source_obj is not None:
-        missing, unexpected = model.load_state_dict({k: v for k, v in source_obj["model"].items()}, strict=False)
+        missing, unexpected = model.load_state_dict(source_obj["model"], strict=False)
         missing = [m for m in missing if not (m == "lm_head.weight" and cfg.tie_embeddings)]
         if missing or unexpected:
             raise SystemExit(f"Checkpoint weights do not fit the model (missing {missing[:3]}, "
@@ -4326,17 +4518,21 @@ def _train(args):
                 except RuntimeError as exc:  # torch.cuda.OutOfMemoryError / MPS OOM are RuntimeErrors
                     if "out of memory" not in str(exc).lower() or eval_batch <= 1:
                         raise
+                    # the traceback holds the frames of the failed forward pass, and they its activations: cleared
+                    # first, or emptying the allocator returns nothing of them
+                    traceback.clear_frames(exc.__traceback__)
                     free_device_memory(device)
                     eval_batch = max(1, eval_batch // 2)
                     print(f"Out of memory during evaluation; retrying with {eval_batch} windows at a time.")
         finally:
             model.train(was_training)
     probes = read_probes(args.probes) if args.probes else []
-    probes_sha = file_sha256(args.probes) if probes else None
 
     start_step, tokens_seen, train_seconds = 0, 0, 0.0
     run_seconds_before = 0.0  # wall-clock time of earlier sessions of this run (before --resume)
-    rewarm_start, rewarm_steps = 0, 0  # learning-rate ramp after resuming from a best checkpoint
+    # learning-rate ramp after a resume from a best checkpoint, or an --init-from whose optimizer state partly
+    # restarts
+    rewarm_start, rewarm_steps = 0, 0
     interval_state = None
     history, best_val, best_step, last_eval = [], float("inf"), None, None
     resume_note = "fresh run"
@@ -4392,8 +4588,10 @@ def _train(args):
                     del newer
                 except (Exception, SystemExit) as exc:  # noqa: BLE001 - safe_load reports a bad file as SystemExit
                     print(f"Note: could not read {best_path} ({exc}); it may be replaced by the next best.")
+            # no best: every save of the best file so far failed and was tolerated
+            best_text = f"{best_val:.4f} @{best_step}" if best_step is not None else "none"
             resume_note = (f"RESUMED {ckpt_path} at step {start_step:,} (optimizer state {restored}/{total_p} "
-                           f"tensors; best {best_val:.4f} @{best_step}; last eval "
+                           f"tensors; best {best_text}; last eval "
                            f"{last_eval['loss']:.4f} @{last_eval['step']})" if last_eval else
                            f"RESUMED {ckpt_path} at step {start_step:,}")
     elif init_obj is not None:
@@ -4416,6 +4614,15 @@ def _train(args):
         resume_note = note + "; best/last validation reset because the validation set is new"
         if start_step >= total_steps:
             raise SystemExit(f"--init-from checkpoint is at step {start_step:,}; set --steps above that.")
+        if start_step and schedule.kind == "wsd" and schedule.phase(start_step + 1) == "decay":
+            # the schedule of a training state is continued over the old and the new steps together, so its decay
+            # (a share of that total) can begin before the first step of this run. WSD only: a cosine schedule
+            # falls from the end of its warm-up on, wherever --steps puts its end
+            plan_lines.append(f"WARNING: this run starts at step {start_step + 1:,}, inside the decay of the "
+                              f"schedule it continues (steps {schedule.decay_start + 1:,}-{total_steps:,}): the "
+                              f"learning rate begins at {schedule.lr_at(start_step + 1):.2e}, below the peak "
+                              f"{float(settings['lr']):.2e}, and only falls; pass --steps (the total, counted from "
+                              "step 0) to place the decay")
 
     # The EMA of the weights (fp32 on the CPU, never trained, never in the optimizer): the saved average when the
     # training checkpoint has one for exactly these tensors, else a fresh one starting from the current weights (a
@@ -4449,33 +4656,53 @@ def _train(args):
 
     # ---------------- run header ----------------
     print(f"\n{'=' * 100}\nRUN {run_id} started {now_iso()} | {resume_note}")
-    print(f"command: {' '.join(sys.argv)}")
-    print(f"python {platform.python_version()} | torch {torch.__version__} | backend {backend_label(device)} | "
-          f"{platform.platform()} | tiny_gpt.py sha256 {file_sha256(__file__)[:12]}")
-    print(f"device: {device_label(device)} | precision: {amp_name} | attention: SDPA {attn_impl} ({attn_why}) | "
-          f"optimizer: {opt_name} ({opt_note}) | "
+    # print: the screen and log.txt. log_only: what makes the run reproducible but nobody reads on screen.
+    log_only(f"command: {' '.join(sys.argv)}")
+    log_only(f"python {platform.python_version()} | torch {torch.__version__} | backend {backend_label(device)} | "
+             f"{platform.platform()} | tiny_gpt.py sha256 {source_sha256(__file__)[:12]}")
+    print(f"device: {device_label(device)} | {amp_name} | {opt_name} | "
           f"compile: {'on' if train_model is not model else 'off (eager)'}")
+    log_only(f"device detail: attention: SDPA {attn_impl} ({attn_why}) | optimizer: {opt_name} ({opt_note})")
     if device.type == "mps":
         for note in mps_env_notes():
             print(f"environment: {note}")
-    print(f"dataset: {dataset_dir} | fingerprint {manifest['fingerprint'][:12]} | tokenizer "
-          f"{tok.vocab_size:,} pieces ({tok.encode_mode}) | train "
-          + ", ".join(f"{n} {len(a):,}" for n, a in arrays["train"].items())
-          + " | val " + ", ".join(f"{n} {len(a):,}" for n, a in arrays["val"].items()))
-    print("sampling share per source: " + ", ".join(f"{n} {p:.1%}" for n, p in batcher.share().items())
-          + f" | validation windows (fixed): {evalset.describe()}"
+    share = batcher.share()
+    n_windows = sum(w.shape[0] for w in evalset.windows.values())
+    print(f"data: {dataset_dir} ({manifest['fingerprint'][:12]}) | {unique:,} training tokens in "
+          f"{len(arrays['train'])} sources | validation: {n_windows:,} fixed windows of {cfg.ctx:,} tokens from "
+          f"{len(evalset.windows)} sources"
           + (f" | skipped (too small): {evalset.skipped}" if evalset.skipped else ""))
-    print("model: " + json.dumps(dataclasses.asdict(cfg)))
+    log_only(f"dataset: {dataset_dir} | fingerprint {manifest['fingerprint'][:12]} | tokenizer "
+             f"{tok.vocab_size:,} pieces ({tok.encode_mode}) | per source (training tokens, sampling share; "
+             "validation tokens, fixed windows): "
+             + "; ".join(f"{n} {len(a):,} {share.get(n, 0.0):.1%}"
+                         + (f", {len(arrays['val'][n]):,}" if n in arrays["val"] else ", no validation")
+                         + (f" {evalset.windows[n].shape[0]} x {cfg.ctx}" if n in evalset.windows else "")
+                         for n, a in sorted(arrays["train"].items())))
+    print(f"model: d_model {cfg.d_model}, {cfg.n_layers} layers, {cfg.n_heads} heads / {cfg.n_kv_heads} KV, ctx "
+          f"{cfg.ctx:,}, vocabulary {cfg.vocab_size:,}")
+    log_only("model: " + json.dumps(dataclasses.asdict(cfg)))
     print(f"parameters: {n_total:,} total, {n_nonembed:,} non-embedding"
           + (f", {n_active:,} active per token" if moe else ""))
-    print("train: " + json.dumps({k: v for k, v in settings.items()}))
+    log_only("train: " + json.dumps(settings))
+    # a resumed run: the whole run. After --init-from of a training state: the steps of this run alone (the
+    # schedule goes on at the checkpoint's step, whose tokens were another run's)
+    budget_steps = total_steps if resumed else max(total_steps - start_step, 0)
+    train_tokens_total = budget_steps * settings["tokens_per_step"]
+    print(f"budget: {budget_steps:,} steps"
+          + (f" ({start_step + 1:,}-{total_steps:,})" if budget_steps != total_steps else "")
+          + f" x {settings['tokens_per_step']:,} tokens ({micro} x {accum} x {cfg.ctx}) "
+          f"= {train_tokens_total:,} tokens = {train_tokens_total / n_total:,.1f} tokens/parameter, "
+          f"{train_tokens_total / max(unique, 1):,.2f} epochs")
     print(f"schedule: {schedule.describe()}")
-    print(f"weights: {ema_note}"
-          + (f"; updated every {EMA_EVERY} steps with decay {ema_decay ** EMA_EVERY:.4f} per update, scored beside "
-             "the raw weights at each evaluation while the learning rate is above 5% of peak; the better of the two "
-             f"is saved as {os.path.basename(best_path)} (its 'weights' field says which)" if ema is not None else "")
-          + ("; document mask on: attention stays within each document of a window" if model.doc_sep_id is not None
-             else ""))
+    if ema is not None or model.doc_sep_id is not None:
+        print(f"weights: {ema_note}"
+              + (f"; updated every {EMA_EVERY} steps with decay {ema_decay ** EMA_EVERY:.4f} per update, scored "
+                 "beside the raw weights at each evaluation while the learning rate is above 5% of peak; the better "
+                 f"of the two is saved as {os.path.basename(best_path)} (its 'weights' field says which)"
+                 if ema is not None else "")
+              + ("; document mask on: attention stays within each document of a window"
+                 if model.doc_sep_id is not None else ""))
     if moe:
         print(f"experts: {cfg.n_experts} per MoE block ({cfg.n_moe_blocks} of {cfg.n_layers} blocks), "
               f"{cfg.experts_per_token} per token, hidden {cfg.expert_hidden}, {cfg.router} router; balance "
@@ -4484,23 +4711,23 @@ def _train(args):
               "= even routing), moe_z, moe_load_max (busiest expert / mean) and dead_experts")
     for line in plan_lines:
         print(f"plan: {line}")
-    train_tokens_total = total_steps * settings["tokens_per_step"]
-    print(f"budget: {total_steps:,} steps x {settings['tokens_per_step']:,} tokens = {train_tokens_total:,} tokens "
-          f"= {train_tokens_total / n_total:,.1f} tokens/parameter, {train_tokens_total / max(unique, 1):,.2f} epochs")
-    print(f"every {args.eval_every} steps: metrics line (train = mean training loss since the previous line; "
-          f"val = balanced mean over sources of the validation loss on fixed windows (drives NEW BEST), "
-          f"val X @S was measured at step S; val(mix) weights sources as training samples them: compare it with "
-          f"train; ppl = exp(val)), then a sample"
-          + (f"; fact probes: {len(probes)} from {os.path.basename(args.probes)}" if probes else "")
-          + "; lines starting with '...' in between are progress only (train loss since the previous line, "
-          "no validation)")
     meter = EnergyMeter(device, args.cpu_watts, args.grid_intensity, energy_before,
                         tariff=Tariff(args.tariff, args.region))
-    print(meter.describe() + (f" Earlier sessions of this run: {meter.short()}." if meter.kwh() else ""))
+    if meter.kwh():
+        print(f"Earlier sessions of this run: {fmt_hms(run_seconds_before)}, {meter.short()}")
+    log_only(meter.describe())
+    log_only(f"evaluation: every {args.eval_every} steps on the fixed validation windows"
+             + (f"; fact probes: {len(probes)} from {os.path.basename(args.probes)}" if probes else ""))
     save_when = f"every {args.save_every} steps" + (f" and every {args.save_minutes:g} min" if args.save_minutes > 0
                                                      else "")
-    print(f"checkpoints: {ckpt_path} {save_when} (training state), {best_path} on NEW BEST "
-          f"(inference only); metrics: {metrics_path}\n{'=' * 100}")
+    print(f"output: validation every {args.eval_every} steps"
+          + (f" with {len(probes)} fact probes" if probes else "")
+          + f" | {os.path.basename(ckpt_path)} {save_when}, {os.path.basename(best_path)} on NEW BEST, in "
+          f"{os.path.dirname(os.path.abspath(ckpt_path))}"
+          + (f" | full settings: {os.path.basename(_LOG_STATE['path'])}" if _LOG_STATE.get("path") else ""))
+    log_only(f"checkpoints: {ckpt_path} {save_when} (training state), {best_path} on NEW BEST "
+             f"(inference only); metrics: {metrics_path}")
+    print("=" * 100)
     if start_step >= total_steps:
         print(f"Checkpoint already reached step {start_step:,} of {total_steps:,}; nothing to train. "
               "Extend with --resume --steps N.")
@@ -4542,7 +4769,10 @@ def _train(args):
                         "cuda": device_rng_state(device) if device.type == "cuda" else None,
                         "mps": device_rng_state(device) if device.type == "mps" else None},
                 "batcher": batcher.state_dict(),
-                "interval": {"loss_sum": float(interval_loss), "micro": interval_micro},
+                # a mixture of experts adds the sums of its balance figures (optional keys: a dense run has none)
+                "interval": {"loss_sum": float(interval_loss), "micro": interval_micro,
+                             **({"lb_sum": float(interval_lb), "z_sum": float(interval_z),
+                                 "counts": interval_counts.tolist()} if moe else {})},
             })
         return base
 
@@ -4559,7 +4789,7 @@ def _train(args):
 
     # ---------------- baseline evaluation ----------------
     if not resumed and not history:
-        print(f"measuring the untrained model on the fixed validation windows ({evalset.describe()}) ...")
+        print("measuring the untrained model on the fixed validation windows ...")
         ev = evaluate_retrying()
         history.append({"step": start_step, "tokens": tokens_seen, "train_loss": None, "val_loss": ev["loss"],
                         "val_mix": ev["loss_mix"], "bpb": ev["bpb"], "bpb_mix": ev["bpb_mix"],
@@ -4569,24 +4799,23 @@ def _train(args):
                         "entropy": ev["entropy"], "confidence": ev["confidence"], "top1": ev["top1"],
                         "ece": ev["ece"], "probe_acc": None, "grad_norm": None, "is_best": False,
                         "baseline": True, "time": now_iso()})
-        write_metrics(history[-1])
-        print(f"step {start_step:>6}/{total_steps} | baseline before training | val {ev['loss']:.3f} @{start_step}"
-              + _per_source(ev) + f" | ppl {math.exp(min(ev['loss'], 50)):,.1f} | bpb {ev['bpb']:.3f} "
-              f"| uniform-guess loss would be {math.log(cfg.vocab_size):.3f} (not counted as best)")
+        try:
+            write_metrics(history[-1])
+        except OSError as exc:  # the row is in the history that the checkpoints carry
+            print(f"WARNING: could not write {metrics_path} ({type(exc).__name__}: {str(exc)[:160]}); the baseline "
+                  "evaluation is missing from it")
+        print(f"step {start_step:>6}/{total_steps} | baseline before training | val {ev['loss']:.4f} @{start_step}"
+              f" | bpb {ev['bpb']:.3f} | uniform-guess loss would be {math.log(cfg.vocab_size):.3f} "
+              "(not counted as best)")
 
     def run_seconds():
         """Wall-clock time of the whole run so far: earlier sessions plus this one."""
         return run_seconds_before + (time.perf_counter() - t_run)
 
-    def elapsed_text(now=None):
-        session = (now or time.perf_counter()) - t_run
-        if not run_seconds_before:
-            return f"elapsed {fmt_hms(session)}"
-        return f"elapsed {fmt_hms(session)} (whole run {fmt_hms(run_seconds_before + session)})"
-
-    dashboard = {"proc": None, "pushed": 0.0}
     dashboard_on = args.dashboard == "on" or (
         args.dashboard == "auto" and os.path.normcase(os.path.abspath(args.out_dir)) == os.path.normcase(HERE))
+    best_png = os.path.splitext(os.path.basename(best_path))[0] + "_dashboard.png"  # view_pt.py's name for it
+    dashboard = {"proc": None, "pushed": last_dashboard_push(best_png) if dashboard_on else 0.0}
 
     # ---------------- training loop ----------------
     model.train()
@@ -4606,6 +4835,7 @@ def _train(args):
     interval_z = torch.zeros((), device=device)
     aux = None
     save_failures = 0  # periodic saves failed in a row (disk full, locked file, no memory for the copy)
+    best_failures = 0  # saves of the best file failed in a row
     oom_retries = 0  # out-of-memory retries of the current step (after the first step)
     peak_mem = 0  # bytes: the process's peak memory on the device so far, sampled after every step (peak_mem_gib)
     fail_note = None  # the exception that ended the run, for the experiments table
@@ -4618,6 +4848,17 @@ def _train(args):
     if interval_state:  # resumed between evaluations: the next "train" value covers the whole interval
         interval_loss += float(interval_state.get("loss_sum", 0.0))
         interval_micro = int(interval_state.get("micro", 0))
+        if moe:
+            # the balance sums of the interval so far; a checkpoint from before they were saved resumes with them
+            # at zero, as it always did (its first moe figures after the pause are then too low)
+            if interval_state.get("lb_sum") is not None:
+                interval_lb.fill_(float(interval_state["lb_sum"]))
+            if interval_state.get("z_sum") is not None:
+                interval_z.fill_(float(interval_state["z_sum"]))
+            if interval_state.get("counts") is not None:
+                saved_counts = torch.tensor(interval_state["counts"], dtype=torch.long)
+                if saved_counts.shape == interval_counts.shape:
+                    interval_counts.copy_(saved_counts)
     held = DeferInterrupt()
     # first-step out-of-memory: halve the micro-batch down to about 2k tokens (the planner's preference: micro 2 x
     # 132 without checkpointing beats 4 x 66 with it), then recompute blocks, then halve further
@@ -4668,7 +4909,8 @@ def _train(args):
             scaler_state = scaler.state_dict() if scaler is not None else None  # for a retry of this step
             step += 1
             lr = schedule.lr_at(step)
-            if rewarm_steps and step - rewarm_start <= rewarm_steps:  # only after resuming from a best checkpoint
+            # after a resume from a best checkpoint, or an --init-from whose optimizer state partly restarts
+            if rewarm_steps and step - rewarm_start <= rewarm_steps:
                 lr *= (step - rewarm_start) / rewarm_steps
             for group in opt.param_groups:
                 group["lr"] = lr
@@ -4779,6 +5021,7 @@ def _train(args):
                     oom_retries += 1
                     if oom_retries > 2:
                         raise
+                    traceback.clear_frames(exc.__traceback__)  # the failed pass's frames hold its activations
                     opt.zero_grad(set_to_none=True)
                     x = y = logits = flat = lse = loss = ce = zsum = output = aux = None
                     free_device_memory(device)
@@ -4795,6 +5038,7 @@ def _train(args):
                 # earlier out-of-memory retry) is retried once in eager mode; an eager failure is raised as it is
                 if not (oom or train_model is not model):
                     raise
+                traceback.clear_frames(exc.__traceback__)  # the failed pass's frames hold its activations
                 opt.zero_grad(set_to_none=True)
                 x = y = logits = flat = lse = loss = ce = zsum = output = aux = None  # drop the failed batch and its graph before retrying
                 free_device_memory(device)
@@ -4802,8 +5046,8 @@ def _train(args):
                 if scaler is not None:  # a new scaler with the same scale: forgets an unscale_ already done
                     scaler = torch.amp.GradScaler(device.type)
                     scaler.load_state_dict(scaler_state)
-                # cheapest remedy first: the loss in pieces, then a smaller micro-batch down to 4, then recomputation,
-                # then smaller still; never one that the command line switched off
+                # cheapest remedy first: the loss in pieces, then a smaller micro-batch down to about 2,048 tokens
+                # (micro_floor), then recomputation, then smaller still; never one that the command line switched off
                 chunk_ok = not loss_chunk and args.loss_chunk_tokens != 0
                 ckpt_ok = not model.grad_checkpoint and args.activation_checkpointing != "off"
                 if not oom:
@@ -4866,8 +5110,11 @@ def _train(args):
             stop_now = bool(args.stop_after_steps) and step - start_step >= args.stop_after_steps
             do_save = (step % args.save_every == 0 or step == total_steps or stop_now
                        or (args.save_minutes > 0 and time.perf_counter() - last_save >= args.save_minutes * 60))
+            # one after the first completed step of a session (the run is seen to train), then one whenever
+            # nothing was printed for --heartbeat-seconds
             heartbeat = (args.heartbeat_seconds > 0 and not (do_eval or do_progress)
-                         and time.perf_counter() - last_print >= args.heartbeat_seconds)
+                         and (step == start_step + 1
+                              or time.perf_counter() - last_print >= args.heartbeat_seconds))
             if not (do_eval or do_progress or do_save or heartbeat):
                 continue
 
@@ -4881,14 +5128,11 @@ def _train(args):
                 ptrain = (progress_loss / max(progress_micro, 1)).item()
                 per_step = interval_train_time / max(step - interval_start_step, 1)
                 next_eval = min(total_steps, (step // args.eval_every + 1) * args.eval_every)
-                # progress only: the latest validation (with the step it was measured at), the share done and the
-                # tokens seen so far; learning rate, whole-run time and ETA are on the validation lines
-                val_text = f"val {last_eval['loss']:.3f} @{last_eval['step']}" if last_eval else "val -"
+                # progress only: the share done, the training loss since the previous line, the speed and the clock
+                # time; validation, learning rate, energy and ETA are on the evaluation lines
                 print(f"{'  ... ' if heartbeat else ''}step {step:>6}/{total_steps} | {step / total_steps:5.1%} | "
-                      f"train {ptrain:.3f} | {val_text} | "
-                      f"{interval_tokens / max(interval_train_time, 1e-9):,.0f} tok/s | {per_step:.2f} s/step | "
-                      f"{tokens_seen:,} tokens | elapsed {fmt_hms(now - t_run)} | "
-                      f"next val in {fmt_dur(per_step * (next_eval - step))}")
+                      f"train {ptrain:.3f} | {interval_tokens / max(interval_train_time, 1e-9):,.0f} tok/s | "
+                      f"{clock()} | next val in {fmt_dur(per_step * (next_eval - step))}")
                 progress_loss.zero_()
                 progress_micro = 0
                 last_print = time.perf_counter()
@@ -4915,7 +5159,7 @@ def _train(args):
                     probe_acc, probe_results = score_probes(model, tok, probes, device, amp_dtype)
                     probe_floor_acc = probe_floor(probe_results)
                     probe_by_category = {k: round(v["accuracy"], 4) for k, v in probe_summary(probe_results).items()}
-                    ev["probes"] = probe_report(probe_results, probes_sha)  # kept in the checkpoint for view_pt
+                    ev["probes"] = probe_report(probe_results, probes_full)  # kept in the checkpoint for view_pt
                 prev_best, prev_step = best_val, best_step
                 # the best model is whichever weights score lower, the raw ones or the average; the best file
                 # records which it holds ("weights": "raw" | "ema")
@@ -4924,7 +5168,7 @@ def _train(args):
                 is_best = candidate < best_val
                 if is_best:
                     best_val, best_step = candidate, step
-                last_eval = {k: v for k, v in ev.items()}
+                last_eval = ev
                 elapsed = time.perf_counter() - t_run
                 per_step = (time.perf_counter() - interval_wall) / max(step - interval_start_step, 1)
                 eta = per_step * (total_steps - step)
@@ -4967,29 +5211,49 @@ def _train(args):
                 if is_best:  # before printing or sampling, so Ctrl+C can never leave an announced best unsaved
                     try:
                         save(best_path, True, step, best_source)
-                    except BaseException:
-                        # not written (Ctrl+C, full disk): record no best that no file holds
-                        best_val, best_step, entry["is_best"] = prev_best, prev_step, False
-                        try:  # the evaluation stays in history (and the saved training state): keep the file in step
-                            write_metrics(entry)
-                        except Exception:  # noqa: BLE001 - the disk may be the problem; the first error matters
-                            pass
-                        raise
-                    if dashboard_on:
-                        launch_dashboard(best_path, args, dashboard)
-                write_metrics(entry)
+                        best_failures = 0
+                    except BaseException as exc:
+                        # not written (Ctrl+C, full disk, no memory for the copy): record no best that no file holds
+                        best_val, best_step = prev_best, prev_step
+                        entry["is_best"], entry["best_weights"] = False, None
+                        best_failures += 1
+                        if not isinstance(exc, Exception) or best_failures >= 3:
+                            # the evaluation stays in history (and the saved training state): keep the file in step
+                            try:
+                                write_metrics(entry)
+                            except Exception:  # noqa: BLE001 - the disk may be the problem; the first error matters
+                                pass
+                            raise
+                        # like a failed periodic save, this must not end a run that is training fine: the evaluation
+                        # counts as no best, so the next one that beats the best file on disk is saved in its place
+                        is_best = False
+                        print(f"WARNING: could not save {best_path} ({type(exc).__name__}: {str(exc)[:160]}); "
+                              f"training continues, the next better evaluation tries again ({best_failures}/3)")
+                        free_device_memory(device)
+                try:
+                    write_metrics(entry)
+                except OSError as exc:  # the row is in the history that the checkpoints carry
+                    print(f"WARNING: could not write {metrics_path} ({type(exc).__name__}: {str(exc)[:160]}); "
+                          f"the evaluation of step {step} is missing from it")
+                # after the row is written (view_pt.py adds the rows after the best file's last step), and at every
+                # evaluation: the curves go on when the run stops improving
+                if dashboard_on and os.path.exists(best_path):
+                    launch_dashboard(best_path, args, dashboard)
                 if is_best:
-                    status_text = (f"NEW BEST (prev {prev_best:.3f} @{prev_step})" if prev_step is not None
+                    status_text = (f"NEW BEST (prev {prev_best:.4f} @{prev_step})" if prev_step is not None
                                    else "NEW BEST (first evaluation)") + (" (ema weights)" if best_source == "ema"
                                                                            else "")
+                elif best_step is None:
+                    status_text = "no best saved yet"  # only after a failed first save of the best file
                 else:
-                    status_text = f"best {best_val:.3f} @{best_step}"
-                print(f"step {step:>6}/{total_steps} | train {train_loss:.3f} | val {ev['loss']:.3f} @{step}"
-                      + _per_source(ev)
+                    status_text = f"best {best_val:.4f} @{best_step}"
+                print(f"step {step:>6}/{total_steps} | train {train_loss:.3f} | val {ev['loss']:.4f} @{step}"
                       + (f" | val(mix) {ev['loss_mix']:.3f}" if ev.get("loss_mix") is not None else "")
-                      + (f" | val(ema) {ev_ema['loss']:.3f}" if ev_ema is not None else "")
-                      + f" | ppl {entry['ppl']:,.2f} | bpb {ev['bpb']:.3f} | lr {lr:.2e} | {tok_s:,.0f} tok/s | "
-                      f"{meter.short()} | {elapsed_text()} | ETA {fmt_dur(eta)}{moe_text} | {status_text}")
+                      + (f" | val(ema) {ev_ema['loss']:.4f}" if ev_ema is not None else "")
+                      + f" | bpb {ev['bpb']:.3f}"
+                      + (f" | probes {probe_acc:.1%}" if probe_acc is not None else "")
+                      + f" | lr {lr:.2e} | {tok_s:,.0f} tok/s | "
+                      f"{meter.short(co2e=False)} | {clock()} | ETA {fmt_dur(eta)}{moe_text} | {status_text}")
                 last_print = time.perf_counter()
                 if args.sample_every and (step % args.sample_every == 0 or step == total_steps):
                     gen = torch.Generator().manual_seed(sample_gen_seed)
@@ -5012,11 +5276,14 @@ def _train(args):
                     save_failures = 0
                 except Exception as exc:  # noqa: BLE001 - not BaseException: Ctrl+C keeps its own path below
                     # A save that fails (disk full, file locked, no RAM for the CPU copy) must not end a run that
-                    # is training fine: the loop goes on and tries again in about a minute, three times in a row
-                    # at most. A save that the session needs now (its last step, --stop-after-steps) is raised.
+                    # is training fine: the loop goes on and tries again in about a minute (with --save-minutes 0 at
+                    # the next multiple of --save-every), three times in a row at most. A save that the session
+                    # needs now (its last step, --stop-after-steps) is raised.
                     save_failures += 1
+                    next_try = ("in about a minute" if args.save_minutes > 0 else "at step "
+                                f"{min(total_steps, (step // args.save_every + 1) * args.save_every):,}")
                     print(f"WARNING: could not save {ckpt_path} ({type(exc).__name__}: {str(exc)[:160]}); "
-                          f"training continues, next attempt in about a minute ({save_failures}/3)")
+                          f"training continues, next attempt {next_try} ({save_failures}/3)")
                     x = y = logits = flat = lse = loss = ce = zsum = output = aux = None
                     free_device_memory(device)
                     last_save = time.perf_counter() - args.save_minutes * 60 + 60
@@ -5032,25 +5299,29 @@ def _train(args):
             seg = time.perf_counter()
     except KeyboardInterrupt:
         status = "interrupted"
-        if seg is not None:  # the time since the last counted point was training
-            train_seconds += time.perf_counter() - seg
-        if done_step < step:
-            # Ctrl+C arrived inside a step, before its update (which Ctrl+C never
-            # splits). Rewind the sampler, dropout RNG and loss sums so --resume
-            # replays exactly that step, and save the last completed step (the
-            # original script saved the unfinished step number).
-            rewind(step_start)
-            opt.zero_grad(set_to_none=True)
-            step = done_step
-        if bool(torch.isfinite(last_gnorm)):
-            saved = save(ckpt_path, False, step)
-            print(f"\nPaused after step {step:,} (last completed update); saved {saved}.\n"
-                  f"Resume with: python tiny_gpt.py --name {args.name} --resume")
-        else:
-            crash = os.path.join(args.out_dir, f"{args.name}_crash.pt")
-            atomic_save(payload(step, inference_only=False), crash)
-            print(f"\nPaused after step {step:,}, but the gradients were not finite: the state went to {crash}; "
-                  f"{ckpt_path} still holds the last good training state.")
+        # A second Ctrl+C is held until the state of this pause is written: it used to abort the save, and the
+        # checkpoint kept the last periodic state (up to --save-minutes of training lost).
+        with held:
+            if seg is not None:  # the time since the last counted point was training
+                train_seconds += time.perf_counter() - seg
+            if done_step < step:
+                # Ctrl+C arrived inside a step, before its update (which Ctrl+C never
+                # splits). Rewind the sampler, dropout RNG and loss sums so --resume
+                # replays exactly that step, and save the last completed step.
+                rewind(step_start)
+                opt.zero_grad(set_to_none=True)
+                step = done_step
+            print(f"\nCtrl+C: saving the training state at step {step:,}, please wait ...")
+            if bool(torch.isfinite(last_gnorm)):
+                saved = save(ckpt_path, False, step)
+                print(f"Paused after step {step:,} (last completed update); saved {saved}.\n"
+                      f"Resume with: python tiny_gpt.py --name {args.name} --resume")
+            else:
+                crash = os.path.join(args.out_dir, f"{args.name}_crash.pt")
+                atomic_save(payload(step, inference_only=False), crash)
+                print(f"Paused after step {step:,}, but the gradients were not finite: the state went to {crash}; "
+                      f"{ckpt_path} still holds the last good training state.")
+        held.hit = False  # a Ctrl+C held during the save asked for the pause that has just been made
     except BaseException as exc:
         status = "failed"
         fail_note = f"{type(exc).__name__}: {str(exc)[:200]}"
@@ -5058,6 +5329,7 @@ def _train(args):
         # the step's tensors and graph are dropped first: after an out-of-memory error the full state (optimizer
         # included) needs the room, and if even that fails the weights alone are still worth keeping
         x = y = logits = flat = lse = loss = ce = zsum = output = aux = None
+        traceback.clear_frames(exc.__traceback__)  # and what the frames of the failed call still hold
         gc.collect()
         try:
             try:
@@ -5073,7 +5345,6 @@ def _train(args):
         raise
     finally:
         meter.stop()
-        n_total, n_nonembed, n_active, _ = model.param_counts()
         last_hist = history[-1] if history else {}
         record_experiment(args.out_dir, {
             "event": "training run", "name": args.name, "status": status, "step": step, "total_steps": total_steps,
@@ -5109,7 +5380,7 @@ def _train(args):
             "train_hours": f"{train_seconds / 3600:.2f}", "run_hours": f"{run_seconds() / 3600:.2f}",
             **energy_columns(meter, device, fail_note), "checkpoint": ckpt_path})
         print(f"RUN {run_id} {status} at {now_iso()} | step {step:,}/{total_steps:,} | best val "
-              f"{best_val:.4f} @{best_step} | last val "
+              + (f"{best_val:.4f} @{best_step}" if best_step is not None else "none") + " | last val "
               + (f"{last_eval['loss']:.4f} @{last_eval['step']}" if last_eval else "none")
               + f" | this session {fmt_hms(time.perf_counter() - t_run)} | whole run: "
               f"{fmt_hms(run_seconds())} in total, {fmt_hms(train_seconds)} of it training, {meter.short()} "
@@ -5205,7 +5476,9 @@ def publish_experiments(path, row):
     with open(path, encoding="utf-8-sig") as handle:
         text = _hide_home(handle.read())  # rows are written with ~ already; older rows are covered too
     what = " ".join(str(row.get(k)) for k in ("event", "name", "status") if row.get(k))
-    status = publish_to_github("results/experiments.csv", f"Experiments: {what}", content=text, wait=False)
+    # with the byte-order mark the table was created with (read above without it): Excel takes the file for UTF-8
+    status = publish_to_github("results/experiments.csv", f"Experiments: {what}", content="\ufeff" + text,
+                               wait=False)
     print(f"experiments.csv on GitHub (results/experiments.csv): {status}")
 
 
@@ -5213,66 +5486,81 @@ def record_experiment(out_dir, row):
     """Append one row to <out_dir>/results/experiments.csv (opens in Excel), the
     single permanent record of every run, benchmark and comparison; paths show
     the home folder as ~. A table left by older versions directly in <out_dir>
-    is moved there first (lose nothing)."""
+    is moved there first (lose nothing). A table that cannot be read or written
+    (another encoding, a damaged file, a full disk) costs this row and one note:
+    a run calls this as it ends, and must still reach its last line."""
     import csv
     path = experiments_path(out_dir)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     legacy = os.path.join(out_dir, "experiments.csv")
-    if os.path.isfile(legacy) and not os.path.exists(path):
-        with open(legacy, encoding="utf-8-sig") as handle:
-            text = _hide_home(handle.read())
-        with open(path, "w", encoding="utf-8-sig", newline="") as handle:
-            handle.write(text)
-        os.remove(legacy)
-    new = not os.path.exists(path)
-    if not new:
-        try:
-            with open(path, encoding="utf-8-sig", newline="") as handle:
-                header = next(csv.reader(handle), [])
-            with open(path, encoding="utf-8-sig", newline="") as handle:
-                old_rows = list(csv.DictReader(handle))
-            # known columns in the standard order; columns this version does not know are kept at the end
-            target = (EXPERIMENT_COLUMNS if set(header) <= set(EXPERIMENT_COLUMNS)
-                      else header + [c for c in EXPERIMENT_COLUMNS if c not in header])
-            if header != target:
-                # a newer version added columns: keep a copy, rewrite once with the full header, lose nothing
-                stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-                import shutil
-                shutil.copy2(path, f"{path}.before-columns-{stamp}")
-                tmp = path + ".tmp"
-                with open(tmp, "w", encoding="utf-8-sig", newline="") as handle:
-                    writer = csv.DictWriter(handle, fieldnames=target)
-                    writer.writeheader()
-                    writer.writerows(old_rows)
-                os.replace(tmp, path)
-            columns = target
-        except PermissionError:
-            columns = EXPERIMENT_COLUMNS  # the append below reports the locked file
-    else:
-        columns = EXPERIMENT_COLUMNS
     try:
-        with open(path, "a", encoding="utf-8-sig" if new else "utf-8", newline="") as handle:
-            writer = csv.DictWriter(handle, fieldnames=columns, extrasaction="ignore")
-            if new:
-                writer.writeheader()
-            writer.writerow({"time": now_iso(), **{k: _hide_home(v) for k, v in row.items() if v is not None}})
-    except PermissionError:
-        print(f"Note: {path} is open in another program (Excel?); this row was not recorded: {row}")
+        if os.path.isfile(legacy) and not os.path.exists(path):
+            with open(legacy, encoding="utf-8-sig") as handle:
+                text = _hide_home(handle.read())
+            with open(path, "w", encoding="utf-8-sig", newline="") as handle:
+                handle.write(text)
+            os.remove(legacy)
+        new = not os.path.exists(path)
+        if not new:
+            try:
+                with open(path, encoding="utf-8-sig", newline="") as handle:
+                    header = next(csv.reader(handle), [])
+                with open(path, encoding="utf-8-sig", newline="") as handle:
+                    # restkey: a row with more cells than the header has columns keeps them under a name that is
+                    # no column (None, the default, is refused by the writer)
+                    old_rows = list(csv.DictReader(handle, restkey="_extra"))
+                # known columns in the standard order; columns this version does not know are kept at the end
+                target = (EXPERIMENT_COLUMNS if set(header) <= set(EXPERIMENT_COLUMNS)
+                          else header + [c for c in EXPERIMENT_COLUMNS if c not in header])
+                if header != target:
+                    # a newer version added columns: keep a copy, rewrite once with the full header, lose nothing
+                    # (cells beyond the header stay in the copy only)
+                    stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+                    import shutil
+                    shutil.copy2(path, f"{path}.before-columns-{stamp}")
+                    tmp = path + ".tmp"
+                    with open(tmp, "w", encoding="utf-8-sig", newline="") as handle:
+                        writer = csv.DictWriter(handle, fieldnames=target, extrasaction="ignore")
+                        writer.writeheader()
+                        writer.writerows(old_rows)
+                    os.replace(tmp, path)
+                columns = target
+            except PermissionError:
+                columns = EXPERIMENT_COLUMNS  # the append below reports the locked file
+        else:
+            columns = EXPERIMENT_COLUMNS
+        try:
+            with open(path, "a", encoding="utf-8-sig" if new else "utf-8", newline="") as handle:
+                writer = csv.DictWriter(handle, fieldnames=columns, extrasaction="ignore")
+                if new:
+                    writer.writeheader()
+                writer.writerow({"time": now_iso(), **{k: _hide_home(v) for k, v in row.items() if v is not None}})
+        except PermissionError:
+            print(f"Note: {path} is open in another program (Excel?); this row was not recorded: {row}")
+            return
+    except (OSError, ValueError, csv.Error) as exc:  # UnicodeDecodeError is a ValueError
+        try:
+            os.remove(path + ".tmp")
+        except OSError:
+            pass
+        print(f"Note: {path} could not be read or written ({type(exc).__name__}: {str(exc)[:160]}); this row was not "
+              f"recorded: {row}")
         return
     if os.path.normcase(os.path.abspath(out_dir)) == os.path.normcase(HERE):  # this folder's runs, not test runs
         publish_experiments(path, row)
 
 
-def _per_source(ev):
-    if len(ev["per_source"]) < 2:
-        return ""
-    return " [" + " ".join(f"{n} {v:.3f}" for n, v in ev["per_source"].items()) + "]"
+# Whether the user chose the folder of torch.compile's cache. Asked when this module is imported, because torch
+# writes its own choice (a folder in the temp folder) into the variable when its compiler is first imported, and
+# building an optimizer imports it: a training run does that before maybe_compile is reached.
+COMPILE_CACHE_GIVEN = "TORCHINDUCTOR_CACHE_DIR" in os.environ
 
 
 def maybe_compile(model, mode, device, return_hidden=False, amp_dtype=None, micro=1, return_aux=False):
     """The model compiled with torch.compile, warmed up once with exactly the call
-    training makes (a (micro, ctx) batch under the same autocast; return_hidden:
-    the chunked loss), so the training graph is compiled here and a compile failure
+    training makes (a (micro, ctx) batch with the layout of TokenBatcher.next()'s,
+    under the same autocast; return_hidden: the chunked loss), so the training
+    graph is compiled here and a compile failure
     falls back to eager instead of failing step 1; or the model itself (eager)
     when compiling is off, unavailable or fails. Running out of memory in the
     warm-up is not a compile failure: the compiled model is returned and the
@@ -5293,11 +5581,18 @@ def maybe_compile(model, mode, device, return_hidden=False, amp_dtype=None, micr
         return model
     compiled, failure = None, None
     try:
+        # the compiled graphs are kept beside the script, not in the temp folder (which gets emptied: every graph
+        # is then compiled again at the next start); a TORCHINDUCTOR_CACHE_DIR the user set wins. Assigned, not
+        # setdefault: by now torch has put its temp folder into the variable (see COMPILE_CACHE_GIVEN), and it
+        # reads the variable each time it needs the folder
+        if not COMPILE_CACHE_GIVEN:
+            os.environ["TORCHINDUCTOR_CACHE_DIR"] = os.path.join(HERE, ".compile_cache")
         # dynamic=False: a new shape (a halved micro-batch after an out-of-memory error) gets its own static graph
         # instead of turning the training graph into a slower dynamic-shape one
         compiled = torch.compile(model, dynamic=False)
-        # the shape and autocast state training uses: Dynamo guards on both, so this graph is the one step 1 reuses
-        x = torch.zeros((max(1, int(micro)), model.ctx), dtype=torch.long, device=device)
+        # the shape, the strides and the autocast state training uses: Dynamo guards on all three, so this graph is
+        # the one step 1 reuses (a batch is the first ctx columns of a (micro, ctx + 1) tensor: input_and_target)
+        x, _ = input_and_target(torch.zeros((max(1, int(micro)), model.ctx + 1), dtype=torch.long, device=device))
         # fork_rng: the warm-up's dropout masks must not consume the (restored) random state of the run
         with fork_device_rng(device):
             with torch.autocast(device.type, dtype=amp_dtype or torch.float32, enabled=amp_dtype is not None):
@@ -5337,6 +5632,8 @@ def cmd_plan(args):
         # the plan never opens a checkpoint (so it cannot change one); a resumed run keeps its own settings
         print(f"Note: --plan describes a new run on this dataset; {'--resume' if args.resume else '--init-from'} is "
               "ignored here (a resumed run keeps its checkpoint's settings, printed in its run header).")
+    if args.time_budget_hours and args.device != "cpu" and gpu_busy(args.out_dir, HERE, smi=False):
+        print("WARNING: " + GPU_BUSY_MESSAGE)  # the time budget is planned from training steps timed now
     cfg, settings, lines = plan_with_time_budget(args, manifest, device, amp_dtype)
     print(f"\nPlan for {dataset_dir} on {device_label(device)} ({amp_name}) at {now_iso()}")
     for line in lines:
@@ -5355,23 +5652,32 @@ def cmd_plan(args):
     print(f"  {'unique tokens':>14} {'train tokens':>14} {'d':>5} {'L':>3} {'H/KV':>6} {'ctx':>5} {'params':>11} "
           f"{'tok/param':>9} {'tok/step':>9} {'batch':>12} {'lr':>8}")
     for unique, planned, c, n, tps, fits, lr in plan_table(int(manifest["tokenizer"]["vocab_size"]), device,
-                                                           amp_dtype, args.tokens_per_param, args.max_epochs):
+                                                           amp_dtype, args.tokens_per_param, args.max_epochs,
+                                                           args.optimizer or "adamw"):
         print(f"  {unique:>14,.0f} {planned:>14,.0f} {c.d_model:>5} {c.n_layers:>3} {c.n_heads:>3}/{c.n_kv_heads:<2} "
               f"{c.ctx:>5} {n:>11,} {planned / n:>9.1f} {tps:>9,} {fits:>12} {lr:>8.1e}")
 
 
 def _log_path_from(argv):
-    """--log-file is read before full parsing so argument errors are logged too."""
-    for i, item in enumerate(argv):
-        if item == "--log-file" and i + 1 < len(argv):
-            return argv[i + 1]
-        if item.startswith("--log-file="):
-            return item.split("=", 1)[1]
-    return os.path.join(HERE, "log.txt")
+    """--log-file is read before full parsing so argument errors are logged too: by a parser that knows this one
+    option, so that an abbreviation ('--log-f X') means here what it means to parse_args. '--l', '--lo', '--log'
+    and '--log-' are not shown to it: parse_args refuses them as ambiguous (--log-every, --lr, ...), so the
+    value after a mistyped '--log 50' is no log file."""
+    default = os.path.join(HERE, "log.txt")
+    pre = argparse.ArgumentParser(add_help=False, exit_on_error=False)
+    pre.add_argument("--log-file", default=default)
+    try:
+        return pre.parse_known_args([item for item in argv if item.split("=", 1)[0] not in
+                                     ("--l", "--lo", "--log", "--log-")])[0].log_file
+    except argparse.ArgumentError:  # no value after it: parse_args reports that, into the default log
+        return default
 
 
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else list(argv)
+    if any(item in ("-h", "--help") for item in argv):
+        parse_args(argv)  # prints the options and exits: the help text is no part of a run's log
+        return
     start_log(_log_path_from(argv))
     print(f"\n--- tinyGPT {now_iso()} | log {os.path.abspath(_log_path_from(argv))} ---")
     try:

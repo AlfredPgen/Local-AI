@@ -47,7 +47,7 @@ sys.path.insert(0, sys.argv[1])
 import tiny_gpt  # noqa: E402
 
 mode, n = sys.argv[2], int(sys.argv[3])
-calls = {"next": 0, "clip": 0, "save": 0, "gen": 0}
+calls = {"next": 0, "clip": 0, "save": 0, "gen": 0, "best": 0}
 real_next, real_clip = tiny_gpt.TokenBatcher.next, torch.nn.utils.clip_grad_norm_
 real_save, real_gen = tiny_gpt.atomic_save, tiny_gpt.generate
 before = {}
@@ -56,7 +56,7 @@ before = {}
 def next_batch(self):
     out = real_next(self)  # drawn first: a retry must rewind the sampler
     calls["next"] += 1
-    if mode == "interrupt" and calls["next"] == n:
+    if mode in ("interrupt", "interrupt_twice") and calls["next"] == n:
         raise KeyboardInterrupt
     if mode == "oom" and calls["next"] <= n:
         raise RuntimeError("CUDA out of memory (simulated)")
@@ -87,9 +87,15 @@ def clip(params, *a, **k):
 def save(obj, path):
     if obj.get("checkpoint_type") == "training" and not path.endswith("_crash.pt"):
         calls["save"] += 1
+        if mode == "interrupt_twice" and calls["save"] == 1:  # a second Ctrl+C while the pause save is written
+            signal.raise_signal(signal.SIGINT)
         # savefail: the first n training-state saves fail; saveflaky: of the first n, two in every three fail
         if (mode == "savefail" and calls["save"] <= n) or (
                 mode == "saveflaky" and calls["save"] <= n and calls["save"] % 3 != 0):
+            raise OSError(28, "No space left on device (simulated)")
+    if obj.get("checkpoint_type") == "inference" and not path.endswith("_crash.pt"):
+        calls["best"] += 1  # its own counter: savefail and saveflaky count the training-state saves
+        if mode == "bestfail" and calls["best"] <= n:  # the first n saves of the best file fail
             raise OSError(28, "No space left on device (simulated)")
     return real_save(obj, path)
 
@@ -431,7 +437,15 @@ class TestPipeline(unittest.TestCase):
             model.set_attention_impl("gqa_native")
             b = model(x)
             self.assertTrue(torch.allclose(a, b, atol=1e-5), "GQA implementations must agree")
-        w = model.blocks[0].attn.attention_weights(model.blocks[0].attn_norm(model.token_embedding(x)), model.rope)
+        import view_pt  # its attention entropy against a by-hand causal softmax(QK^T/sqrt(d)) of the first block
+        attn = model.blocks[0].attn
+        with torch.no_grad():
+            q, k, _ = attn._qkv(model.blocks[0].attn_norm(model.token_embedding(x[:1, :-1])), model.rope)
+            scores = (q @ k.repeat_interleave(attn.n_rep, dim=1).transpose(-1, -2)) / math.sqrt(attn.head_dim)
+            w = scores.masked_fill(torch.ones(15, 15, dtype=torch.bool).triu(1), float("-inf")).softmax(-1)
+        by_hand = (-(w * w.clamp(min=1e-30).log2()).sum(-1)[0, :, 1:] / torch.arange(2, 16).log2()).mean(-1)
+        got = view_pt.attention_entropy(model, x[0], torch.device("cpu"))
+        self.assertLess(np.abs(got[0] - by_hand.numpy()).max(), 1e-5, "viewer entropy = by-hand softmax entropy")
         self.assertTrue(torch.allclose(w.sum(-1), torch.ones_like(w.sum(-1)), atol=1e-5))
         self.assertEqual(float(w[0, 0, 0, 1:].sum()), 0.0, "attention must be causal")
         total = model.param_counts()[0]
@@ -491,12 +505,28 @@ class TestPipeline(unittest.TestCase):
         code, out_b = run(self.common + ["--name", "B", "--steps", "24", "--stop-after-steps", "16", "--no-probes"])
         self.assertEqual(code, 0, out_b)
         self.assertIn("Stopped after 16 steps", out_b)
+        log_size = os.path.getsize(os.path.join(self.runs, "log.txt"))  # the log is cumulative
         code, out_r = run(["tiny_gpt.py", "--name", "B", "--out-dir", self.runs, "--log-file",
                            os.path.join(self.runs, "log.txt"), "--device", "cpu", "--resume", "--eval-every", "8",
                            "--eval-tokens", "2048", "--sample-tokens", "8", "--no-probes"])
         self.assertEqual(code, 0, out_r)
         self.assertIn("RESUMED", out_r)
         self.assertIn("val(mix)", out_r)
+        # the start-up block of the resumed session: short on screen, the full settings in log.txt only
+        lines_r = out_r.splitlines()
+        first = next(i for i, line in enumerate(lines_r) if line.startswith("RUN "))
+        header = lines_r[first + 1:lines_r.index("=" * 100, first)]
+        self.assertLessEqual(len(header), 12, out_r)
+        for gone in ("command: ", "train: {", "metrics line (train = mean"):
+            self.assertNotIn(gone, "\n".join(header))
+        with open(os.path.join(self.runs, "log.txt"), "rb") as handle:
+            handle.seek(log_size)
+            log_r = handle.read().decode("utf-8")
+        for needle in ("command: ", "model: {", "train: {", "checkpoints: ", "per source (training tokens"):
+            self.assertIn(needle, log_r)
+        import view_pt  # the viewer still finds the run's sessions and evaluation lines in the log
+        from_log, _ = view_pt.history_from_log(os.path.join(self.runs, "log.txt"), os.path.join(self.runs, "B.pt"))
+        self.assertEqual([row["step"] for row in from_log], [8, 16, 24])
         # extending a run needs at least one step after its warmup
         warmup = torch.load(os.path.join(self.runs, "B.pt"), map_location="cpu",
                             weights_only=True)["train_config"]["warmup_steps"]
@@ -648,7 +678,7 @@ class TestPipeline(unittest.TestCase):
         self.assertIn("initialised from", out_i)
         self.assertIn("time budget 0.01 h", out_i)
         # energy and carbon: metrics line, run summary, table, and a checkpoint total that adds up across --resume
-        self.assertRegex(out, r"\| \d+\.\d{2} kWh, [\d,]+ g CO2e, £\d+\.\d{2} \|")
+        self.assertRegex(out, r"\| \d+\.\d{2} kWh, £\d+\.\d{2} \|")
         self.assertIn("whole run", out)
         self.assertIn("energy_kwh", table.splitlines()[0])
         self.assertIn("Earlier sessions of this run", out_r)
@@ -731,12 +761,7 @@ class TestPipeline(unittest.TestCase):
         self.assertGreater(high, 0.5)
         self.assertEqual(tiny_gpt.fmt_dur(35_400), "9h 50m")
         self.assertEqual(tiny_gpt.fmt_dur(125), "2m 05s")
-
-    def test_compat_dataset_names_follow_settings(self):
-        a = tiny_gpt.parse_args(["--data", self.corpus.md, "--wiki-articles", "30000"])
-        b = tiny_gpt.parse_args(["--data", self.corpus.md, "--wiki-articles", "50000"])
-        self.assertNotEqual(tiny_gpt.compat_dataset_dir(a), tiny_gpt.compat_dataset_dir(b))
-        self.assertIn("wiki50000", tiny_gpt.compat_dataset_dir(b))
+        self.assertEqual(tiny_gpt.fmt_dur(1_486_500), "17d 04h")
 
     def test_converter(self):
         src, out = os.path.join(self.tmp, "raw"), os.path.join(self.tmp, "converted")
@@ -1290,9 +1315,14 @@ class TestPipeline(unittest.TestCase):
         import csv
         log = os.path.join(self.runs, "log.txt")
         muon = self.common + ["--optimizer", "muon", "--no-probes"]
+        log_size = os.path.getsize(log) if os.path.exists(log) else 0  # the log is cumulative: read this run's part
         code, out = run(muon + ["--name", "M", "--steps", "16"])
         self.assertEqual(code, 0, out)
-        self.assertIn("optimizer: Muon + AdamW (Muon for 14 block matrices", out)
+        with open(log, "rb") as handle:  # the optimizer note is in log.txt only; the screen names the optimizer
+            handle.seek(log_size)
+            log_part = handle.read().decode("utf-8")
+        self.assertIn("optimizer: Muon + AdamW (Muon for 14 block matrices", log_part)
+        self.assertIn(" | Muon + AdamW | compile: ", out)
         code, out_s = run(muon + ["--name", "N", "--steps", "16", "--stop-after-steps", "8"])
         self.assertEqual(code, 0, out_s)
         code, out_r = run(["tiny_gpt.py", "--name", "N", "--out-dir", self.runs, "--log-file", log, "--device", "cpu",
@@ -1341,11 +1371,15 @@ class TestPipeline(unittest.TestCase):
         import csv
         log = os.path.join(self.runs, "log.txt")
         moe = self.common + ["--optimizer", "muon", "--no-probes", "--experts", "4"]
+        log_size = os.path.getsize(log) if os.path.exists(log) else 0  # the log is cumulative: read this run's part
         code, out = run(moe + ["--name", "X", "--steps", "16"])
         self.assertEqual(code, 0, out)
+        with open(log, "rb") as handle:  # the optimizer note is in log.txt only
+            handle.seek(log_size)
+            log_part = handle.read().decode("utf-8")
         # 2 blocks x (4 attention projections + 4 experts x 2 matrices) on Muon; the embedding and the 2 routers on AdamW
-        self.assertIn("Muon for 24 block matrices", out)
-        self.assertIn("AdamW for the embedding (3 matrices)", out)
+        self.assertIn("Muon for 24 block matrices", log_part)
+        self.assertIn("AdamW for the embedding (3 matrices)", log_part)
         self.assertIn("experts: 4 per MoE block (2 of 2 blocks), 2 per token, hidden 128", out)
         self.assertRegex(out, r"parameters: [\d,]+ total, [\d,]+ non-embedding, [\d,]+ active per token")
         self.assertRegex(out, r"step +16/16 \| train .*\| moe lb [\d.]+ z [\d.]+ load max [\d.]+ dead \d+ \|")
