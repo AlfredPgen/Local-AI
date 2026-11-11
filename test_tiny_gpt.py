@@ -755,6 +755,7 @@ class TestPipeline(unittest.TestCase):
         self.assertGreater(high, 0.5)
         self.assertEqual(tiny_gpt.fmt_dur(35_400), "9h 50m")
         self.assertEqual(tiny_gpt.fmt_dur(125), "2m 05s")
+        self.assertEqual(tiny_gpt.fmt_dur(1_486_500), "17d 04h")
 
     def test_converter(self):
         src, out = os.path.join(self.tmp, "raw"), os.path.join(self.tmp, "converted")

@@ -174,6 +174,11 @@ def log_only(text):
         pass
 
 
+def clock():
+    """'Tue 12:41': when a line was printed."""
+    return time.strftime("%a %H:%M")
+
+
 def now_iso():
     return datetime.datetime.now().astimezone().isoformat(timespec="seconds")
 
@@ -184,8 +189,10 @@ def fmt_hms(seconds):
 
 
 def fmt_dur(seconds):
-    """Duration as '9h 50m' / '12m 03s' (never confused with a clock time)."""
+    """Duration as '17d 04h' / '9h 50m' / '12m 03s' (never confused with a clock time)."""
     seconds = int(max(seconds, 0))
+    if seconds >= 172_800:  # from two days on: '17d 04h'
+        return f"{seconds // 86_400}d {seconds % 86_400 // 3600:02d}h"
     if seconds >= 3600:
         return f"{seconds // 3600}h {seconds % 3600 // 60:02d}m"
     return f"{seconds // 60}m {seconds % 60:02d}s"
@@ -4716,12 +4723,6 @@ def _train(args):
         """Wall-clock time of the whole run so far: earlier sessions plus this one."""
         return run_seconds_before + (time.perf_counter() - t_run)
 
-    def elapsed_text(now=None):
-        session = (now or time.perf_counter()) - t_run
-        if not run_seconds_before:
-            return f"elapsed {fmt_hms(session)}"
-        return f"elapsed {fmt_hms(session)} (whole run {fmt_hms(run_seconds_before + session)})"
-
     dashboard_on = args.dashboard == "on" or (
         args.dashboard == "auto" and os.path.normcase(os.path.abspath(args.out_dir)) == os.path.normcase(HERE))
     best_png = os.path.splitext(os.path.basename(best_path))[0] + "_dashboard.png"  # view_pt.py's name for it
@@ -5130,7 +5131,7 @@ def _train(args):
                       + f" | bpb {ev['bpb']:.3f}"
                       + (f" | probes {probe_acc:.1%}" if probe_acc is not None else "")
                       + f" | lr {lr:.2e} | {tok_s:,.0f} tok/s | "
-                      f"{meter.short(co2e=False)} | {elapsed_text()} | ETA {fmt_dur(eta)}{moe_text} | {status_text}")
+                      f"{meter.short(co2e=False)} | {clock()} | ETA {fmt_dur(eta)}{moe_text} | {status_text}")
                 last_print = time.perf_counter()
                 if args.sample_every and (step % args.sample_every == 0 or step == total_steps):
                     gen = torch.Generator().manual_seed(sample_gen_seed)
