@@ -2258,9 +2258,10 @@ def push_dashboard(png, ck):
         top = _git("rev-parse", "--show-toplevel")
         if top.returncode != 0:
             return
-        # realpath on both sides: git names the real folder, the checkpoint may be reached through a link to it
+        # realpath on both folders: git names the real folder, the checkpoint may be reached through a link to
+        # it. The file's own name is not resolved: a checkpoint that is a link belongs to the folder it is in.
         root = os.path.normcase(os.path.realpath(top.stdout.strip()))
-        ck_dir = os.path.normcase(os.path.dirname(os.path.realpath(ck.path)))
+        ck_dir = os.path.normcase(os.path.realpath(os.path.dirname(os.path.abspath(ck.path))))
         if os.path.commonpath([root, ck_dir]) != root:
             return
         rel = "dashboards/" + os.path.basename(png)

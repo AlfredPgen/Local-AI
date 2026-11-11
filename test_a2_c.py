@@ -841,6 +841,20 @@ class Audit2Viewer(unittest.TestCase):
         self.assertIn("A_best.pt at step 8", publish.call_args.args[1])
         # a checkpoint outside the repository is still left alone
         pushed(types_ns(path=os.path.join(self.tmp, "A_best.pt"), obj={"step": 8})).assert_not_called()
+        # a checkpoint FILE that is itself a link (weights kept on another disk) belongs to the folder it was
+        # opened from: only the folder is resolved. A file link needs a privilege on Windows, so realpath is
+        # told what it would answer for one.
+        linked = os.path.join(root, "runs", "L_best.pt")
+        elsewhere = os.path.join(self.tmp, "other_disk", "L_best.pt")
+        real = os.path.realpath
+
+        def through_the_link(name, **options):
+            same = os.path.normcase(os.path.abspath(name)) == os.path.normcase(linked)
+            return elsewhere if same else real(name, **options)
+
+        with unittest.mock.patch.object(os.path, "realpath", side_effect=through_the_link):
+            pushed(types_ns(path=linked, obj={"step": 8})).assert_called_once()
+            pushed(types_ns(path=elsewhere, obj={"step": 8})).assert_not_called()
 
     # ---------------- F407 ----------------
     def test_tensor_table_is_not_printed_with_a_picture(self):
