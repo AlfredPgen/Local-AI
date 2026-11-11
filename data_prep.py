@@ -7,7 +7,8 @@ record is dropped without a reason in docs.tsv / report.md.
                (e.g. Wikipedia), Parquet shards (e.g. FineWeb-Edu) and JSONL.
   2. clean     UTF-8 decode, BOM/CRLF/NFC normalisation, control characters,
                trailing spaces, runs of blank lines.
-  3. filter    empty/short records, replacement-character damage, optional
+  3. filter    empty/short records, replacement-character damage, documents
+               that are clearly not English (--language en), optional
                case-insensitive whole-word include/exclude keywords.
   4. dedup     exact duplicates (normalised-text hash) are skipped; near
                duplicates (MinHash-LSH, word 5-grams) are grouped so they land
@@ -27,8 +28,8 @@ in pass 1, deleted as pass 2 consumes them) and token files are written
 incrementally, so the text itself is never held in RAM and the disk needs about
 0.4x the corpus at the peak. The near-duplicate signatures live in a
 memory-mapped work file; what stays in RAM is the per-document metadata (id,
-title, counts: about 0.5 KB per kept document, measured 1.4 KB before the
-signatures and the ledger moved out). The trainer memory-maps the token files.
+title, counts: about 0.5 KB per kept document). The trainer memory-maps the
+token files.
 A build that fails after pass 2 keeps its work files and continues with
 --resume (tokenizer and tokenization only, not the hours of reading).
 
@@ -38,14 +39,14 @@ only handles text.
 
 Examples
 --------
-    python data_prep.py --out datasets\bio_v1 --md-dir %USERPROFILE%\ai_training_data ^
-        --wiki-dir %USERPROFILE%\ai_training_data\wikipedia --wiki-max-docs 100000 ^
+    python data_prep.py --out datasets\bio_v1 --text-root $HOME\ai_training_data `
+        --wiki-dir $HOME\ai_training_data\wikipedia --wiki-max-docs 100000 `
         --include-keywords keywords.txt --keyword-min-distinct 3
 
-    python data_prep.py --out datasets\fineweb_bio --parquet "D:\fineweb-edu\*.parquet" ^
+    python data_prep.py --out datasets\fineweb_bio --parquet "D:\fineweb-edu\*.parquet" `
         --parquet-name fineweb --min-score 3 --include-keywords keywords.txt
 
-    python data_prep.py --out datasets\probe --md-dir %USERPROFILE%\ai_training_data --scan-only
+    python data_prep.py --out datasets\probe --text-root $HOME\ai_training_data --scan-only
 """
 
 import argparse
@@ -63,14 +64,15 @@ import re
 import shutil
 import sys
 import time
+import traceback
 import unicodedata
+import zlib
 
 import numpy as np
 
-HERE = os.path.dirname(os.path.abspath(__file__))
 FORMAT = "tiny_gpt_dataset"
 FORMAT_VERSION = 1
-MD_PATTERNS_DEFAULT = ("*.md", "*.markdown", "*.rmd", "*.Rmd", "*.txt",  # and gzip-compressed copies of them:
+MD_PATTERNS_DEFAULT = ("*.md", "*.markdown", "*.rmd", "*.txt",  # and gzip-compressed copies of them:
                        "*.md.gz", "*.markdown.gz", "*.rmd.gz", "*.txt.gz")
 SOURCE_NAME_RE = r"[A-Za-z][A-Za-z0-9_-]{0,31}"
 
@@ -136,7 +138,20 @@ class Tokenizer:
         }
 
     def encode(self, text):
-        return self.encode_batch([text])[0]
+        """The ids encode_batch([text])[0] gives. A text of few lines (a prompt, a
+        probe) skips SentencePiece's list call, which costs 0.15 ms by itself; a
+        text of many lines takes it: from about 100 lines on it is the faster way
+        (a document of 10,000 short lines: 15 ms against 42 ms line by line)."""
+        if self.encode_mode == "plain":
+            return list(self.sp.encode(text, out_type=int))
+        if text.count("\n") > 64:
+            return self.encode_batch([text])[0]
+        ids, nl = [], self.newline_id
+        for j, part in enumerate(text.split("\n")):
+            if j:
+                ids.append(nl)
+            ids.extend(self.sp.encode(part, out_type=int))
+        return ids
 
     def encode_batch(self, texts, threads=1):
         if self.encode_mode == "plain":
@@ -292,10 +307,15 @@ def read_manifest(dataset_dir):
     return manifest
 
 
-def sha256_file(path, chunk=1 << 22):
+def sha256_file(path, chunk=1 << 22, stop=None):
+    """SHA-256 of a file, as hex. `stop` (a threading.Event) is looked at before
+    every block: once it is set the rest of the file is left unread and the
+    result is None."""
     digest = hashlib.sha256()
     with open(path, "rb") as handle:
         while True:
+            if stop is not None and stop.is_set():
+                return None
             block = handle.read(chunk)
             if not block:
                 break
@@ -307,12 +327,16 @@ def open_token_files(dataset_dir, verify=True):
     """Memory-map every token file listed in the manifest.
 
     Returns (manifest, {"train": {source: memmap}, "val": {source: memmap}}).
-    Sizes are always checked; SHA-256 checksums when verify=True.
+    Sizes are always checked; SHA-256 checksums when verify=True, in a few
+    threads (hashlib releases the GIL), all before returning: a mismatch names
+    the first failing file in manifest order. Ctrl+C stops the check at once,
+    as it did when the files were hashed one after another.
     """
     manifest = read_manifest(dataset_dir)
     dtype = np.dtype(manifest["dtype"])
     root = os.path.realpath(dataset_dir)
     arrays = {"train": {}, "val": {}}
+    checks = []  # (path, expected sha256) in manifest order
     for source, info in manifest["sources"].items():
         for split in ("train", "val"):
             entry = info.get(split)
@@ -325,9 +349,27 @@ def open_token_files(dataset_dir, verify=True):
             if not os.path.isfile(path) or os.path.getsize(path) != expected:
                 raise SystemExit(f"{path} is missing or has the wrong size "
                                  f"(expected {expected:,} bytes). Rebuild the dataset.")
-            if verify and entry.get("sha256") and sha256_file(path) != entry["sha256"]:
-                raise SystemExit(f"{path} failed its SHA-256 check. Rebuild the dataset.")
+            if verify and entry.get("sha256"):
+                checks.append((path, entry["sha256"]))
             arrays[split][source] = np.memmap(path, dtype=dtype, mode="r", shape=(int(entry["tokens"]),))
+    if checks:
+        import threading
+        from concurrent.futures import ThreadPoolExecutor, wait
+        stop = threading.Event()
+        pool = ThreadPoolExecutor(max_workers=min(4, os.cpu_count() or 1))
+        try:
+            pending = futures = [pool.submit(sha256_file, path, stop=stop) for path, _ in checks]
+            # Windows cannot interrupt a plain wait for a thread: look up five times a second, so that
+            # Ctrl+C is seen while the files are being hashed and not when they are done
+            while pending:
+                pending = wait(pending, timeout=0.2).not_done
+            digests = [future.result() for future in futures]
+        finally:  # after Ctrl+C or a read error: drop the files not started, stop the others at their next block
+            stop.set()
+            pool.shutdown(wait=False, cancel_futures=True)
+        for (path, expected), digest in zip(checks, digests):
+            if digest != expected:
+                raise SystemExit(f"{path} failed its SHA-256 check. Rebuild the dataset.")
     return manifest, arrays
 
 
@@ -422,8 +464,12 @@ _LETTER_WORDS_RE = re.compile(r"[^\W\d_]+")
 def looks_english(text):
     """Heuristic language check, calibrated on this corpus: English prose has
     30-40% function words; narrations in another language had 0% and ~7% non-ASCII
-    letters. Short texts, tables and code (ASCII) are always kept."""
-    body = text[:8_000]  # ~1,300 words decide the language as well as the whole text
+    letters. Short texts, tables and code (ASCII) are always kept. The first
+    8,000 characters (~1,300 words) decide; a text they would reject is kept
+    when 8,000 characters from its middle read as English prose (an English
+    thesis behind title pages in another language, a paper behind licence lines
+    and an author list)."""
+    body = text[:8_000]
     words = _LETTER_WORDS_RE.findall(body)
     if len(words) < 50:
         return True
@@ -432,7 +478,12 @@ def looks_english(text):
         return True
     letters = "".join(words)
     non_ascii = (len(letters) - len(letters.encode("ascii", "ignore"))) / max(len(letters), 1)
-    return non_ascii <= 0.005
+    if non_ascii <= 0.005:
+        return True
+    # the middle window must show the function words itself: neither the short-text nor the ASCII rule applies to it
+    middle = len(text) // 2
+    words = _LETTER_WORDS_RE.findall(text[middle:middle + 8_000])
+    return len(words) >= 50 and sum(w.lower() in _EN_FUNCTION_WORDS for w in words) / len(words) >= 0.10
 
 
 def normalised_hash(text):
@@ -479,7 +530,7 @@ def read_terms(value):
     lines = []
     for item in items:
         if os.path.isfile(item):
-            with open(item, encoding="utf-8") as handle:
+            with open(item, encoding="utf-8-sig") as handle:  # -sig: a byte-order mark is not part of the first line
                 lines.extend(handle.read().splitlines())
         elif os.path.splitext(item)[1].lower() in (".txt", ".tsv", ".csv", ".lst"):
             raise SystemExit(f"Keyword file not found: {item}")
@@ -547,28 +598,47 @@ def _can_overlap(a, b):
 def _re2_term(words, case_sensitive, lead, trail):
     rx = r"\W+".join(re.escape(w) for w in words)
     ascii_word = lambda ch: ch.isascii() and (ch.isalnum() or ch == "_")  # noqa: E731 - RE2 \b is ASCII-only
-    rx = (r"\b\w*" if lead else r"\b" if ascii_word(words[0][0]) else "") + rx
-    rx += r"\w*\b" if trail else r"\b" if ascii_word(words[-1][-1]) else ""
+    edge = r"\b" if ascii_word(words[0][0]) else ""  # '*école': no \b before a non-ASCII letter, wildcard or not
+    rx = (edge + r"\w*" if lead else edge) + rx
+    edge = r"\b" if ascii_word(words[-1][-1]) else ""
+    rx += r"\w*" + edge if trail else edge
     return f"(?-i:{rx})" if case_sensitive else rx
 
 
 PREFILTER_TERMS_PER_PATTERN = 200
+PREFILTER_VERSION = 1  # part of the cache key: add 1 with any change to _re2_term, _prefilter_patterns or _can_overlap
+# Every pattern is one more RE2 pass over all the text, so above this many patterns the prefilter costs more
+# than the exact Python check of every record that it saves (measured break-even: 17 patterns on Wikipedia
+# text, 30 on FineWeb). 'top' selection ranks by the RE2 counts and uses them whatever their number.
+PREFILTER_MAX_PATTERNS = 24
+
+
+def _use_prefilter(kw):
+    """Do the readers reject records by the RE2 counts before the full check?
+    (Read at call time: a test can patch the constant.)"""
+    return kw is not None and 0 < len(kw.include_patterns) <= PREFILTER_MAX_PATTERNS
 
 
 def _prefilter_patterns(terms):
     """RE2 patterns for the vectorised C++ prefilter; the SUM of their match
-    counts is never below the Python matcher's count, so no document the full
-    check would keep is rejected early. One pattern counts overlapping terms
-    once ('genetic drift' also contains 'genetic*'), so terms whose matches
-    could overlap go to different groups (2,385 terms -> 5 groups).
+    counts is not below the Python matcher's count on text that cleaning
+    leaves unchanged and that has only ASCII between the words of a phrase, so
+    no such document the full check would keep is rejected early. Three known
+    exceptions, all rare: non-ASCII letters inside the non-word run that joins
+    two phrase words (RE2's non-word class is ASCII-only, so one long match
+    can hide two real ones); accents that are not NFC-normalised in the raw
+    text (the full check sees the cleaned text); and the scan window, cut on
+    the raw text here and on the cleaned text in the full check. One pattern
+    counts overlapping terms once ('genetic drift' also contains 'genetic*'),
+    so terms whose matches could overlap go to different groups.
     Words are joined by any non-word run, as the Python matcher allows; word
     boundaries are only required next to ASCII word characters.
 
-    Each group is split into patterns of at most 200 terms (2,385 terms -> 16
-    patterns): a larger alternation outgrows RE2's fast automaton memory and
-    falls back to a far slower matcher (one pattern of 2,104 terms ran at 0.22
-    MB/s on Wikipedia text; 16 patterns of <= 200 terms at 14.4 MB/s, with
-    identical counts, since terms within a group never overlap).
+    Each group is split into patterns of at most 200 terms (the 22,650 terms
+    of keywords.txt give 120 patterns): a larger alternation outgrows RE2's
+    fast automaton memory and falls back to a far slower matcher (one pattern
+    of 2,104 terms ran at 0.22 MB/s on Wikipedia text), and the counts are
+    identical, since terms within a group never overlap.
 
     RE2 counts non-overlapping matches, but a phrase of n words whose last
     words can repeat its first ones ('Gallus gallus' in 'Gallus gallus
@@ -630,22 +700,42 @@ def _prefilter_patterns(terms):
 
 def prefilter_cache_path(keyword_spec):
     """Where the RE2 prefilter patterns of a keyword FILE are cached: next to it,
-    <file>.prefilter.json (None for literal comma-separated terms)."""
+    <file>.prefilter.json (None unless the value is one existing file)."""
     if keyword_spec and os.path.isfile(keyword_spec):
         return os.path.abspath(keyword_spec) + ".prefilter.json"
     return None
 
 
+KEYWORDS_USED_NAME = "keywords.used.txt"  # in the dataset folder: the include list the documents were chosen with
+
+
+def keyword_list_record(value, terms):
+    """(what the manifest records about an --include-keywords or
+    --exclude-keywords value, the bytes of that list). One existing file gives
+    its path, the SHA-256 of its bytes and the number of terms; anything else
+    (terms on the command line, several files) gives no path and the SHA-256 of
+    the terms written one per line."""
+    if os.path.isfile(value):
+        with open(value, "rb") as handle:
+            data = handle.read()
+        name = os.path.abspath(value)
+    else:
+        data, name = ("\n".join(terms) + "\n").encode("utf-8"), None
+    return {"file": name, "sha256": hashlib.sha256(data).hexdigest(), "terms": len(terms)}, data
+
+
 def cached_prefilter_patterns(terms, cache_path=None):
     """_prefilter_patterns(terms), read from the cache file when its key matches:
-    the SHA-256 of the terms (in order) plus PREFILTER_TERMS_PER_PATTERN, so any
-    edit of the keyword file or of the pattern size recomputes. Building the
+    the SHA-256 of the terms (in order) plus PREFILTER_TERMS_PER_PATTERN and
+    PREFILTER_VERSION, so any edit of the keyword file, of the pattern size or
+    of the rules that build the patterns recomputes. Building the
     patterns for 22,650 terms takes 65-155 s at the start of every data_prep and
     estimate_dataset run; the cache is read in milliseconds. A cache that cannot
     be read or written is simply not used."""
     if not terms:
         return []
-    key = hashlib.sha256(("\n".join(terms) + f"\n{PREFILTER_TERMS_PER_PATTERN}").encode("utf-8")).hexdigest()
+    key = hashlib.sha256(("\n".join(terms) + f"\n{PREFILTER_TERMS_PER_PATTERN}\nv{PREFILTER_VERSION}")
+                         .encode("utf-8")).hexdigest()
     if cache_path:
         try:
             with open(cache_path, encoding="utf-8") as handle:
@@ -660,7 +750,7 @@ def cached_prefilter_patterns(terms, cache_path=None):
             tmp = f"{cache_path}.{os.getpid()}.tmp"
             with open(tmp, "w", encoding="utf-8") as handle:
                 json.dump({"key": key, "terms": len(terms), "terms_per_pattern": PREFILTER_TERMS_PER_PATTERN,
-                           "patterns": patterns}, handle)
+                           "version": PREFILTER_VERSION, "patterns": patterns}, handle)
             os.replace(tmp, cache_path)
         except OSError:
             pass
@@ -670,10 +760,12 @@ def cached_prefilter_patterns(terms, cache_path=None):
 class _Affixes:
     """Wildcard terms ('genom*' = prefix, '*mab' = suffix) grouped by length. A
     word is looked up only if its first (or last) three letters begin (or end)
-    some term, which settles most words with one set lookup."""
+    some term, which settles most words with one lookup, and then only at the
+    lengths of the terms with those three letters (by_head). With a term of
+    fewer than three letters there is no such table and every length is tried."""
 
     def __init__(self, suffix):
-        self.suffix, self.by_length, self.heads = suffix, collections.defaultdict(dict), None
+        self.suffix, self.by_length, self.heads, self.by_head = suffix, collections.defaultdict(dict), None, None
 
     def add(self, text, term):
         self.by_length[len(text)][text] = term
@@ -682,15 +774,20 @@ class _Affixes:
         self.lengths = sorted(self.by_length)
         if self.lengths and self.lengths[0] >= 3:
             self.heads = {t[-3:] if self.suffix else t[:3] for table in self.by_length.values() for t in table}
+            self.by_head = {head: [] for head in self.heads}
+            for length in self.lengths:
+                for head in {t[-3:] if self.suffix else t[:3] for t in self.by_length[length]}:
+                    self.by_head[head].append(length)
         return self
 
     def count(self, freq, counter, weight):
-        heads, suffix = self.heads, self.suffix
+        by_head, suffix = self.by_head, self.suffix
         for w, c in freq.items():
-            if heads is not None and (w[-3:] if suffix else w[:3]) not in heads:
+            lengths = self.lengths if by_head is None else by_head.get(w[-3:] if suffix else w[:3])
+            if lengths is None:
                 continue
             size = len(w)
-            for length in self.lengths:
+            for length in lengths:
                 if length > size:
                     break
                 term = self.by_length[length].get(w[-length:] if suffix else w[:length])
@@ -711,10 +808,9 @@ class _TermMatcher:
     def __init__(self, terms):
         self.single, self.single_cs = {}, {}
         # Phrases are indexed by their first TWO words, so at a text position only the phrases that can
-        # actually start there are tried ('hla' begins 88 phrases of keywords.txt, 'cell' 45; the old
-        # first-word table looped over all of them at every 'cell'). A two-word phrase whose second word
-        # carries the trailing wildcard ('genetic drif*') cannot be looked up exactly and stays in a
-        # first-word table. The counts are identical to the first-word matcher's, about 2x faster.
+        # actually start there are tried ('hla' begins 88 phrases of keywords.txt, 'cell' 45). A two-word
+        # phrase whose second word carries the trailing wildcard ('genetic drif*') cannot be looked up
+        # exactly and stays in a first-word table.
         self.phrase = _PhraseTable()
         self.phrase_cs = _PhraseTable()
         self.prefix, self.prefix_cs = _Affixes(False), _Affixes(False)
@@ -789,7 +885,7 @@ class _PhraseTable:
         """Matches starting at each position of the word sequence: a phrase of n
         words matches when words 2..n-1 are equal and the last word is equal (or
         starts with it, for a trailing wildcard); every (position, phrase) pair
-        counts once, as in the first-word matcher."""
+        counts once."""
         n = len(seq)
         pairs, open_second = self.pairs, self.open_second
         for i, w in enumerate(seq):
@@ -821,14 +917,17 @@ class KeywordFilter:
     reveal their topic early). The include terms also compile to a few RE2
     patterns (include_patterns) for the vectorised C++ prefilter over
     Arrow/Parquet/JSONL data; exclusions are decided by the full check only.
+    A caller that only calls evaluate() passes prefilter=False: the patterns
+    are then not built (minutes for a long keyword file) and include_patterns
+    is empty, which every reader takes as 'the full check decides'.
     """
 
     def __init__(self, include, exclude, min_hits=3, min_distinct=2, title_weight=3,
-                 scan_chars=100_000, pattern_cache=None):
+                 scan_chars=100_000, pattern_cache=None, *, prefilter=True):
         self.include, self.exclude = include, exclude
         self.min_hits, self.min_distinct = max(0, min_hits), max(0, min_distinct)
         self.title_weight, self.scan_chars = title_weight, scan_chars
-        self.include_patterns = cached_prefilter_patterns(include, pattern_cache)
+        self.include_patterns = cached_prefilter_patterns(include, pattern_cache) if prefilter else []
         self._include = _TermMatcher(include) if include else None
         self._exclude = _TermMatcher(exclude) if exclude else None
 
@@ -910,47 +1009,83 @@ def _excluded(path, rel, excludes):
     return any(fnmatch.fnmatchcase(name, ex) or fnmatch.fnmatchcase(rel, ex) for ex in excludes)
 
 
-def iter_markdown(dirs, patterns, excludes, recursive, stats, ledger, source="md"):
+def iter_markdown(dirs, patterns, excludes, recursive, stats, ledger, source="md", read_threads=16, read_window=64,
+                  read_ahead_bytes=8 * 1024 * 1024):
     """Documents of one text source. With several folders, ids start with the
-    folder name so equal file names in different folders stay distinct."""
-    seen = set()
+    folder name so equal file names in different folders stay distinct.
+
+    The first open of a file is the slow part (the virus scanner looks at it),
+    so `read_threads` background threads open and read the files, at most
+    `read_window` files ahead of the one being used and only files of up to
+    `read_ahead_bytes` (the window then holds at most 64 x 8 MB); an excluded
+    file is not read at all. Everything else, unpacking a .gz included, happens
+    here, one file at a time in path order."""
+    seen, produced = set(), set()  # real paths looked at; ids of the documents given out
     bases = [os.path.basename(os.path.normpath(d)) or f"folder{k + 1}" for k, d in enumerate(dirs)]
     if len({b.lower() for b in bases}) < len(bases):
         bases = [f"{k + 1}-{b}" for k, b in enumerate(bases)]
     excludes = [ex.lower().replace("\\", "/") for ex in excludes]
-    for k, directory in enumerate(dirs):
-        if not os.path.isdir(directory):
-            raise SystemExit(f"--md-dir is not a folder: {directory}")
-        for path in list_text_files(directory, patterns, recursive):
-            real = os.path.realpath(path)
-            if real in seen or not os.path.isfile(real):
+
+    def listed():  # runs in this thread, up to read_window files ahead
+        for k, directory in enumerate(dirs):
+            if not os.path.isdir(directory):
+                yield k, directory, None, None, None, None  # reported at its turn, after the files before it
+                return
+            for path in list_text_files(directory, patterns, recursive):
+                # ids use "/" on every system: the split hashes the id, so a Mac build of the same folder gives
+                # the same split and fingerprint as a Windows build (the 2026-10 datasets hold "\\" in nested ids;
+                # --keep-split-from matches them separator-blind, a fresh rebuild re-splits those documents)
+                rel = os.path.relpath(path, directory).replace(os.sep, "/")
+                packed = rel.lower().endswith(".gz")
+                if packed:
+                    rel = rel[:-3]  # a.md.gz has the id of a.md, so compressing a folder keeps every split decision
+                yield k, directory, path, rel, packed, _excluded(path, rel, excludes)
+
+    def opened(item):  # runs in a reader thread
+        path, excluded = item[2], item[5]
+        if path is None:
+            return item + (None, False, 0, None)
+        real = os.path.realpath(path)
+        is_file = os.path.isfile(real)
+        size = os.path.getsize(path) if is_file else 0
+        raw = None
+        if is_file and not excluded and size <= read_ahead_bytes:
+            with open(path, "rb") as handle:
+                raw = handle.read()
+        return item + (real, is_file, size, raw)
+
+    ahead = _read_ahead(listed(), opened, read_threads, read_window)
+    try:
+        for k, directory, path, rel, packed, excluded, real, is_file, size, raw in ahead:
+            if path is None:
+                raise SystemExit(f"--md-dir is not a folder: {directory}")
+            if real in seen or not is_file:
                 continue
             seen.add(real)
-            # ids use "/" on every system: the split hashes the id, so a Mac build of the same folder gives
-            # the same split and fingerprint as a Windows build (the 2026-10 datasets hold "\\" in nested ids;
-            # --keep-split-from matches them separator-blind, a fresh rebuild re-splits those documents)
-            rel = os.path.relpath(path, directory).replace(os.sep, "/")
-            packed = rel.lower().endswith(".gz")
-            if packed:
-                rel = rel[:-3]  # a.md.gz has the id of a.md, so compressing a folder keeps every split decision
             doc_id = f"{bases[k]}/{rel}" if len(dirs) > 1 else rel
             stats["scanned"] += 1
-            if _excluded(path, rel, excludes):
+            if excluded:
                 stats["skipped"]["excluded_by_glob"] += 1
-                ledger.append(_ledger_row(source, doc_id, rel, "skipped", "excluded_by_glob", os.path.getsize(path)))
+                ledger.append(_ledger_row(source, doc_id, rel, "skipped", "excluded_by_glob", size))
                 continue
-            size = os.path.getsize(path)
+            if doc_id in produced:  # a.md was read and a.md.gz has the same id: one document, not two under one id
+                name = os.path.basename(rel)
+                stats["skipped"]["duplicate_id"] += 1
+                ledger.append(_ledger_row(source, doc_id, rel, "skipped", f"duplicate_id: {name} and {name}.gz both "
+                                          "present; first in sort order kept", size))
+                continue
             if size > 512 * 1024 * 1024:
                 stats["skipped"]["file_too_large"] += 1
                 ledger.append(_ledger_row(source, doc_id, rel, "skipped", "file_too_large", size))
                 continue
-            with open(path, "rb") as handle:
-                raw = handle.read()
+            if raw is None:  # larger than read_ahead_bytes: read here, at its turn
+                with open(path, "rb") as handle:
+                    raw = handle.read()
             if packed:
                 try:
                     with gzip.GzipFile(fileobj=io.BytesIO(raw)) as unpacked:
                         raw = unpacked.read(512 * 1024 * 1024 + 1)
-                except (OSError, EOFError) as exc:
+                except (OSError, EOFError, zlib.error) as exc:  # zlib.error (damaged deflate data) is no OSError
                     stats["skipped"]["bad_gzip"] += 1
                     ledger.append(_ledger_row(source, doc_id, rel, "skipped", f"bad_gzip: {exc}"[:80], size))
                     continue
@@ -958,7 +1093,10 @@ def iter_markdown(dirs, patterns, excludes, recursive, stats, ledger, source="md
                     stats["skipped"]["file_too_large"] += 1
                     ledger.append(_ledger_row(source, doc_id, rel, "skipped", "file_too_large", len(raw)))
                     continue
+            produced.add(doc_id)
             yield doc_id, os.path.splitext(os.path.basename(rel))[0], decode_bytes(raw, stats["cleaning"]), {"path": path}
+    finally:
+        ahead.close()  # a caller that stops early: the reader threads end now, files not yet started are not read
 
 
 class ArrowTableSource:
@@ -1024,7 +1162,8 @@ class ArrowTableSource:
 
 def _vector_scores(arrays, kw, text_col, title_col, score_col, min_score):
     """Vectorised (RE2, C++) prefilter; returns numpy arrays (weighted hits, chars, score_ok).
-    Hits are an upper bound of the full check's weighted hits (see _prefilter_patterns)."""
+    Hits are an upper bound of the full check's weighted hits, with the rare
+    exceptions listed in _prefilter_patterns."""
     import pyarrow.compute as pc
     text = arrays[text_col]
     n = len(text)
@@ -1036,7 +1175,8 @@ def _vector_scores(arrays, kw, text_col, title_col, score_col, min_score):
                           .to_numpy(zero_copy_only=False), dtype=np.int64)
 
     if kw is not None and kw.include_patterns:
-        body = pc.utf8_slice_codeunits(text, 0, kw.scan_chars)  # characters, as the Python check slices
+        # characters, as the Python check slices (it slices the cleaned text, this the raw text)
+        body = pc.utf8_slice_codeunits(text, 0, kw.scan_chars)
         for pattern in kw.include_patterns:
             hits += count(body, pattern)
             if title_col in arrays:
@@ -1053,7 +1193,7 @@ def _vector_scores(arrays, kw, text_col, title_col, score_col, min_score):
 def _score_file(source, file_index, kw, min_score):
     """Pass A of 'top' selection for one file (runs in a worker thread; pyarrow
     compute releases the GIL). The candidates come back as numpy columns
-    (-score, file, batch, row), 32 bytes each instead of a ~150-byte Python tuple."""
+    (-score, file, batch, row), 32 bytes each."""
     need = kw is not None and bool(kw.include_patterns)
     counts = collections.Counter({"scanned": 0})
     cols = [[], [], []]
@@ -1068,7 +1208,7 @@ def _score_file(source, file_index, kw, min_score):
             counts["keyword_min_hits"] += int((keep & (hits < kw.min_hits)).sum())
             keep &= hits >= kw.min_hits
         rows = np.nonzero(keep)[0]
-        # the same IEEE operations as hits / math.sqrt(max(chars, 500)) per row, so the ranking is unchanged
+        # identical (the same IEEE operations) to the per-row hits / math.sqrt(max(chars, 500))
         cols[0].append(-(hits[rows].astype(np.float64) / np.sqrt(np.maximum(chars[rows], 500).astype(np.float64))))
         cols[1].append(np.full(len(rows), batch_index, dtype=np.int64))
         cols[2].append(rows.astype(np.int64))
@@ -1078,8 +1218,8 @@ def _score_file(source, file_index, kw, min_score):
 
 
 def _best_candidates(cands, limit):
-    """The `limit` first candidates in (-score, file, batch, row) order, as the
-    tuple sort did; all of them when limit is None."""
+    """The `limit` first candidates in (-score, file, batch, row) order; all of
+    them when limit is None."""
     neg, files, batches, rows = (np.concatenate([c[k] for c in cands]) for k in range(4))
     order = np.lexsort((rows, batches, files, neg))
     if limit is not None:
@@ -1087,23 +1227,39 @@ def _best_candidates(cands, limit):
     return neg[order], files[order], batches[order], rows[order]
 
 
+def _read_ahead(items, fn, threads, window=None):
+    """fn(item) for every item, in the order of the items. fn runs in `threads`
+    background threads, on at most `window` items ahead of the one being used
+    (default: 2 per thread), so memory stays bounded; an error of fn comes out
+    at its own item. What the user needs of the item itself, fn returns. When
+    the user stops early, work that was queued and not started is dropped."""
+    from concurrent.futures import ThreadPoolExecutor
+    threads = max(1, threads)
+    window = 2 * threads if window is None else window
+    pending = collections.deque()
+    pool = ThreadPoolExecutor(max_workers=threads)
+    try:
+        for item in items:
+            pending.append(pool.submit(fn, item))
+            if len(pending) > window:
+                yield pending.popleft().result()
+        while pending:
+            yield pending.popleft().result()
+    finally:
+        pool.shutdown(wait=True, cancel_futures=True)
+
+
 def _prescored(source, kw, min_score, threads):
     """Record batches with their vectorised keyword scores, in order. Scoring is
     C++ (pyarrow releases the GIL), so the next batches are scored in background
-    threads while the current one is being used."""
-    from concurrent.futures import ThreadPoolExecutor
-    pending = collections.deque()
-    with ThreadPoolExecutor(max_workers=max(1, threads)) as pool:
-        for file_index, batch_index, arrays in source.batches():
-            pending.append((file_index, batch_index, arrays,
-                            pool.submit(_vector_scores, arrays, kw, source.text_col, source.title_col,
-                                        source.score_col, min_score)))
-            if len(pending) > 2 * max(1, threads):
-                f, b, a, future = pending.popleft()
-                yield f, b, a, future.result()
-        while pending:
-            f, b, a, future = pending.popleft()
-            yield f, b, a, future.result()
+    threads while the current one is being used. The keyword hits are all 0
+    when the prefilter is not used (_use_prefilter)."""
+    use = kw if _use_prefilter(kw) else None
+
+    def scored(batch):
+        return batch + (_vector_scores(batch[2], use, source.text_col, source.title_col, source.score_col, min_score),)
+
+    yield from _read_ahead(source.batches(), scored, threads)
 
 
 def iter_table_source(name, source, kw, max_docs, select, min_score, sample_fraction, seed, stats,
@@ -1118,13 +1274,14 @@ def iter_table_source(name, source, kw, max_docs, select, min_score, sample_frac
                     meta["rank"]; the exact max_docs cut is made by rank after
                     cleaning, filtering and boilerplate removal.
     """
-    need_vector = kw is not None and kw.active
+    prefilter = _use_prefilter(kw)
     t0 = time.time()
     if select == "top":
         from concurrent.futures import ThreadPoolExecutor
         cap = int(max_docs * 1.5) + 100 if max_docs else None
         cands, held, total = [], 0, 0  # only the best `cap` are kept, so memory follows max_docs, not the corpus
-        with ThreadPoolExecutor(max_workers=max(1, threads)) as pool:
+        pool = ThreadPoolExecutor(max_workers=max(1, threads))
+        try:
             futures = [pool.submit(_score_file, source, f, kw, min_score) for f in range(len(source.paths))]
             for done, future in enumerate(futures, 1):
                 counts, found = future.result()
@@ -1141,6 +1298,10 @@ def iter_table_source(name, source, kw, max_docs, select, min_score, sample_frac
                     held = len(cands[0][0])
                 print(f"  [{name}] scored file {done}/{len(futures)}: {stats['scanned']:,} records, "
                       f"{total:,} candidates ({time.time() - t0:,.0f} s)", flush=True)
+        except BaseException:  # Ctrl+C or an error: the files not yet started are dropped, not scored first
+            pool.shutdown(wait=False, cancel_futures=True)
+            raise
+        pool.shutdown()
         best = _best_candidates(cands, cap) if cands else (np.zeros(0),) * 4
         del cands
         limit = len(best[0])
@@ -1174,7 +1335,7 @@ def iter_table_source(name, source, kw, max_docs, select, min_score, sample_frac
             if chars[r] == 0:
                 stats["skipped"]["empty"] += 1
                 continue
-            if need_vector and kw.include_patterns and hits[r] < kw.min_hits:
+            if prefilter and hits[r] < kw.min_hits:
                 stats["skipped"]["keyword_min_hits"] += 1
                 continue
             doc_id, title, text, meta = _row(arrays, r, source, file_index, batch_index)
@@ -1226,8 +1387,8 @@ def _iter_jsonl_all(paths, text_key, title_key, id_key, max_docs, stats, kw, bat
 
     def report():
         if stats["scanned"] >= progress["next"]:
-            print(f"  [{name}] scanned {stats['scanned']:,} records, {stats.get('accepted_raw', 0):,} passed the "
-                  f"prefilter ({time.time() - t0:,.0f} s)", flush=True)
+            print(f"  [{name}] scanned {stats['scanned']:,} records, {stats.get('accepted_raw', 0):,} sent to the "
+                  f"full check ({time.time() - t0:,.0f} s)", flush=True)
             progress["next"] = (stats["scanned"] // 500_000 + 1) * 500_000
 
     for path in paths:
@@ -1256,15 +1417,10 @@ def _iter_jsonl_all(paths, text_key, title_key, id_key, max_docs, stats, kw, bat
 def _jsonl_arrow_blocks(path, text_key, title_key, id_key, kw, threads=1, block_bytes=16 << 20):
     """(records in block, skip counts, [(doc_id, title, text, meta)]) per Arrow block, in order.
     The keyword prefilter of several blocks runs in parallel threads (C++, no GIL)."""
-    from concurrent.futures import ThreadPoolExecutor
-    pending = collections.deque()
-    with ThreadPoolExecutor(max_workers=max(1, threads)) as pool:
-        for block, row0 in _jsonl_arrow_raw(path, text_key, title_key, id_key, block_bytes):
-            pending.append(pool.submit(_jsonl_arrow_block, block, row0, path, text_key, title_key, id_key, kw))
-            if len(pending) > 2 * max(1, threads):
-                yield pending.popleft().result()
-        while pending:
-            yield pending.popleft().result()
+    def checked(raw):
+        return _jsonl_arrow_block(raw[0], raw[1], path, text_key, title_key, id_key, kw)
+
+    yield from _read_ahead(_jsonl_arrow_raw(path, text_key, title_key, id_key, block_bytes), checked, threads)
 
 
 def _jsonl_arrow_raw(path, text_key, title_key, id_key, block_bytes):
@@ -1292,7 +1448,7 @@ def _jsonl_arrow_block(block, row0, path, text_key, title_key, id_key, kw):
     counts["missing_text"] = int(missing.sum())
     arrays = {"text": pc.fill_null(text, ""), "title": pc.fill_null(block.column(title_key), "")}
     keep = ~missing
-    if kw is not None and kw.include_patterns:
+    if _use_prefilter(kw):
         hits, chars, _ = _vector_scores(arrays, kw, "text", "title", None, None)
         counts["empty"] = int((keep & (chars == 0)).sum())
         keep &= chars > 0
@@ -1313,12 +1469,28 @@ def _jsonl_arrow_block(block, row0, path, text_key, title_key, id_key, kw):
 
 def _jsonl_python(path, text_key, title_key, id_key, max_docs, stats, kw, batch, skip_rows, report):
     """The line-by-line reader (json.loads); skips the first `skip_rows` records.
-    Records without an id are named <file>:<record number>, as in the fast reader."""
-    import gzip
+    Records without an id are named <file>:<record number>, as in the fast reader.
+    A damaged .gz (cut short, failed checksum, broken deflate data) ends that
+    file only: it is counted as bad_gzip, the records read before the damage are
+    kept and stats["warnings"] gets a line for the report."""
     opener = gzip.open if path.lower().endswith(".gz") else open
-    with opener(path, "rt", encoding="utf-8", errors="replace") as handle:
+    with opener(path, "rt", encoding="utf-8-sig", errors="replace") as handle:  # -sig: no BOM in the first record
         pending, seen = [], 0
-        for line in handle:
+        lines = iter(handle)
+        while True:
+            try:  # only the read is guarded (not the yields), and not for a plain OSError: that is a disk error
+                line = next(lines, None)
+            except (EOFError, zlib.error, gzip.BadGzipFile) as exc:
+                stats["skipped"]["bad_gzip"] += 1
+                warning = (f"{os.path.basename(path)} is damaged after record {seen:,} ({type(exc).__name__}: "
+                           f"{exc}); the rest was not read; download it again")
+                if not isinstance(exc, EOFError):  # a failed checksum or broken data, not a plain truncation
+                    warning += " (records already read from it may be garbled)"
+                stats.setdefault("warnings", []).append(warning)
+                print(f"  WARNING: {warning}", flush=True)
+                break
+            if line is None:
+                break
             if not line.strip():
                 continue
             seen += 1
@@ -1357,7 +1529,7 @@ def _jsonl_batch(pending, path, text_key, title_key, id_key, stats, kw):
         if bad:
             record["\0bad_unicode"] = bad  # counted with the cleaning steps once the record is checked
         records.append((record_no, record))
-    if kw is not None and kw.include_patterns and records:
+    if _use_prefilter(kw) and records:
         import pyarrow as pa
         arrays = {"text": pa.array([r[text_key] for _, r in records]),
                   "title": pa.array([str(r.get(title_key) or "") for _, r in records])}
@@ -1512,7 +1684,7 @@ class MinHasher:
 
 class UnionFind:
     """Disjoint sets over 0..n-1 with path halving; the parent table is an int32
-    array (4 B per document instead of a Python list's 8 B pointer plus int)."""
+    array (4 B per document)."""
 
     def __init__(self, n):
         self.parent = np.arange(n, dtype=np.int32)
@@ -1606,7 +1778,6 @@ def lsh_clusters(signatures, threshold, active=None, chunk=100_000):
 # ---------------------------------------------------------------------------
 SPLIT_UNSET, SPLIT_TRAIN, SPLIT_VAL = 0, 1, 2  # split_of is an int8 array over the kept documents
 SPLIT_NAMES = ("?", "train", "val")
-SPLIT_CODE = {"train": SPLIT_TRAIN, "val": SPLIT_VAL}
 
 
 def _ledger_row(source, doc_id, title, status, reason, chars=0, tokens=0, hits=0, group=""):
@@ -1648,16 +1819,15 @@ def _examine(title, text, use_kw):
         reason = "replacement_chars"
     elif bad:
         text = strip_replacement_chars(text, cleaning)
-    if reason:
-        pass
-    elif not text:
-        reason = "empty"
-    elif len(text) < cfg["min_chars"]:
-        reason = "too_short"
-    elif use_kw and _W_KW is not None:
-        keep, why, hits, terms = _W_KW.evaluate(title, text)
-        if not keep:
-            reason = why
+    if not reason:
+        if not text:
+            reason = "empty"
+        elif len(text) < cfg["min_chars"]:
+            reason = "too_short"
+        elif use_kw and _W_KW is not None:
+            keep, why, hits, terms = _W_KW.evaluate(title, text)
+            if not keep:
+                reason = why
     key, line_keys = None, []
     if not reason:
         key = normalised_hash(text)  # the exact-duplicate key, also kept in docs.tsv (see --keep-split-from)
@@ -1665,8 +1835,7 @@ def _examine(title, text, use_kw):
         lines = text.split("\n") if cfg["boilerplate"] != "off" else []
         for idx, line in enumerate(lines):
             stripped = line.strip()
-            if len(stripped) >= cfg["boilerplate_min_len"] and not _structural_line(stripped,
-                                                                                    _next_nonblank(lines, idx)):
+            if len(stripped) >= cfg["boilerplate_min_len"] and _boilerplate_candidate(stripped, lines, idx):
                 k = _line_key(stripped)
                 if k not in seen:
                     seen.add(k)
@@ -1753,9 +1922,9 @@ def _pass2_doc(source, text):
         lines = text.split("\n")
         for idx, ln in enumerate(lines):
             stripped = ln.strip()
-            if len(stripped) >= p["min_len"] and not _structural_line(stripped, _next_nonblank(lines, idx)):
-                k = _line_key(stripped)
-                if k in table:
+            if len(stripped) >= p["min_len"]:
+                k = _line_key(stripped)  # the lookup first: few lines are in the table, the rule runs only for those
+                if k in table and _boilerplate_candidate(stripped, lines, idx):
                     removed.append(k)
                     if p["mode"] == "strip":
                         continue
@@ -1763,7 +1932,10 @@ def _pass2_doc(source, text):
         text = _squeeze_blank_runs("\n".join(kept_lines)).strip()
     sig = None
     if p["near"] and text and len(text) >= p["min_chars"]:
-        sig = p["minhasher"].signature(p["hasher"].shingles(text, 5))
+        shingles = p["hasher"].shingles(text, 5)
+        if not len(shingles):  # a text without a word: its own hash, so only a copy of it has the same signature
+            shingles = np.asarray([int(normalised_hash(text)[:16], 16)], dtype=np.uint64)
+        sig = p["minhasher"].signature(shingles)
     return text, removed, sig
 
 
@@ -1784,8 +1956,10 @@ def _structural_line(line, next_line=None):
     without sentence-final punctuation whose next non-blank line is a paragraph
     (>= 80 characters): "Materials and Methods" or "Etymology" before its section
     text stays; the category lists that end web articles (short line after short
-    line) are still boilerplate. Callers pass that next line; without it the
-    heading rule is off (the old behaviour)."""
+    line) are still boilerplate. A heading starts with a letter or a digit and
+    holds none of < > | `: "<!-- Start of picture text -->", a table row or a
+    banner in markup before a paragraph is not one. Callers pass that next line;
+    without it the heading rule is off."""
     if not re.search(r"[A-Za-z0-9]", line) or line.startswith("#"):
         return True
     if any(mark in line for mark in _MATHS_MARKS):
@@ -1795,7 +1969,8 @@ def _structural_line(line, next_line=None):
         return False
     if line.isupper():
         return True
-    return (next_line is not None and len(next_line) >= 80 and not line.endswith(tuple(_SENTENCE_END)))
+    return (next_line is not None and len(next_line) >= 80 and line[0].isalnum()
+            and not any(c in line for c in "<>|`") and not line.endswith(tuple(_SENTENCE_END)))
 
 
 def _next_nonblank(lines, i):
@@ -1806,6 +1981,29 @@ def _next_nonblank(lines, i):
         if stripped:
             return stripped
     return ""
+
+
+_LETTER_OR_DIGIT_RE = re.compile(r"[A-Za-z0-9]")
+_SENTENCE_ENDS = tuple(_SENTENCE_END)
+
+
+def _boilerplate_candidate(stripped, lines, idx):
+    """not _structural_line(stripped, _next_nonblank(lines, idx)), for the line
+    loops of both passes: the same rule with the cheap tests first, at most
+    nine words split off, and the next line looked up only for the few lines
+    that reach the heading rule. A test holds the two functions together; a
+    change of the rule is made in both."""
+    if stripped.startswith("#") or not _LETTER_OR_DIGIT_RE.search(stripped):
+        return False
+    if "$$" in stripped or "\\begin{" in stripped or "\\end{" in stripped:
+        return False
+    if len(stripped.split(None, 8)) > 8:
+        return True
+    if stripped.isupper():
+        return False
+    if stripped.endswith(_SENTENCE_ENDS) or not stripped[0].isalnum() or any(c in stripped for c in "<>|`"):
+        return True
+    return len(_next_nonblank(lines, idx)) < 80
 
 
 def _line_key(line):
@@ -1864,7 +2062,8 @@ def parse_args(argv=None):
     g.add_argument("--wiki-split", default="train")
     g.add_argument("--wiki-max-docs", type=int, default=0, help="max documents kept (0 = all that pass)")
     g.add_argument("--wiki-select", choices=("auto", "first", "top"), default="auto",
-                   help="first = dump order; top = rank all by keyword density (auto: top when keywords are set)")
+                   help="first = dump order; top = rank all by keyword density (auto: top when keywords and "
+                        "--wiki-max-docs are set, else first)")
     g = p.add_argument_group("Parquet / JSONL shards (FineWeb-Edu etc.)")
     g.add_argument("--parquet", action="append", default=[], help="glob of .parquet files (repeatable)")
     g.add_argument("--parquet-name", default="web", help="source name used in reports and token files")
@@ -1940,7 +2139,9 @@ def parse_args(argv=None):
     g.add_argument("--scan-only", action="store_true", help="stop after filtering/dedup; write the report only")
     g.add_argument("--keep-work", action="store_true", help="keep the _work spool files")
     g.add_argument("--work-dir", help="folder for the text spools (default: <out>\\_work); a build at 3-5x the "
-                                      "current corpus needs 40-70 GB there, so point it at the bigger drive")
+                                      "current corpus needs 40-70 GB there, so point it at the bigger drive. Each "
+                                      "dataset gets its own sub-folder <name>_<hash>_spool there, so builds can "
+                                      "share the folder")
     g.add_argument("--resume", action="store_true",
                    help="continue a build that failed after pass 2 (its <out>\\_work\\state.pkl and spool exist): "
                         "the split (if needed), the tokenizer and the tokenization are redone, not the reading")
@@ -1978,13 +2179,27 @@ def _validate(args, parser):
         args.md_recursive = True
     if args.resume:
         state = os.path.join(os.path.abspath(args.out), "_work", STATE_NAME)
+        if os.path.isfile(os.path.join(os.path.abspath(args.out), "manifest.json")):  # e.g. built with --keep-work
+            parser.error(f"--resume: {args.out} is a finished dataset (manifest.json present); nothing to continue")
         if not os.path.isfile(state):
             parser.error(f"--resume: no {state}; only a build that failed after pass 2 can be resumed")
         if args.overwrite:
             parser.error("--resume continues the build in --out; --overwrite would move it away")
-        if args.md_dir or args.wiki_dir or args.parquet or args.jsonl:
-            print("--resume: the sources and options of the saved build are used; those given here are ignored "
-                  "(except --threads, --workers and --keep-work).", flush=True)
+        for flag, value in (("--threads", args.threads), ("--workers", args.workers)):  # the only options applied
+            if value < 1:
+                parser.error(f"{flag} must be >= 1")
+        applied = {"out", "resume", "overwrite", "threads", "workers", "keep_work", "worker_warmup"}
+        if args.text_root:
+            applied.add("md_recursive")  # set above by --text-root, not given
+        ignored = sorted(dest for dest, value in vars(args).items()
+                         if dest not in applied and value != parser.get_default(dest))
+        if ignored:
+            print("--resume: the sources and options of the saved build are used; "
+                  + ", ".join("--" + dest.replace("_", "-") for dest in ignored)
+                  + f" given here {'is' if len(ignored) == 1 else 'are'} ignored (only --threads, --workers and "
+                  "--keep-work apply).", flush=True)
+        # for _resume_args: what an option gets that the saved build does not hold (never this command's value)
+        args.resume_defaults = {dest: parser.get_default(dest) for dest in vars(args)}
         return
     if not (args.md_dir or args.wiki_dir or args.parquet or args.jsonl):
         parser.error("give at least one source: --md-dir, --wiki-dir, --parquet or --jsonl")
@@ -2004,6 +2219,15 @@ def _validate(args, parser):
         (args.workers >= 1, "--workers must be >= 1"),
         (0 <= args.max_replacement_ratio <= 1, "--max-replacement-ratio must be in [0, 1]"),
         (min(args.wiki_max_docs, args.parquet_max_docs, args.jsonl_max_docs) >= 0, "max-docs must be >= 0"),
+        (args.tokenizer_sample_chars > 0, "--tokenizer-sample-chars must be > 0"),
+        (args.val_max_chars > 0, "--val-max-chars must be > 0"),
+        (0 < args.max_val_group_share <= 1, "--max-val-group-share must be in (0, 1]"),
+        (args.near_dup_max_docs >= 0, "--near-dup-max-docs must be >= 0 (0 = no limit)"),
+        (args.boilerplate_min_len >= 1, "--boilerplate-min-len must be >= 1"),
+        (args.boilerplate_min_docs >= 2, "--boilerplate-min-docs must be >= 2"),
+        (args.keyword_min_hits >= 0, "--keyword-min-hits must be >= 0"),
+        (args.keyword_min_distinct >= 0, "--keyword-min-distinct must be >= 0"),
+        (args.title_weight >= 0, "--title-weight must be >= 0"),
     ]
     for ok, message in checks:
         if not ok:
@@ -2046,6 +2270,28 @@ def _validate(args, parser):
         parser.error(str(exc))
 
 
+PASS3_BATCH_CHARS = 8_000_000  # pass 3 encodes about this many characters in one SentencePiece call
+LINE_COUNT_MAX_KEYS = 6_000_000  # different candidate lines counted per source before the rarest are dropped ...
+LINE_COUNT_KEEP_KEYS = 3_000_000  # ... until at most this many are left
+
+
+def _prune_line_counts(counts, keep):
+    """The line counts without the rarest lines (count 1, then 2, ...), so that
+    at most `keep` are left. A dropped line starts again at 0 when it comes
+    back: a line that comes back less often than about once between two prunings
+    never reaches --boilerplate-min-docs, however many documents hold it."""
+    floor = 1
+    while len(counts) > keep:
+        counts = collections.Counter({k: c for k, c in counts.items() if c > floor})
+        floor += 1
+    return counts
+
+
+class _Unresumable(SystemExit):
+    """A stop that --resume cannot continue from (the spool is missing or cut short, or the build kept no
+    document): no resume hint is printed for it."""
+
+
 def prepare(argv=None):
     """Build a dataset; returns its folder. A build interrupted or failed before
     pass 2 is complete deletes its work spool (the partial folder is rebuilt on
@@ -2057,17 +2303,39 @@ def prepare(argv=None):
     state = {}
     try:
         return _prepare(args, state)
-    except BaseException:
+    except BaseException as exc:
         work = state.get("work")  # only a spool this run created (never one kept by an earlier --keep-work)
-        if work and os.path.isdir(work) and not args.keep_work:
-            if os.path.isfile(os.path.join(work, STATE_NAME)):
-                spool_dir = state.get("spool_dir", work)
-                print(f"Build stopped after pass 2; its work files are kept ({_spool_size(spool_dir) / 1e9:,.1f} GB "
-                      f"of spool in {spool_dir}). Continue from them with:\n"
-                      f"  python data_prep.py --out {args.out} --resume")
-            else:
-                _cleanup(work, state.get("spool_dir", work), False)
-                print(f"Build stopped; removed the work spool {work}. Rerun the same command to rebuild.")
+        if work and os.path.isdir(work):
+            spool_dir = state.get("spool_dir", work)
+            # a dataset that has its manifest is complete and --resume refuses it: a failure after that point
+            # (the token summary, the report) gets no resume hint, and nothing can use its work files any more
+            finished = os.path.isfile(os.path.join(os.path.abspath(args.out), "manifest.json"))
+            late = ("Build stopped after manifest.json was written: the token files, the tokenizer and docs.tsv "
+                    "are complete and can be used; report.md and its audit tables may be missing")
+            if os.path.isfile(os.path.join(work, STATE_NAME)) and not finished:
+                if not isinstance(exc, _Unresumable):  # its own message says that --resume cannot continue
+                    print(f"Build stopped after pass 2; its work files are kept ({_spool_size(spool_dir) / 1e9:,.1f} "
+                          f"GB of spool in {spool_dir}). Continue from them with:\n"
+                          f"  python data_prep.py --out {args.out} --resume")
+            elif not args.keep_work:
+                # the frames of the stopped build still hold the spool being read and the signature file open,
+                # and Windows cannot delete an open file: drop their local variables first
+                traceback.clear_frames(sys.exc_info()[2])
+                _cleanup(work, spool_dir, False)
+                left = [os.path.join(work, f) for f in sorted(os.listdir(work))] if os.path.isdir(work) else []
+                if spool_dir != work and os.path.isdir(spool_dir):
+                    left += [os.path.join(spool_dir, f) for f in sorted(os.listdir(spool_dir)) if f.startswith("spool")]
+                if left:
+                    print(f"{late if finished else 'Build stopped'}; {len(left)} work file(s) could not be removed: "
+                          f"{', '.join(left[:5])}{' ...' if len(left) > 5 else ''}."
+                          f"{'' if finished else ' Rerun the same command to rebuild.'}")
+                elif finished:
+                    print(f"{late}; removed its work files ({work}).")
+                else:
+                    print(f"Build stopped; removed the work spool {work}. Rerun the same command to rebuild.")
+            elif finished:
+                print(f"{late}. Its work files are kept in {work}"
+                      + (f" and {spool_dir}" if spool_dir != work else "") + ".")
         raise
     finally:
         _release_lock(state.get("lock"))
@@ -2086,6 +2354,13 @@ def _prepare(args, state=None):
     exclude = read_terms(args.exclude_keywords)
     kw = KeywordFilter(include, exclude, args.keyword_min_hits, args.keyword_min_distinct, args.title_weight,
                        pattern_cache=prefilter_cache_path(args.include_keywords))
+    # which lists these are goes into the manifest, and the include list into the dataset folder: the keyword
+    # file goes on changing after the build
+    keywords_used, include_bytes = {}, None
+    if args.include_keywords:
+        keywords_used["include"], include_bytes = keyword_list_record(args.include_keywords, include)
+    if args.exclude_keywords:
+        keywords_used["exclude"] = keyword_list_record(args.exclude_keywords, exclude)[0]
     text_sources = parse_text_sources(args.md_dir)
     spec = args.keyword_sources.strip().lower()
     wanted = None if spec in ("all", "web") else {s.strip() for s in spec.split(",") if s.strip()}
@@ -2131,7 +2406,9 @@ def _prepare(args, state=None):
             print(f"Removing an incomplete earlier build in {out} (no manifest.json; only data_prep outputs).")
             shutil.rmtree(out)
         if os.path.exists(out) and os.listdir(out):
-            if os.path.isfile(state_path) and not args.overwrite:
+            # a finished dataset built with --keep-work also holds a state.pkl: its manifest says it is finished
+            if (os.path.isfile(state_path) and not os.path.isfile(os.path.join(out, "manifest.json"))
+                    and not args.overwrite):
                 raise SystemExit(f"{out} holds a build that stopped after pass 2. Continue it with "
                                  f"--out {args.out} --resume, or pass --overwrite to start again "
                                  "(the folder is renamed, not deleted).")
@@ -2149,8 +2426,26 @@ def _prepare(args, state=None):
     os.makedirs(work, exist_ok=True)
     state["work"] = work
     # the spools (the cleaned text, compressed) may live on another drive: --work-dir; the small work files
-    # (state, signatures, tokenizer corpus) stay in <out>/_work, where a later run finds the resumable state
-    spool_dir = os.path.abspath(args.work_dir) if args.work_dir else work
+    # (state, signatures, tokenizer corpus) stay in <out>/_work, where a later run finds the resumable state.
+    # Each dataset has its own sub-folder of --work-dir (name + a hash of the --out path), so builds that share
+    # the folder never overwrite or delete each other's spools; a resumed build uses the folder its state names
+    st = _load_state(state_path) if resumed else None
+    # a resumed build records the command and the time of the whole build, not those of the resume session
+    # (a state saved before these keys existed gives the resume command and this session's time)
+    command = (st.get("command", " ".join(sys.argv)) + " (resumed)") if resumed else " ".join(sys.argv)
+    earlier = float(st.get("seconds", 0.0)) if resumed else 0.0
+    if resumed:  # the lists pass 1 read, not today's files (None: the state was saved before it held them)
+        keywords_used = st.get("keywords")
+    elif include_bytes is not None:
+        with open(os.path.join(out, KEYWORDS_USED_NAME), "wb") as handle:
+            handle.write(include_bytes)
+    if resumed:
+        spool_dir = os.path.dirname(st["spool2"])
+    elif args.work_dir:
+        tag = hashlib.sha256(os.path.normcase(out).encode("utf-8")).hexdigest()[:8]
+        spool_dir = os.path.join(os.path.abspath(args.work_dir), f"{os.path.basename(out)}_{tag}_spool")
+    else:
+        spool_dir = work
     os.makedirs(spool_dir, exist_ok=True)
     state["spool_dir"] = spool_dir
     print(f"{'Resuming' if resumed else 'Preparing'} dataset in {out}")
@@ -2159,19 +2454,17 @@ def _prepare(args, state=None):
               f"min hits {args.keyword_min_hits}, min distinct {args.keyword_min_distinct}, "
               f"sources: {args.keyword_sources}")
 
-    st = None
     if resumed:
-        st = _load_state(state_path)
         spool2 = st["spool2"]
         if not os.path.isfile(spool2):
-            raise SystemExit(f"--resume: the spool {spool2} is missing; the build cannot continue (start it again "
-                             "with --overwrite).")
+            raise _Unresumable(f"--resume: the spool {spool2} is missing; the build cannot continue (start it again "
+                               "with --overwrite).")
         print(f"Checking the kept spool ({_spool_size(os.path.dirname(spool2)) / 1e9:,.1f} GB) ...", flush=True)
         lines, complete = _spool_line_count(spool2)
         if lines != st["spool2_lines"] or not complete:
-            raise SystemExit(f"--resume: {spool2} holds {lines:,} records (expected {st['spool2_lines']:,})"
-                             f"{'' if complete else ' and is cut short'}; the build cannot continue (start it again "
-                             "with --overwrite).")
+            raise _Unresumable(f"--resume: {spool2} holds {lines:,} records (expected {st['spool2_lines']:,})"
+                               f"{'' if complete else ' and is cut short'}; the build cannot continue (start it "
+                               "again with --overwrite).")
         print(f"Resuming after stage '{st['stage']}': {len(st['docs']):,} documents in the spool.", flush=True)
         docs, roots, dropped, split_of = st["docs"], st["roots"], st["dropped"], st["split_of"]
         sources, ledger, duplicates, notes = st["sources"], st["ledger"], st["duplicates"], st["notes"]
@@ -2185,9 +2478,11 @@ def _prepare(args, state=None):
         # ------------------------------------------------------------------
         sources = {}
         ledger = []
-        exact_seen = {}
+        exact_seen = set()  # the content hash of every kept document, as an int
+        first_copy = {}  # content hash of a text with exact duplicates -> (source, id, title) of its kept copy
         duplicates = []
         line_counts = collections.defaultdict(collections.Counter)
+        boiler = {}  # source -> {line key: documents with the line}, for the lines in enough documents
         line_examples = {}
         spool1_files = []
         keyword_totals = collections.defaultdict(collections.Counter)
@@ -2198,7 +2493,7 @@ def _prepare(args, state=None):
 
         workers = _Pool(args.workers, _init_worker, (kw, {
             "language": args.language, "max_replacement_ratio": args.max_replacement_ratio,
-            "min_chars": args.min_chars, "exact_dedup": args.exact_dedup, "boilerplate": args.boilerplate,
+            "min_chars": args.min_chars, "boilerplate": args.boilerplate,
             "boilerplate_min_len": args.boilerplate_min_len}), args.worker_warmup)
         for name, kind in readers:
             stats = _new_stats()
@@ -2244,6 +2539,7 @@ def _prepare(args, state=None):
 
             sources[name]["max_docs"] = max_docs
             kept = 0
+            pruned_at, prune_gaps = 0, []  # kept documents between two prunings of the line counts
             ranked = sources[name].get("select") == "top"
             # A document limit in stream order: the worker processes read ahead of the checked documents, by an
             # amount that depends on --workers. Documents after the one that reached the limit are not counted,
@@ -2269,12 +2565,14 @@ def _prepare(args, state=None):
                         stats["cleaning"]["decode_errors_docs"] += 1
                         stats["cleaning"]["decode_errors_chars"] += meta["bad_unicode"]
                     if not reason and args.exact_dedup == "skip":
-                        first = exact_seen.get(key)
-                        if first is not None:
+                        if int(key, 16) in exact_seen:
                             reason = "exact_duplicate"
-                            duplicates.append(("exact", name, doc_id, title, first[0], first[1], first[2], 1.0))
+                            # the kept copy is named after pass 2, which reads every kept document again:
+                            # until then the row holds the content hash in its place
+                            duplicates.append(("exact", name, doc_id, title, key, None, None, 1.0))
+                            first_copy[key] = None
                         else:
-                            exact_seen[key] = (name, doc_id, title)
+                            exact_seen.add(int(key, 16))
                     if reason:
                         checked[reason] += 1
                         if kind == "markdown" or stats["ledger_rows"] < 2000:
@@ -2293,12 +2591,10 @@ def _prepare(args, state=None):
                             if lines is None:
                                 lines = text.split("\n")
                             line_examples[k] = lines[idx].strip()[:200]
-                    if len(counts) > 6_000_000:  # prune to half, so this does not run again for every document
-                        floor = 1
-                        while len(counts) > 3_000_000:
-                            counts = collections.Counter({k: c for k, c in counts.items() if c > floor})
-                            floor += 1
-                        line_counts[name] = counts
+                    if len(counts) > LINE_COUNT_MAX_KEYS:  # down to half, so it does not run for every document
+                        line_counts[name] = _prune_line_counts(counts, LINE_COUNT_KEEP_KEYS)
+                        prune_gaps.append(kept - pruned_at)
+                        pruned_at = kept
                     json.dump({"s": name, "id": doc_id, "t": title, "x": text, "h": hits,
                                "d": len(terms), "r": meta.get("rank"), "k": key}, spool, ensure_ascii=False)
                     spool.write("\n")
@@ -2307,9 +2603,17 @@ def _prepare(args, state=None):
                     stats["scanned"], stats["skipped"] = stop_at[0], collections.Counter(stop_at[1])
                     stats["stopped_early"] = True
                 stats["skipped"].update(checked)
+            notes.extend(f"`{name}`: {w}" for w in stats.get("warnings", ()))  # a damaged shard: into report.md
+            if prune_gaps:
+                notes.append(f"boilerplate counting pruned {len(prune_gaps):,} times in `{name}` (more than "
+                             f"{LINE_COUNT_MAX_KEYS:,} different lines); lines spread thinner than about 1 per "
+                             f"{min(prune_gaps):,} documents may be missed.")
             print(f"[{name}] scanned {stats['scanned']:,} | kept {stats['accepted']:,} | skipped "
                   f"{sum(stats['skipped'].values()):,} {dict(stats['skipped'].most_common())} "
                   f"({time.time() - t0:,.0f} s)", flush=True)
+            # the source's table now, so that its line counts (millions of keys) do not wait for the other sources
+            boiler[name] = {k: c for k, c in line_counts.pop(name, {}).items()
+                            if c >= max(args.boilerplate_min_docs, 2)}
 
         workers.close()
         del exact_seen
@@ -2317,18 +2621,13 @@ def _prepare(args, state=None):
         # ------------------------------------------------------------------
         # Pass 2: boilerplate strip + MinHash -> spool2
         # ------------------------------------------------------------------
-        boiler = {}
-        for name, counter in line_counts.items():
-            threshold = max(args.boilerplate_min_docs, 2)
-            boiler[name] = {k: c for k, c in counter.items() if c >= threshold}
         del line_counts
         line_examples = {k: line_examples[k] for table in boiler.values() for k in table if k in line_examples}
         removed_lines = collections.Counter()
         total_docs = sum(s["stats"]["accepted"] for s in sources.values())
         near_enabled = args.near_dup != "off" and total_docs > 1
         if near_enabled and args.near_dup_max_docs and total_docs > args.near_dup_max_docs:
-            # a guard the user set, not a silent switch-off: the 2026-10 build would have skipped near-duplicate
-            # detection at 2.8M documents with only a note in the report
+            # a guard the user set, not a silent switch-off
             raise SystemExit(f"{total_docs:,} documents exceed --near-dup-max-docs {args.near_dup_max_docs:,}. "
                              "Raise the limit (0 = none; the signatures live in a memory-mapped work file, 512 B per "
                              "document on disk) or pass --near-dup off.")
@@ -2348,7 +2647,11 @@ def _prepare(args, state=None):
             for _name, path in spool1_files:
                 with _open_spool(path, "r") as src:
                     for line in src:
-                        yield json.loads(line)
+                        rec = json.loads(line)
+                        # here, not in the loop below: the kept copy may be a document that loop then removes
+                        if first_copy and rec.get("k") in first_copy:
+                            first_copy[rec["k"]] = (rec["s"], rec["id"], rec["t"])
+                        yield rec
                 if not args.keep_work:
                     _remove_work_file(path)
 
@@ -2373,6 +2676,15 @@ def _prepare(args, state=None):
                 dst.write("\n")
         pass2.close()
         del boiler
+        # the exact-duplicate rows get their kept copy (source, id, title) before anything reads them: the split
+        # of --keep-split-from, the saved state and the report
+        if first_copy:
+            missing = [k for k, kept in first_copy.items() if kept is None]
+            if missing:
+                raise RuntimeError(f"{len(missing):,} exact duplicates have no kept copy in the pass-1 spool "
+                                   f"(first content hash {missing[0]}): a defect in data_prep.py, please report it")
+            duplicates[:] = [d[:4] + first_copy[d[4]] + d[7:] if d[0] == "exact" else d for d in duplicates]
+        del first_copy
         n = len(docs)
         print(f"Pass 2 done ({time.time() - t0:,.0f} s)", flush=True)
 
@@ -2400,7 +2712,7 @@ def _prepare(args, state=None):
             active = np.asarray(sorted(set(range(n)) - cut), dtype=np.int64) if cut else None
             roots = lsh_clusters(signatures[:, :n, :], args.near_dup_threshold, active=active)
         root_counts = collections.Counter(roots.tolist())
-        clusters = {}  # root -> members, for clusters of 2+ documents only (a dict entry per document was 150 B)
+        clusters = {}  # root -> members, for clusters of 2+ documents only
         for i, r in enumerate(roots.tolist()):
             if root_counts[r] > 1:
                 clusters.setdefault(r, []).append(i)
@@ -2431,7 +2743,8 @@ def _prepare(args, state=None):
         del cut, near_dropped
         print(f"Near-duplicate clusters: {len(clusters):,} "
               f"({sum(len(m) for m in clusters.values()):,} documents; action: {args.near_dup})")
-        cross_source = {r for r, m in clusters.items() if len({docs[i][0] for i in m}) > 1}
+        # a cluster is cross-source by the members that are kept: copies removed by --near-dup drop do not count
+        cross_source = {r for r, m in clusters.items() if len({docs[i][0] for i in m if not dropped[i]}) > 1}
         split_of = np.zeros(n, dtype=np.int8)
         forced_train = collections.Counter()
         leakage, settled_val, kept_split = [], set(), collections.Counter()
@@ -2440,11 +2753,12 @@ def _prepare(args, state=None):
               "duplicates": duplicates, "notes": notes, "removed_lines": removed_lines,
               "line_examples": line_examples, "keyword_totals": keyword_totals, "clusters": clusters,
               "cross_source": cross_source, "forced_train": forced_train, "leakage": leakage,
-              "settled_val": settled_val, "kept_split": kept_split}
+              "settled_val": settled_val, "kept_split": kept_split,
+              "command": command, "seconds": time.time() - t_start, "keywords": keywords_used}
         if not args.scan_only:
             _save_state(state_path, st)  # from here on a failure keeps the work files for --resume
 
-    # per-document arrays for the split (a Python loop over 10M documents per source took minutes)
+    # per-document arrays for the split
     src_index = {name: k for k, name in enumerate(sources)}
     src_of = np.fromiter((src_index[d[0]] for d in docs), dtype=np.int16, count=n)
     chars_of = np.fromiter((d[3] for d in docs), dtype=np.int64, count=n)
@@ -2483,49 +2797,8 @@ def _prepare(args, state=None):
                     saw_val[r] = True
             del aliases, by_id, by_hash
 
-        def settled(r):
-            if saw_train is None:
-                return None
-            return "train" if saw_train[r] else ("val" if saw_val[r] else None)
-
-        for name, k in src_index.items():
-            idxs = np.flatnonzero((src_of == k) & ~dropped).tolist()
-            groups = collections.defaultdict(list)  # cluster root -> members (labels alone could collide)
-            for i in idxs:
-                groups[int(roots[i])].append(i)
-            total_chars = int(chars_of[idxs].sum()) if idxs else 0
-            budget = min(args.val_fraction * total_chars, args.val_max_chars)
-            # the group label is the root's "source:id", the same string the ledger's group column shows
-            order = sorted(groups, key=lambda g: stable_unit(args.seed, "split", f"{docs[g][0]}:{docs[g][1]}"))
-            val_chars = 0
-            if previous:  # only new documents are split (see above)
-                fresh = []
-                for g in order:
-                    target = settled(g)
-                    if target is None:
-                        fresh.append(g)
-                        continue
-                    kept_split[target] += len(groups[g])
-                    split_of[groups[g]] = SPLIT_CODE[target]
-                    if target == "val":
-                        settled_val.add(g)
-                        val_chars += int(chars_of[groups[g]].sum())
-                order = fresh
-            for g in order:
-                chars = int(chars_of[groups[g]].sum())
-                target = "train"
-                if len(groups) >= 2 and val_chars < budget:
-                    if g in cross_source:
-                        forced_train["cross_source_cluster"] += 1
-                    elif chars > args.max_val_group_share * budget:
-                        forced_train["group_too_large_for_val"] += 1
-                    elif val_chars + chars <= budget * 1.1:
-                        target = "val"
-                        val_chars += chars
-                split_of[groups[g]] = SPLIT_CODE[target]
-            sources[name]["val_chars_target"] = int(budget)
-            sources[name]["val_chars"] = int(val_chars)
-            sources[name]["train_chars"] = int(total_chars - val_chars)
+        _split_by_group(args, docs, roots, dropped, src_index, src_of, chars_of, sources, cross_source, saw_train,
+                        saw_val, split_of, forced_train, kept_split, settled_val)
         saw_train = saw_val = None
 
         if previous:
@@ -2536,12 +2809,13 @@ def _prepare(args, state=None):
             notes.append("No document passed the filters, so nothing was tokenized.")
         if args.scan_only or nothing_kept:
             _write_ledger(out, ledger, docs, split_of, roots, dropped, None)
-            _write_report(out, args, sources, ledger, duplicates, removed_lines, line_examples, keyword_totals,
-                          None, {}, forced_train, [], None, t_start, scan_only=args.scan_only, notes=notes)
+            _write_report(out, args, sources, duplicates, removed_lines, line_examples, keyword_totals,
+                          None, {}, forced_train, [], None, t_start, scan_only=args.scan_only, notes=notes,
+                          command=command, earlier=earlier)
             _cleanup(work, spool_dir, args.keep_work)
             if nothing_kept and not args.scan_only:
-                raise SystemExit(f"No document passed the filters; see {os.path.join(out, 'report.md')} and docs.tsv. "
-                                 "Loosen the filters and rebuild into a new --out (or pass --overwrite).")
+                raise _Unresumable(f"No document passed the filters; see {os.path.join(out, 'report.md')} and "
+                                   "docs.tsv. Loosen the filters and rebuild into a new --out (or pass --overwrite).")
             print(f"\nScan-only report written to {os.path.join(out, 'report.md')}")
             return out
 
@@ -2551,20 +2825,21 @@ def _prepare(args, state=None):
         # ------------------------------------------------------------------
         leakage.clear()
         if args.leakage_check == "on":
-            try:  # informational at heart: its failure or a Ctrl+C must not throw away the build
+            # informational at heart: its failure must not throw away the build. A Ctrl+C is not swallowed: it
+            # stops the build at stage 'pass2', and --resume redoes the split and this audit
+            try:
                 rows = _leakage_audit(spool2, docs, split_of, dropped, workers=args.workers, warmup=args.worker_warmup)
                 leakage.extend(_move_leaks_to_train(rows, docs, roots, clusters, split_of, dropped, settled_val,
                                                     sources, forced_train))
                 moved = forced_train.get("leaks_into_train", 0)
                 print(f"  {len(leakage):,} validation documents checked; {moved:,} with >= {LEAK_MOVE_OVERLAP:.0%} "
                       f"overlap moved to training (leakage.tsv)", flush=True)
-            except SystemExit:
-                raise
-            except BaseException as exc:  # noqa: BLE001 - KeyboardInterrupt included: it only skips the audit
-                what = "was interrupted" if isinstance(exc, KeyboardInterrupt) else f"failed ({type(exc).__name__})"
-                print(f"Leakage audit {what}: {exc}; the build goes on without it.", flush=True)
+            except Exception as exc:  # noqa: BLE001
+                what = f"failed ({type(exc).__name__})"
+                print(f"Leakage audit {what}: {exc}; the build goes on without it (leaking validation documents "
+                      "were not moved to training).", flush=True)
                 notes.append(f"The leakage audit {what} and was skipped.")
-        st["stage"] = "split"
+        st["stage"], st["seconds"] = "split", earlier + time.time() - t_start
         _save_state(state_path, st)
 
     # ------------------------------------------------------------------
@@ -2591,6 +2866,7 @@ def _prepare(args, state=None):
         with open(tok_path, "wb") as handle:
             handle.write(tok.proto)
         st["stage"], st["tokenizer_info"], st["tokenizer_encode_mode"] = "tokenizer", tokenizer_info, tok.encode_mode
+        st["seconds"] = earlier + time.time() - t_start
         _save_state(state_path, st)
     dtype = np.uint16 if tok.vocab_size <= 65536 else np.uint32
 
@@ -2633,14 +2909,29 @@ def _prepare(args, state=None):
         doc_tokens[i] = k
         chars_by[(split, source)] += docs[i][3]
 
-    def flush(batch):
-        encoded = tok.encode_batch([part for _, parts in batch for part in parts], threads=args.threads)
-        pos = 0
-        for i, parts in batch:
-            write_doc(i, encoded[pos:pos + len(parts)])
-            pos += len(parts)
+    # one batch is encoded in the background while the one before it is written and the next one is read: the
+    # order of the documents in the token files is the order of the spool
+    from concurrent.futures import ThreadPoolExecutor
+    encoder = ThreadPoolExecutor(max_workers=1)
+    pending = []  # at most one (batch, future of its tokens): encoded or being encoded, not written yet
 
-    def encoded_in_slices(parts, limit=8_000_000):
+    def drain():
+        """Write the batch that is waiting, if any."""
+        if pending:
+            batch, future = pending.pop()
+            encoded, pos = future.result(), 0
+            for i, parts in batch:
+                write_doc(i, encoded[pos:pos + len(parts)])
+                pos += len(parts)
+
+    def flush(batch):
+        """Start encoding this batch, then write the one before it."""
+        future = encoder.submit(tok.encode_batch, [part for _, parts in batch for part in parts],
+                                threads=args.threads)
+        drain()
+        pending.append((batch, future))
+
+    def encoded_in_slices(parts, limit=PASS3_BATCH_CHARS):
         """The parts' tokens, encoded a few million characters at a time."""
         k = 0
         while k < len(parts):
@@ -2662,20 +2953,23 @@ def _prepare(args, state=None):
                 if len(parts) > 1:
                     sources[rec["s"]]["stats"]["cleaning"]["oversized_docs_split"] += 1
                     sources[rec["s"]]["stats"]["cleaning"]["oversized_parts"] += len(parts)
-                if len(rec["x"]) > 8_000_000:  # a whole book: encoded and written part by part, in file order
+                if len(rec["x"]) > PASS3_BATCH_CHARS:  # a whole book: encoded and written part by part, in file order
                     if batch:
                         flush(batch)
                         batch, batch_chars = [], 0
+                    drain()  # the book comes after every earlier document, and only one encode runs at a time
                     write_doc(i, encoded_in_slices(parts))
                     continue
                 batch.append((i, parts))
                 batch_chars += len(rec["x"])
-                if batch_chars > 8_000_000:
+                if batch_chars > PASS3_BATCH_CHARS:
                     flush(batch)
                     batch, batch_chars = [], 0
             if batch:
                 flush(batch)
+            drain()
     finally:
+        encoder.shutdown(wait=True, cancel_futures=True)
         for handle in writers.values():
             handle.close()
     print(f"Pass 3 done ({time.time() - t0:,.0f} s)", flush=True)
@@ -2703,7 +2997,8 @@ def _prepare(args, state=None):
     tok_meta = tok.meta()
     tok_meta["file"] = "tokenizer.model"
     tok_meta.update(tokenizer_info)
-    tok_meta["composition"] = dict(collections.Counter(token_category(tok, i) for i in range(tok.vocab_size)))
+    piece_types = [token_category(tok, i) for i in range(tok.vocab_size)]
+    tok_meta["composition"] = dict(collections.Counter(piece_types))
     fingerprint = hashlib.sha256()
     for name in sorted(manifest_sources):
         for split in ("train", "val"):
@@ -2725,8 +3020,10 @@ def _prepare(args, state=None):
         "near_duplicate_clusters": len(clusters),
         "fingerprint": fingerprint.hexdigest(),
         "prep_args": {k: v for k, v in vars(args).items()},
-        "command": " ".join(sys.argv) + (" (resumed)" if resumed else ""),
+        "command": command,
     }
+    if keywords_used:  # an optional key: {"include": {"file", "sha256", "terms"}, "exclude": {...}}
+        manifest["keywords"] = keywords_used
     # docs.tsv first, then manifest.json, each written whole and renamed into place: a dataset with a manifest is
     # complete (never deleted as an interrupted build) and its docs.tsv is never cut short (--keep-split-from)
     _write_ledger(out, ledger, docs, split_of, roots, dropped, doc_tokens)
@@ -2741,7 +3038,7 @@ def _prepare(args, state=None):
     tok_dist = None
     try:  # informational: a failure must not cost the finished dataset
         t_dist = time.time()
-        tok_dist = _token_distribution(out, tok)
+        tok_dist = _token_distribution(out, tok, piece_types)
         png = plot_token_summary(tok_dist, os.path.join(out, "token_summary.png"))
         print(f"\nToken use: {_distribution_line(tok_dist)} ({time.time() - t_dist:,.0f} s)\n  chart: {png}",
               flush=True)
@@ -2750,10 +3047,11 @@ def _prepare(args, state=None):
     except BaseException as exc:  # noqa: BLE001 - Ctrl+C included: it only skips this summary
         print(f"Token distribution skipped ({type(exc).__name__}: {exc}).", flush=True)
 
-    tok_stats = _tokenizer_stats(tok, docs, split_of, doc_tokens)
+    tok_stats = _tokenizer_stats(tok, manifest, list(counts))
     tok_stats["distribution"] = tok_dist
-    _write_report(out, args, sources, ledger, duplicates, removed_lines, line_examples, keyword_totals,
-                  manifest, tok_stats, forced_train, leakage, tok, t_start, notes=notes)
+    _write_report(out, args, sources, duplicates, removed_lines, line_examples, keyword_totals,
+                  manifest, tok_stats, forced_train, leakage, tok, t_start, notes=notes,
+                  command=command, earlier=earlier)
     _cleanup(work, spool_dir, args.keep_work)
     t = manifest["totals"]
     print(f"\nDataset ready: {out}\n  train {t['train_tokens']:,} tokens in {t['train_docs']:,} docs | "
@@ -2765,7 +3063,8 @@ def _prepare(args, state=None):
 LOCK_NAME = "_build.lock"
 _OUTPUT_NAMES = {"_work", "tokenizer.model", "report.md", "docs.tsv", "duplicates.tsv", "boilerplate.tsv",
                  "token_counts.tsv", "token_summary.png",
-                 "keyword_hits.tsv", "leakage.tsv", "manifest.json.tmp", "docs.tsv.tmp", "report.md.tmp", LOCK_NAME}
+                 "keyword_hits.tsv", "leakage.tsv", "manifest.json.tmp", "docs.tsv.tmp", "report.md.tmp", LOCK_NAME,
+                 KEYWORDS_USED_NAME}
 
 
 def _lock_owner_alive(lock):
@@ -2814,24 +3113,47 @@ def _lock_owner_alive(lock):
     return True
 
 
-def _acquire_lock(lock):
+def _lock_being_written(lock, window=10.0):
+    """True for a lock file that cannot be read as a lock and is under `window`
+    seconds old: another process has just created it and is about to write it
+    (an empty lock left by a crash blocks a restart for those seconds only)."""
+    try:
+        with open(lock, encoding="utf-8") as handle:
+            int(json.load(handle)["pid"])
+        return False
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    try:
+        return time.time() - os.path.getmtime(lock) < window
+    except OSError:
+        return False
+
+
+def _acquire_lock(lock, busy=None):
     """Mark --out as being built by this process (a second run then refuses
-    instead of deleting a build in progress); removed when the build ends."""
+    instead of deleting a build in progress); removed when the build ends.
+    `busy` replaces the message of the SystemExit raised when another process
+    holds the lock (for callers that lock something other than a build)."""
     started = None
     try:
         import psutil
         started = psutil.Process().create_time()
     except Exception:  # noqa: BLE001 - without psutil only the process id is checked
         pass
+    if busy is None:
+        busy = (f"{os.path.dirname(lock)} is being built by another data_prep.py run "
+                f"(see {lock}). Wait for it to finish, or stop it first.")
     for attempt in (1, 2):
         try:
             fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
             break
         except FileExistsError:
-            if attempt == 2 or _lock_owner_alive(lock):
-                raise SystemExit(f"{os.path.dirname(lock)} is being built by another data_prep.py run "
-                                 f"(see {lock}). Wait for it to finish, or stop it first.")
-            os.remove(lock)  # stale: its build ended without removing it
+            if attempt == 2 or _lock_owner_alive(lock) or _lock_being_written(lock):
+                raise SystemExit(busy)
+            try:
+                os.remove(lock)  # stale: its build ended without removing it
+            except OSError:  # held open by another process (Windows): it is not stale after all
+                raise SystemExit(busy)
     with os.fdopen(fd, "w", encoding="utf-8") as handle:
         json.dump({"pid": os.getpid(), "started": started}, handle)
     return lock
@@ -2909,6 +3231,61 @@ def _previous_split(dataset_dir):
     return by_id, by_hash
 
 
+def _split_by_group(args, docs, roots, dropped, src_index, src_of, chars_of, sources, cross_source, saw_train,
+                    saw_val, split_of, forced_train, kept_split, settled_val):
+    """Split every source's kept documents into train and validation by group
+    (a group: the documents of one near-duplicate cluster that are in the
+    source). Groups are taken in the order of stable_unit(seed, "split", label
+    of the root) until the validation budget is filled. saw_train / saw_val
+    (per cluster root, or None without --keep-split-from) settle a group
+    first. Writes split_of, the sources' val_chars_target / val_chars /
+    train_chars, forced_train, kept_split and settled_val."""
+    for name, k in src_index.items():
+        sel = np.flatnonzero((src_of == k) & ~dropped)
+        own_roots = roots[sel]
+        # one entry per group: its root, its first document (the position in sel), its size and its characters
+        uniq, first, inverse, sizes = np.unique(own_roots, return_index=True, return_inverse=True, return_counts=True)
+        # float64 sums are exact here: a group's characters stay far below 2**53
+        sums = np.bincount(inverse, weights=chars_of[sel], minlength=len(uniq)).astype(np.int64)
+        group_chars = dict(zip(uniq.tolist(), sums.tolist()))
+        group_size = dict(zip(uniq.tolist(), sizes.tolist()))
+        total_chars = int(chars_of[sel].sum())
+        budget = min(args.val_fraction * total_chars, args.val_max_chars)
+        # the group label is the root's "source:id", the same string the ledger's group column shows; groups with
+        # the same value stay in the order of their first document
+        order = sorted(uniq[np.argsort(first, kind="stable")].tolist(),
+                       key=lambda g: stable_unit(args.seed, "split", f"{docs[g][0]}:{docs[g][1]}"))
+        val_chars = 0
+        val_roots = []
+        if saw_train is not None:  # --keep-split-from: only new documents are split
+            fresh = []
+            for g in order:
+                if saw_train[g]:
+                    kept_split["train"] += group_size[g]
+                elif saw_val[g]:
+                    kept_split["val"] += group_size[g]
+                    settled_val.add(g)
+                    val_roots.append(g)
+                    val_chars += group_chars[g]
+                else:
+                    fresh.append(g)
+            order = fresh
+        for g in order:
+            chars = group_chars[g]
+            if len(uniq) >= 2 and val_chars < budget:
+                if g in cross_source:
+                    forced_train["cross_source_cluster"] += 1
+                elif chars > args.max_val_group_share * budget:
+                    forced_train["group_too_large_for_val"] += 1
+                elif val_chars + chars <= budget * 1.1:
+                    val_roots.append(g)
+                    val_chars += chars
+        split_of[sel] = np.where(np.isin(own_roots, np.asarray(val_roots, dtype=roots.dtype)), SPLIT_VAL, SPLIT_TRAIN)
+        sources[name]["val_chars_target"] = int(budget)
+        sources[name]["val_chars"] = int(val_chars)
+        sources[name]["train_chars"] = int(total_chars - val_chars)
+
+
 def _is_incomplete_build(folder):
     """True if a folder holds only files this script writes but no manifest and
     no report (an interrupted run); anything else, including a scan-only report
@@ -2947,11 +3324,25 @@ def parse_tokenizer_weights(spec, names=None):
     return weights
 
 
+# how every tokenizer is trained (a build here, the estimate in estimate_dataset.py); the callers add input,
+# model_prefix, vocab_size, input_sentence_size and num_threads
+SPM_TRAIN_OPTIONS = dict(
+    model_type="bpe", character_coverage=0.9995, byte_fallback=True, split_digits=True,
+    unk_id=0, bos_id=1, eos_id=2, pad_id=-1, user_defined_symbols=["\n", "\t"],
+    remove_extra_whitespaces=False, allow_whitespace_only_pieces=True,
+    normalization_rule_name="identity", max_sentence_length=16384, hard_vocab_limit=False,
+    shuffle_input_sentence=True, minloglevel=2)
+
+
+def superbpe_extra(vocab, args):
+    """How many of `vocab` pieces are left for SuperBPE's second stage (0 without --superbpe)."""
+    return max(1, round(vocab * args.superbpe_fraction)) if getattr(args, "superbpe", False) else 0
+
+
 def _train_tokenizer(spool2, docs, split_of, sources, vocab, args, work):
     import sentencepiece as spm
-    # Default: every training document has the same inclusion probability, so
-    # each source contributes in proportion to its size. --tokenizer-weights
-    # multiplies a source's share (total sample size stays near the budget).
+    # --tokenizer-weights multiplies a source's share of the sample (default 1: each source in proportion
+    # to its training characters); windows are sampled, see tokenizer_sample_lines.
     weights = {n: 1.0 for n in sources}
     try:
         weights.update(parse_tokenizer_weights(args.tokenizer_weights, list(sources)))
@@ -2968,27 +3359,25 @@ def _train_tokenizer(spool2, docs, split_of, sources, vocab, args, work):
         for i, line in enumerate(src):
             if split_of[i] != SPLIT_TRAIN:
                 continue
-            rec = json.loads(line)
-            if keep_prob[rec["s"]] <= 0:
+            # a document none of whose windows is kept is not parsed (most of them, at a small probability):
+            # docs[i] is line i of the spool, and a text of n characters has at most n // window + 1 windows
+            s, doc_id, chars = docs[i][0], docs[i][1], docs[i][3]
+            p = keep_prob[s]
+            if p <= 0 or (p < 1 and not any(stable_unit(args.seed, "tok", s, doc_id, w) < p
+                                            for w in range(chars // TOKENIZER_WINDOW + 1))):
                 continue
+            rec = json.loads(line)
             for piece in tokenizer_sample_lines(rec["x"], rec["s"], rec["id"], args.seed, keep_prob[rec["s"]]):
                 dst.write(piece + "\n")
                 written[rec["s"]] += len(piece)
-    extra = max(1, round(vocab * args.superbpe_fraction)) if getattr(args, "superbpe", False) else 0
+    extra = superbpe_extra(vocab, args)
     plan = f"{vocab - extra:,} + {extra:,} SuperBPE" if extra else f"{vocab:,}"
     print(f"\nTraining SentencePiece BPE (vocab {plan}) on {sum(written.values()) / 1e6:,.1f}M characters "
           f"from training documents {dict(written)} ...", flush=True)
     t0 = time.time()
     prefix = os.path.join(work, "spm")
-    spm.SentencePieceTrainer.train(
-        input=corpus, model_prefix=prefix, model_type="bpe", vocab_size=vocab - extra,
-        character_coverage=0.9995, byte_fallback=True, split_digits=True,
-        unk_id=0, bos_id=1, eos_id=2, pad_id=-1, user_defined_symbols=["\n", "\t"],
-        remove_extra_whitespaces=False, allow_whitespace_only_pieces=True,
-        normalization_rule_name="identity", max_sentence_length=16384, hard_vocab_limit=False,
-        input_sentence_size=6_000_000, shuffle_input_sentence=True,
-        num_threads=args.threads, minloglevel=2,
-    )
+    spm.SentencePieceTrainer.train(input=corpus, model_prefix=prefix, vocab_size=vocab - extra,
+                                   input_sentence_size=6_000_000, num_threads=args.threads, **SPM_TRAIN_OPTIONS)
     try:  # the model records where and how it was trained (folder, threads): clear that, so identical data
         # gives an identical tokenizer file and dataset fingerprint wherever and however it is built
         from sentencepiece import sentencepiece_model_pb2 as spm_pb
@@ -3113,9 +3502,13 @@ def _load_state(path):
 
 def _resume_args(args):
     """The arguments of the build being resumed (from its state.pkl), with this
-    command's machine settings (--threads, --workers, --keep-work) on top."""
+    command's machine settings (--threads, --workers, --keep-work) on top. The
+    saved value wins for every option the stopped build recorded; an option
+    added to this script since then takes its default, also when this command
+    gives it another value (_validate has said that it is ignored)."""
     saved = _load_state(os.path.join(os.path.abspath(args.out), "_work", STATE_NAME))["args"]
-    merged = argparse.Namespace(**saved)
+    defaults = vars(args).pop("resume_defaults", None) or vars(args)
+    merged = argparse.Namespace(**{**defaults, **saved})
     for name in ("threads", "workers", "keep_work", "worker_warmup"):
         setattr(merged, name, getattr(args, name))
     merged.out, merged.resume, merged.overwrite = args.out, True, False
@@ -3149,9 +3542,9 @@ def tokenizer_sample_lines(text, source, doc_id, seed, prob, window=TOKENIZER_WI
     characters (a longer line is cut into pieces of `window`); window w is kept
     when stable_unit(seed, "tok", source, id, w) < prob, deterministic for any
     worker count. In a build prob = sample_chars x weight / mass, so every
-    source contributes its share in characters. Sampling whole documents did
-    not: at probability 0.01 the 83 training books were all absent from the
-    sample with probability 0.44 (and were, in the 2026-10 build)."""
+    source contributes its share in characters. Sampling whole documents would
+    not: at probability 0.01 the 83 training books are all absent from the
+    sample with probability 0.44."""
     out = []
     if prob <= 0:
         return out
@@ -3325,48 +3718,39 @@ def superbpe_extend(proto, corpus, extra, max_words=4, sample_tokens=20_000_000,
     return out, info
 
 
-def _token_distribution(out, tok, top=30, sample_tokens=40):
+def _token_distribution(out, tok, cats, top=30):
     """How the vocabulary is used on the finished training token files: the most
-    frequent pieces, how many pieces cover 50/90/99% of all tokens, unused and
-    rare pieces, token share by piece type, the longest pieces, and the first
-    tokens of each source exactly as the model sees them. Also writes
-    token_counts.tsv (every piece with its count) for plots."""
-    _, arrays = open_token_files(out, verify=False)
+    frequent pieces, how many pieces cover 50/90/99% of all tokens, unused
+    pieces, token share by piece type and characters per token for each source.
+    Also writes token_counts.tsv (every piece with its count) for plots.
+    cats: token_category of every piece, by id."""
+    manifest, arrays = open_token_files(out, verify=False)
     counts = np.zeros(tok.vocab_size, dtype=np.int64)
-    samples = {}
-    for name, arr in arrays["train"].items():
+    for arr in arrays["train"].values():
         for s in range(0, len(arr), 1 << 26):  # 64M tokens at a time: bounded memory on any dataset size
             counts += np.bincount(np.asarray(arr[s:s + (1 << 26)]), minlength=tok.vocab_size)[:tok.vocab_size]
-        samples[name] = [tok.piece(int(i)) for i in np.asarray(arr[:sample_tokens])]
     total = int(counts.sum())
     order = np.argsort(-counts, kind="stable")
     cum = np.cumsum(counts[order]) / max(total, 1)
     cover = {q: int(min(np.searchsorted(cum, q / 100) + 1, tok.vocab_size)) for q in (50, 90, 99)}
-    cats = [token_category(tok, i) for i in range(tok.vocab_size)]
     by_cat = collections.Counter()
     for i, c in enumerate(counts):
         by_cat[cats[i]] += int(c)
-    words = [i for i in range(tok.vocab_size) if cats[i] not in ("special", "byte fallback", "whitespace/newline")]
-    longest = sorted(words, key=lambda i: (-len(tok.piece(i).replace("\u2581", "")), i))[:12]
     with open(os.path.join(out, "token_counts.tsv"), "w", encoding="utf-8", newline="\n") as handle:
         handle.write("id\tpiece\ttype\tcount\tshare\n")
         for i in order:
             handle.write(f"{int(i)}\t{tok.piece(int(i))!r}\t{cats[i]}\t{int(counts[i])}\t"
                          f"{counts[i] / max(total, 1):.3e}\n")
-    manifest, _ = open_token_files(out, verify=False)
     per_source = {}
     for name, entry in manifest["sources"].items():
         t = entry.get("train") or {}
         if t.get("tokens") and t.get("chars"):
             per_source[name] = t["chars"] / t["tokens"]
-    curve = np.cumsum(counts[order]) / max(total, 1)
     plot_ranks = np.unique(np.geomspace(1, tok.vocab_size, 300).astype(int))
     return {"total": total, "vocab": tok.vocab_size, "cover": cover, "unused": int((counts == 0).sum()),
-            "chars_per_token": per_source, "curve": [(int(r), float(curve[r - 1])) for r in plot_ranks],
-            "rare": int(((counts > 0) & (counts < 100)).sum()),
+            "chars_per_token": per_source, "curve": [(int(r), float(cum[r - 1])) for r in plot_ranks],
             "top": [(tok.piece(int(i)), int(counts[i]), counts[i] / max(total, 1)) for i in order[:top]],
-            "by_type": {k: v / max(total, 1) for k, v in by_cat.most_common()},
-            "longest": [(tok.piece(i), int(counts[i])) for i in longest], "samples": samples}
+            "by_type": {k: v / max(total, 1) for k, v in by_cat.most_common()}}
 
 
 def _distribution_line(d):
@@ -3454,13 +3838,15 @@ def plot_token_summary(d, path):
     return path
 
 
-def _tokenizer_stats(tok, docs, split_of, doc_tokens):
-    chars, tokens = collections.Counter(), collections.Counter()
-    for i in np.flatnonzero(doc_tokens > 0).tolist():
-        key = (SPLIT_NAMES[split_of[i]], docs[i][0])
-        chars[key] += docs[i][3]
-        tokens[key] += int(doc_tokens[i])
-    per = {f"{s}/{src}": round(chars[(s, src)] / max(tokens[(s, src)], 1), 3) for (s, src) in tokens}
+def _tokenizer_stats(tok, manifest, written):
+    """Characters per token of every token file, from the manifest's counts, and
+    how ten terms are cut into pieces. written: the (split, source) pairs in
+    the order pass 3 first wrote them, which is the order of the report line."""
+    per = {}
+    for split, src in written:
+        part = manifest["sources"][src].get(split)
+        if part:
+            per[f"{split}/{src}"] = round(part["chars"] / max(part["tokens"], 1), 3)
     examples = {}
     for term in ("genetic drift", "heritability", "Wright–Fisher", "GWAS summary statistics", "UK Biobank",
                  "pharmacokinetics", "eigenvalue", "haematoxylin and eosin", "Ne = 1000, p = 0.05",
@@ -3516,8 +3902,7 @@ def _leakage_audit(spool2, docs, split_of, dropped, n=13, keep_mod=16, workers=1
     """Per validation document: the share of its sampled word 13-grams that also
     occur in training documents. The validation side (about 5% of the text) is
     hashed first; the training text is then checked against it in the workers,
-    so memory stays at a few hundred MB for any corpus size (sorting every
-    training hash needed several GB for 4 billion tokens). Rows:
+    so memory stays at a few hundred MB for any corpus size. Rows:
     (overlap, source, id, title, sampled 13-grams, document index), highest
     overlap first; the index lets the caller act on the row."""
     print("\nLeakage audit: sampled word 13-gram overlap of validation documents with training ...", flush=True)
@@ -3532,7 +3917,7 @@ def _leakage_audit(spool2, docs, split_of, dropped, n=13, keep_mod=16, workers=1
     try:
         val = [(i, sh) for (i, _), sh in _ordered(texts(SPLIT_VAL), lambda it: it[1], _audit_chunk, pool,
                                                   chunk=32, size_of=lambda it: len(it[1]))]
-    finally:  # on an error or Ctrl+C the queued work is cancelled, so the build can finish without it
+    finally:  # on an error or Ctrl+C the queued work is cancelled: no worker goes on for a caller that has left
         pool.close(cancel=True)
     val_set = np.unique(np.concatenate([sh for _, sh in val])) if val else np.zeros(0, dtype=np.uint64)
     found = []
@@ -3593,8 +3978,10 @@ def _move_leaks_to_train(leakage, docs, roots, clusters, split_of, dropped, sett
 
 
 def _cleanup(work, spool_dir, keep):
-    """Remove the work folder and the spool files (a --work-dir folder itself is
-    the user's: only the spools in it are removed, and it is left if not empty)."""
+    """Remove the work folder and the spool files. With --work-dir the spools
+    are in this dataset's own sub-folder of it (<name>_<hash>_spool): only the
+    spool files there are removed, then the sub-folder if it is empty. The
+    --work-dir folder itself and everything else in it are the user's and stay."""
     if keep:
         print(f"Work files kept in {work}" + (f" and {spool_dir}" if spool_dir != work else ""))
         return
@@ -3640,12 +4027,17 @@ def _write_ledger(out, ledger, docs, split_of, roots, dropped, doc_tokens):
     os.replace(tmp, path)
 
 
-def _write_report(out, args, sources, ledger, duplicates, removed_lines, line_examples, keyword_totals,
-                  manifest, tok_stats, forced_train, leakage, tok, t_start, scan_only=False, notes=()):
+def _write_report(out, args, sources, duplicates, removed_lines, line_examples, keyword_totals,
+                  manifest, tok_stats, forced_train, leakage, tok, t_start, scan_only=False, notes=(),
+                  command=None, earlier=0.0):
+    """report.md and the audit tables. `command` is the build's command line (a
+    resumed build passes the original one) and `earlier` the seconds a stopped
+    build had already taken before this session."""
     L = []
     L.append(f"# Dataset report: {os.path.basename(out)}\n")
     L.append(f"Created {datetime.datetime.now().astimezone().isoformat(timespec='seconds')} in "
-             f"{time.time() - t_start:,.0f} s. Command: `{' '.join(sys.argv)}`\n")
+             f"{earlier + time.time() - t_start:,.0f} s. "
+             f"Command: `{' '.join(sys.argv) if command is None else command}`\n")
     if scan_only:
         L.append("**Scan-only run:** filtering, cleaning and deduplication were measured; nothing was tokenized.\n")
     L.append("## Sources\n")
@@ -3683,8 +4075,8 @@ def _write_report(out, args, sources, ledger, duplicates, removed_lines, line_ex
         L.append(f"- {name}: validation {info.get('val_chars', 0):,} chars "
                  f"(target {info.get('val_chars_target', 0):,}); train {info.get('train_chars', 0):,} chars")
         if info["stats"]["accepted"] >= 2 and not info.get("val_chars", 0) and not scan_only:
-            # the split rule stays: a source of 1-2 documents cannot give a meaningful validation loss, and a
-            # group above a quarter of the budget stays in training; the report says so instead of staying silent
+            # a source of 1-2 documents cannot give a meaningful validation loss, and a group above
+            # --max-val-group-share of the budget stays in training: the report says so
             L.append(f"- **WARNING:** `{name}` has {info['stats']['accepted']:,} documents but no validation text "
                      "(each group is too large for the validation budget, or the source is too small); its "
                      "validation loss is not measured. More documents, or --max-val-group-share, would give it one.")
@@ -3699,14 +4091,16 @@ def _write_report(out, args, sources, ledger, duplicates, removed_lines, line_ex
         L.append(f"Include terms {len(read_terms(args.include_keywords))}, exclude terms "
                  f"{len(read_terms(args.exclude_keywords))}; min weighted hits {args.keyword_min_hits}, min distinct "
                  f"{args.keyword_min_distinct}, title weight {args.title_weight}. Full counts in keyword_hits.tsv.\n")
-        for name, counter in keyword_totals.items():
-            if counter:
-                L.append(f"- {name} top terms (documents kept): " +
-                         ", ".join(f"{t} {c:,}" for t, c in counter.most_common(25)))
+        # by count, then by term: the order in which the terms were first counted differs from process to process
+        ranked = {name: sorted(counter.items(), key=lambda kv: (-kv[1], kv[0]))
+                  for name, counter in keyword_totals.items()}
+        for name, rows in ranked.items():
+            if rows:
+                L.append(f"- {name} top terms (documents kept): " + ", ".join(f"{t} {c:,}" for t, c in rows[:25]))
         with open(os.path.join(out, "keyword_hits.tsv"), "w", encoding="utf-8", newline="\n") as handle:
             handle.write("source\tterm\thits_in_kept_docs\n")
-            for name, counter in keyword_totals.items():
-                for term, count in counter.most_common():
+            for name, rows in ranked.items():
+                for term, count in rows:
                     handle.write(f"{name}\t{_tsv_cell(term)}\t{count}\n")
     L.append("\n## Duplicates\n")
     exact = [d for d in duplicates if d[0] == "exact"]

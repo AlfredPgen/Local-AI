@@ -379,11 +379,20 @@ class TestPipeline(unittest.TestCase):
             data_prep.split_long_text = real_split
         self.assertEqual(data_prep._load_state(os.path.join(later, "_work", data_prep.STATE_NAME))["stage"],
                          "tokenizer")
+        # a state written before an option existed does not hold it: the resume takes the parser's default,
+        # also when the resume command gives the option (it says that it ignores such options)
+        state_file = os.path.join(later, "_work", data_prep.STATE_NAME)
+        saved = data_prep._load_state(state_file)
+        for option in ("leakage_check", "tokenizer_from"):
+            del saved["args"][option]
+        data_prep._save_state(state_file, saved)
         os.remove(os.path.join(later, "tokenizer.model"))
         with redirect_stdout(io.StringIO()):
-            data_prep.prepare(["--out", later, "--resume", "--threads", "2"])
+            data_prep.prepare(["--out", later, "--resume", "--threads", "2", "--leakage-check", "off"])
         self.assertTrue(os.path.isfile(os.path.join(later, "tokenizer.model")))
         self.assertEqual(data_prep.read_manifest(later)["fingerprint"], a["fingerprint"])
+        self.assertEqual(data_prep.read_manifest(later)["prep_args"]["leakage_check"], "on")
+        self.assertEqual(sorted(data_prep.read_manifest(later)["prep_args"]), sorted(a["prep_args"]))
         data_prep.open_token_files(later, verify=True)
 
     def test_split_by_group_no_leakage(self):
@@ -1881,12 +1890,27 @@ class TestFixes(unittest.TestCase):
             f.write("# Packed\n\nAllele frequencies.")
         with open(os.path.join(folder, "broken.txt.gz"), "wb") as f:
             f.write(b"not gzip")
+        # damaged deflate data raises zlib.error, which is no OSError: flip bytes until gzip answers with it
+        import zlib
+        good = gzip.compress(paragraphs(3).encode())
+        for k in range(10, len(good) - 8):
+            bad = good[:k] + bytes([good[k] ^ 0xFF]) + good[k + 1:]
+            try:
+                gzip.GzipFile(fileobj=io.BytesIO(bad)).read()
+            except zlib.error:
+                break
+            except (OSError, EOFError):
+                continue
+        else:
+            self.fail("no byte flip gave a zlib.error")
+        with open(os.path.join(folder, "corrupt.md.gz"), "wb") as f:
+            f.write(bad)
         stats = {"scanned": 0, "skipped": collections.Counter(), "cleaning": collections.Counter()}
         docs = list(data_prep.iter_markdown([folder], list(data_prep.MD_PATTERNS_DEFAULT), [], False, stats, []))
         self.assertEqual([(d[0], d[1], d[2]) for d in docs],
                          [("packed.md", "packed", "# Packed\n\nAllele frequencies."),
                           ("plain.md", "plain", "# Plain\n\nGenetic drift.")])
-        self.assertEqual(stats["skipped"]["bad_gzip"], 1)
+        self.assertEqual(stats["skipped"]["bad_gzip"], 2)
 
     def test_keyword_covered_terms(self):
         """tools/kw_covered.py: a term whose every match is another term's match only double-counts."""
@@ -2126,6 +2150,10 @@ class TestFixes(unittest.TestCase):
         self.assertFalse(sl("Materials and Methods", "Category: Genetics"), "a short line after a short line")
         self.assertFalse(sl("Materials and Methods"), "without the next line the heading rule is off")
         self.assertFalse(sl("Materials and Methods", ""))
+        self.assertFalse(sl("<!-- Start of picture text -->", para), "markup before a paragraph is not a heading")
+        self.assertFalse(sl("| a | b |", para), "nor is a table row")
+        self.assertFalse(sl("`pip install` instructions", para), "nor a line with code marks")
+        self.assertTrue(sl("Chap. 5 Diagonalization", para))
         self.assertFalse(sl("This item is not available for download.", para), "a sentence is not a heading")
         self.assertFalse(sl("one two three four five six seven eight nine", para), "more than 8 words")
         self.assertFalse(sl("Please sign in to access the full text", "Category: x"))
