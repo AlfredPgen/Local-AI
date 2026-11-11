@@ -595,6 +595,55 @@ class Audit2DocsYoutubeConvert(unittest.TestCase):
             self.assertIn("Sentence 12: linkage disequilibrium decays with recombination.", text, mode)
             self.assertEqual(progress, "  OCR mixed.pdf: 1 of 1 scanned pages\n", mode)
 
+    def test_converter_child_crash_and_time_limit_cost_one_file(self):
+        """F032 (guard): a file whose process ends with an error is reported 'skipped', a process past its time
+        limit is stopped and reported 'timed out', and the batch goes on to the next file either way."""
+        import time
+        import convert_to_markdown as conv
+        src, out = os.path.join(self.tmp, "f032", "src"), os.path.join(self.tmp, "f032", "out")
+        os.makedirs(src)
+        # what the process of each PDF does here, in place of converting it (the files are never read as PDFs)
+        stand_in = {"a_crash.pdf": "import sys; print('half a line'); print('  OCR a_crash.pdf: 1 of 2 scanned pages', "
+                                   "file=sys.stderr); print('MuPDF error: boom', file=sys.stderr); sys.exit(3)",
+                    "b_silent.pdf": "import os; os._exit(5)",
+                    "c_slow.pdf": "import time; time.sleep(600)"}
+        for name in stand_in:
+            with open(os.path.join(src, name), "wb") as handle:
+                handle.write(b"%PDF-1.7 placeholder")
+        with open(os.path.join(src, "d_notes.txt"), "w", encoding="utf-8") as handle:
+            handle.write("Genetic drift changes allele frequencies by chance.\n")
+        real_child, started = conv._run_child, []
+
+        def child(cmd, timeout):  # the real runner (pipes, time limit, kill) on the stand-in process
+            name = os.path.basename(cmd[2])
+            started.append((name, timeout))
+            return real_child([sys.executable, "-c", stand_in[name]], timeout)
+
+        argv = ["convert_to_markdown.py", src, "--out", out, "--timeout", "1"]
+        with unittest.mock.patch.object(sys, "argv", argv), unittest.mock.patch.object(conv, "_run_child", child), \
+                unittest.mock.patch.object(conv, "_lower_priority"), \
+                unittest.mock.patch("sys.stdout", new_callable=__import__("io").StringIO) as shown:
+            began = time.monotonic()
+            conv.main()
+            took = time.monotonic() - began
+        limit = conv.PDF_SECONDS_PER_PAGE  # --timeout 1 is raised to the time one PDF page gets
+        self.assertEqual(started, [(name, limit) for name in sorted(stand_in)])
+        self.assertLess(took, 300, "the slow process was stopped at its limit, not waited for")
+        with open(os.path.join(out, "conversion_report.tsv"), encoding="utf-8") as handle:
+            rows = [line.rstrip("\n").split("\t") for line in handle][1:]
+        report = {os.path.basename(path): (status, detail) for path, status, detail in rows}
+        self.assertEqual(report["a_crash.pdf"], ("skipped", "MuPDF error: boom"))
+        self.assertEqual(report["b_silent.pdf"], ("skipped", "the converter crashed on this file (exit code 5)"))
+        self.assertEqual(report["c_slow.pdf"],
+                         ("skipped", f"timed out after {limit} s (raise --timeout to allow longer)"))
+        self.assertEqual(report["d_notes.txt"][0], "converted (text)")  # the file after the three still converts
+        with open(os.path.join(out, "d_notes.md"), encoding="utf-8") as handle:
+            self.assertEqual(handle.read(), "Genetic drift changes allele frequencies by chance.\n")
+        text = shown.getvalue()
+        self.assertIn("  OCR a_crash.pdf: 1 of 2 scanned pages\n", text)  # a worker's OCR progress is passed on
+        self.assertIn("[3/4] skipped                c_slow.pdf -> timed out after", text)
+        self.assertIn("1 of 4 files converted; 3 skipped or already present", text)
+
 
 if __name__ == "__main__":
     unittest.main()
