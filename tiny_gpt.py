@@ -4461,7 +4461,7 @@ def _train(args):
         torch.cuda.reset_peak_memory_stats(device)  # peak_mem_gib on the metrics lines counts from the built model
     source_obj = resume_obj or init_obj
     if source_obj is not None:
-        missing, unexpected = model.load_state_dict({k: v for k, v in source_obj["model"].items()}, strict=False)
+        missing, unexpected = model.load_state_dict(source_obj["model"], strict=False)
         missing = [m for m in missing if not (m == "lm_head.weight" and cfg.tie_embeddings)]
         if missing or unexpected:
             raise SystemExit(f"Checkpoint weights do not fit the model (missing {missing[:3]}, "
@@ -4659,7 +4659,7 @@ def _train(args):
     log_only("model: " + json.dumps(dataclasses.asdict(cfg)))
     print(f"parameters: {n_total:,} total, {n_nonembed:,} non-embedding"
           + (f", {n_active:,} active per token" if moe else ""))
-    log_only("train: " + json.dumps({k: v for k, v in settings.items()}))
+    log_only("train: " + json.dumps(settings))
     # a resumed run: the whole run. After --init-from of a training state: the steps of this run alone (the
     # schedule goes on at the checkpoint's step, whose tokens were another run's)
     budget_steps = total_steps if resumed else max(total_steps - start_step, 0)
@@ -5127,7 +5127,7 @@ def _train(args):
                 is_best = candidate < best_val
                 if is_best:
                     best_val, best_step = candidate, step
-                last_eval = {k: v for k, v in ev.items()}
+                last_eval = ev
                 elapsed = time.perf_counter() - t_run
                 per_step = (time.perf_counter() - interval_wall) / max(step - interval_start_step, 1)
                 eta = per_step * (total_steps - step)
@@ -5303,7 +5303,6 @@ def _train(args):
         raise
     finally:
         meter.stop()
-        n_total, n_nonembed, n_active, _ = model.param_counts()
         last_hist = history[-1] if history else {}
         record_experiment(args.out_dir, {
             "event": "training run", "name": args.name, "status": status, "step": step, "total_steps": total_steps,
