@@ -1157,6 +1157,31 @@ class Audit2DataPrep(unittest.TestCase):
         self.assertEqual(tok.encode("\n\n"), [tok.newline_id, tok.newline_id])
         self.assertEqual(tok.decode(tok.encode("two lines\nof text")), "two lines\nof text")
 
+    def test_encode_of_a_text_of_many_lines_is_one_list_call(self):
+        """One SentencePiece call per line is the faster way only for a text of few lines (a prompt, a probe):
+        a document of many short lines (a table, a list) took up to 2.9x the time of the list call. Above 64
+        line breaks encode is encode_batch([text])[0] again; the ids are the same on both sides of the limit."""
+        tok = data_prep.Tokenizer.from_file(os.path.join(self.plain(), "tokenizer.model"), "lines")
+        batch, calls = tok.encode_batch, []
+
+        def counted(texts, threads=1):
+            calls.append(len(texts))
+            return batch(texts, threads)
+
+        for breaks, list_calls in ((0, 0), (63, 0), (64, 0), (65, 1), (66, 1), (1000, 1)):
+            for line in ("allele", "| a | b |", "", "the allele frequency changes by genetic drift"):
+                text = "\n".join([line] * (breaks + 1))
+                expected = batch([text])[0]
+                del calls[:]
+                with unittest.mock.patch.object(tok, "encode_batch", counted):
+                    self.assertEqual(tok.encode(text), expected, (breaks, line))
+                self.assertEqual(calls, [1] * list_calls, (breaks, line))
+        plain = data_prep.Tokenizer.from_file(os.path.join(self.plain(), "tokenizer.model"), "plain")
+        text = "\n".join(["allele"] * 500)
+        with unittest.mock.patch.object(plain, "encode_batch", side_effect=AssertionError("list call")):
+            ids = plain.encode(text)  # plain mode never needed the split: one call for the whole text
+        self.assertEqual(ids, plain.encode_batch([text])[0])
+
     # ---------------- F095: a long English text behind front matter in another language is kept ----------------
     def test_english_body_behind_a_foreign_front_page_is_english(self):
         french = "l'été dernier les élèves ont étudié la génétique à l'université près de la forêt. "
