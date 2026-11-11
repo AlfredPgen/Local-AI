@@ -448,9 +448,7 @@ BENCHMARKS = [
           notes="data only: its tests need ~70 libraries; run with BigCodeBench's own Docker environment"),
     _spec("cadbench", "CADBench (BlenderLLM)", "3d", "FreedomIntelligence/CADBench", ["CADBench.jsonl"],
           "Apache-2.0", _one(norm_cadbench), kind="code", grading="vision", scored=False,
-          notes="Blender Python scripts from text; graded by rendering + a vision model against per-item criteria. "
-                "Only an automatic 'script runs and makes geometry' check is possible here, and only when the "
-                "sandbox has headless Blender"),
+          notes="Blender Python scripts from text; graded by rendering + a vision model; not scored here"),
 ]
 BY_NAME = {b["name"]: b for b in BENCHMARKS}
 
@@ -635,13 +633,12 @@ elif command -v unshare >/dev/null && unshare -rmn true 2>/dev/null; then
 else
   echo NO_ISOLATION; exit 3
 fi
-command -v blender >/dev/null && echo BLENDER=yes
 exit 0
 """
 
 
 def wsl_probe(distro):
-    """(tool, has_blender) if `distro` can isolate code (bubblewrap or unshare), else None."""
+    """The tool ('bwrap' or 'unshare') `distro` can isolate code with, else None."""
     try:
         proc = _run(["wsl", "-d", distro, "-e", "bash", "-s"], 120, WSL_PROBE.encode())
     except (OSError, subprocess.SubprocessError):
@@ -650,7 +647,7 @@ def wsl_probe(distro):
     m = re.search(r"TOOL=(\w+)", text)
     if proc.returncode != 0 or not m:
         return None
-    return m.group(1), "BLENDER=yes" in text
+    return m.group(1)
 
 
 class DockerSandbox:
@@ -658,39 +655,33 @@ class DockerSandbox:
 
     def __init__(self, image="python:3.12-slim", memory="1g", cpus="1"):
         self.image, self.memory, self.cpus = image, memory, cpus
-        self.has_blender = False
 
     def describe(self):
         return f"Docker {self.image} (--network none, --memory {self.memory}, --cpus {self.cpus}, read-only root)"
 
-    def run(self, program, timeout=20, runner="python"):
-        exe = ["python", "-"] if runner == "python" else ["blender", "-b", "--factory-startup",
-                                                          "--python-exit-code", "1", "--python", "/dev/stdin"]
+    def run(self, program, timeout=20):
         cmd = ["docker", "run", "--rm", "-i", "--network", "none", "--memory", self.memory, "--cpus", self.cpus,
                "--pids-limit", "256", "--read-only", "--tmpfs", "/tmp", "-e", "MPLBACKEND=Agg", "-w", "/tmp",
-               self.image, "timeout", "-k", "2", str(int(timeout))] + exe
+               self.image, "timeout", "-k", "2", str(int(timeout)), "python", "-"]
         return _finish(cmd, program, timeout)
 
 
 class WSLSandbox:
     name = "wsl"
 
-    def __init__(self, distro, tool="bwrap", has_blender=False, memory_mb=1024):
-        self.distro, self.tool, self.has_blender, self.memory_mb = distro, tool, has_blender, memory_mb
+    def __init__(self, distro, tool="bwrap", memory_mb=1024):
+        self.distro, self.tool, self.memory_mb = distro, tool, memory_mb
 
     def describe(self):
         how = ("bubblewrap: no network, only /usr visible read-only, no Windows drives" if self.tool == "bwrap"
                else "unshare: no network, /mnt and /home hidden")
         return f"WSL {self.distro} ({how}; {self.memory_mb} MB address space, timeout)"
 
-    def script(self, program, timeout, runner="python"):
+    def script(self, program, timeout):
         b64 = base64.b64encode(program.encode("utf-8")).decode("ascii")
         lines = [b64[i:i + 76] for i in range(0, len(b64), 76)]
         mem = self.memory_mb * 1024 * 1024
-        if runner == "python":
-            exe = "python3 -s prog.py"
-        else:
-            exe = "blender -b --factory-startup --python-exit-code 1 --python prog.py"
+        exe = "python3 -s prog.py"
         if self.tool == "bwrap":
             jail = ("args='--ro-bind /usr /usr --proc /proc --dev /dev --tmpfs /tmp --bind \"$d\" /work --chdir /work "
                     "--unshare-all --die-with-parent --new-session --clearenv --setenv PATH /usr/bin:/bin "
@@ -708,22 +699,18 @@ class WSLSandbox:
                 "base64 -d > \"$d/prog.py\" <<'__TINYGPT_B64__'\n" + "\n".join(lines) + "\n__TINYGPT_B64__\n"
                 + jail + "rc=$?\nrm -rf \"$d\"\nexit $rc\n")
 
-    def run(self, program, timeout=20, runner="python"):
-        return _finish(["wsl", "-d", self.distro, "-e", "bash", "-s"], self.script(program, timeout, runner),
-                       timeout)
+    def run(self, program, timeout=20):
+        return _finish(["wsl", "-d", self.distro, "-e", "bash", "-s"], self.script(program, timeout), timeout)
 
 
 class LocalSubprocess:
     """--unsafe-local-execution only: a separate Python process in a temporary folder (not isolated)."""
     name = "local-unsafe"
-    has_blender = False
 
     def describe(self):
         return "UNSAFE local subprocess (no isolation: generated code can read and change your files)"
 
-    def run(self, program, timeout=20, runner="python"):
-        if runner != "python":
-            return SandboxResult(False, "unsupported")
+    def run(self, program, timeout=20):
         with tempfile.TemporaryDirectory(prefix="tgbench_") as d:
             path = os.path.join(d, "prog.py")
             with open(path, "w", encoding="utf-8") as handle:
@@ -759,9 +746,9 @@ def select_sandbox(prefer="auto", unsafe=False, distro=None, docker_image="pytho
     if prefer in ("auto", "wsl"):
         candidates = wsl_candidates(distro)
         for d in candidates:
-            probe = wsl_probe(d)
-            if probe:
-                return WSLSandbox(d, probe[0], probe[1])
+            tool = wsl_probe(d)
+            if tool:
+                return WSLSandbox(d, tool)
         log(f"WSL: no distribution with python3 and bubblewrap/unshare ({', '.join(candidates) or 'none found'}).")
     if unsafe:
         return LocalSubprocess()
@@ -794,15 +781,7 @@ CODE_STOPS = {
     "humaneval": ["\ndef ", "\nclass ", "\nif __name__", "\nprint(", "\n#", "\nassert"],
     "mbpp": ['\n"""', "\nassert", "\nif __name__", "\nprint(", "\n# Test", "\n```"],
     "ds1000": ["</code>", "# SOLUTION END", "END SOLUTION", "\n```"],
-    "blender": ["\n\n\n", "\n```", "\n# End"],
 }
-BLENDER_EPILOGUE = """
-
-import bpy as _bpy, sys as _sys
-_meshes = [o for o in _bpy.data.objects if o.type == 'MESH' and len(o.data.vertices) > 0]
-print('MESH_OBJECTS=%d' % len(_meshes))
-_sys.exit(0 if _meshes else 1)
-"""
 
 
 def code_prompt(item):
@@ -814,8 +793,6 @@ def code_prompt(item):
         return f'"""\n{item["question"].strip()}\n{example}\n"""\n'
     if style == "ds1000":
         return item["question"]
-    if style == "blender":
-        return f"# Blender Python script: {item['question'].strip()}\nimport bpy\n"
     raise ValueError(f"no prompt style {style}")
 
 
@@ -836,8 +813,6 @@ def code_program(item, completion):
         ctx = item["code_context"]
         return (f"{ctx}\ncode = {completion!r}\ntest_execution(code)\n"
                 + ("test_string(code)\n" if "test_string(" in ctx else ""))
-    if style == "blender":
-        return "import bpy\n" + completion + BLENDER_EPILOGUE
     raise ValueError(f"no program style {style}")
 
 
@@ -1060,9 +1035,7 @@ def score_code(model, tok, items, device, amp_dtype, sandbox, max_new_tokens=256
                           item_stops=[CODE_STOPS[it["style"]] for it in items], batch=batch)
     log(f"    {len(items)} completions generated in {time.time() - t0:,.0f} s; running the tests", flush=True)
     for k, (it, gen) in enumerate(zip(items, gens), 1):
-        style = it["style"]
-        runner = "blender" if style == "blender" else "python"
-        res = sandbox.run(code_program(it, gen), timeout=timeout, runner=runner)
+        res = sandbox.run(code_program(it, gen), timeout=timeout)
         rows.append({"id": it["id"], "category": it["category"], "correct": bool(res.passed), "chance": 0.0,
                      "floor_correct": None, "status": res.status, "generated": gen[:400],
                      "output": res.output[-300:]})

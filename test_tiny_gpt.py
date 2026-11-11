@@ -5020,7 +5020,7 @@ class TestBenchmarkSuite(unittest.TestCase):
             self.assertIsInstance(b.select_sandbox(log=lambda *a: None), b.DockerSandbox)
         with unittest.mock.patch.object(b, "docker_available", return_value=False), \
                 unittest.mock.patch.object(b, "wsl_distros", return_value=["Debian", "Ubuntu"]), \
-                unittest.mock.patch.object(b, "wsl_probe", side_effect=lambda d: ("bwrap", False) if d == "Ubuntu"
+                unittest.mock.patch.object(b, "wsl_probe", side_effect=lambda d: "bwrap" if d == "Ubuntu"
                                            else None):
             sb = b.select_sandbox(log=lambda *a: None)
             self.assertIsInstance(sb, b.WSLSandbox)
