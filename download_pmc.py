@@ -32,13 +32,18 @@ into <meta>\metadata (about 9 hours, a few GB; resumable), then papers with 3
 matches from 3 different terms (the title counts 3 times) are ranked by keyword
 density (--rank cited: by citations) and the best --max-papers are fetched.
 Papers already downloaded are skipped. After editing the keywords, rerun: only
-the selection is redone. --refresh-metadata harvests again for new papers.
+the selection is redone. --refresh-metadata harvests everything again (new
+papers, current citation counts; again about 9 hours) into a second file; the
+first harvest stays in use until the new one is complete and replaces it, and a
+rerun with the option continues an interrupted refresh.
     python download_pmc.py --out %USERPROFILE%\ai_training_data\pmc --keywords keywords.txt --max-papers 300000
 """
 
 import argparse
 import concurrent.futures as cf
+import datetime
 import gzip
+import hashlib
 import http.client
 import json
 import math
@@ -52,6 +57,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
+import zlib
 
 SEARCH_URL = "https://www.ebi.ac.uk/europepmc/webservices/rest/search"
 EFETCH_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi"
@@ -59,6 +65,7 @@ DEFAULT_QUERY = 'OPEN_ACCESS:y AND HAS_FT:y AND SRC:MED AND (genetic* OR genom* 
 USER_AGENT = "tinyGPT-pmc-downloader/1.0 (personal research; python urllib)"
 MAX_XML_BYTES = 400 << 20
 MIN_REQUEST_GAP = 0.35  # seconds between request starts: NCBI allows 3 per second without an API key
+MAX_SERVER_PAUSE = 600.0  # seconds one request waits at most, over all its tries, because Retry-After asks for it
 FINAL = {"ok", "no_fulltext", "no_body", "not_english", "bad_xml"}  # statuses not retried on a rerun
 REPORT_COLUMNS = ["pmcid", "status", "chars", "journal", "year", "cited", "licence", "file"]
 
@@ -80,10 +87,17 @@ def _wait_turn():
 
 def http_get(url, data=None, timeout=300, tries=6):
     """Bytes of url (POST when data is given), None on 404. Rate limits, server
-    errors and network failures are retried with exponential backoff."""
-    delay = 3.0
+    errors and network failures are retried with exponential backoff; after
+    "too many requests" (429) or "busy" (503) the wait is at least as long as
+    the server's Retry-After asks (a line says so, because a request waiting in
+    a worker thread prints nothing else). One request waits at most 10 minutes
+    in this way over all its tries, then the backoff alone is left: while papers
+    are fetched these waits are plain sleeps in worker threads, which Ctrl+C
+    does not interrupt."""
+    delay, patience = 3.0, MAX_SERVER_PAUSE  # patience: seconds of Retry-After waiting this request has left
     for attempt in range(tries):
         _wait_turn()
+        asked = 0.0
         try:
             request = urllib.request.Request(url, data=data, headers={"User-Agent": USER_AGENT,
                                                                       "Accept-Encoding": "gzip"})
@@ -99,10 +113,20 @@ def http_get(url, data=None, timeout=300, tries=6):
                 return None
             if exc.code not in (429, 500, 502, 503, 504) or attempt == tries - 1:
                 raise
+            if exc.code in (429, 503):
+                # imported here, not at the top: download_arxiv imports this module
+                if "download_arxiv" not in sys.modules:
+                    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+                from download_arxiv import _retry_after
+                asked = min(_retry_after(exc.headers) or 0.0, patience)
+                patience -= asked
+                if asked > delay + 1:  # longer than the backoff below
+                    print(f"  the server asks to slow down ({exc.code}); this request waits {asked:,.0f} s",
+                          flush=True)
         except (urllib.error.URLError, TimeoutError, ConnectionError, http.client.HTTPException, OSError):
             if attempt == tries - 1:
                 raise
-        time.sleep(delay + random.random())
+        time.sleep(max(delay + random.random(), asked))
         delay = min(delay * 2, 120)
     return None
 
@@ -158,23 +182,86 @@ HARVEST_QUERY = "OPEN_ACCESS:y AND HAS_FT:y AND SRC:MED"
 _TAGS = re.compile(r"<[^>]+>")
 
 
+def _read_state(path):
+    if not os.path.isfile(path):
+        return {}
+    with open(path, encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def _finish_refresh(records, state_path):
+    """The end of a --refresh-metadata harvest: the complete new files replace
+    the old ones, the records first and then the state. A stop between the two
+    leaves a complete state.json.new without records.jsonl.gz.new, which the
+    next start finishes by calling this again. A new harvest that found no
+    paper at all (a server fault, not an empty literature) replaces nothing:
+    its state is removed, the earlier harvest stays, and False is returned."""
+    if os.path.isfile(records + ".new"):
+        os.replace(records + ".new", records)
+    elif not _read_state(state_path + ".new").get("records"):
+        os.remove(state_path + ".new")
+        print("Warning: the metadata refresh found no paper at all; the earlier harvest is kept.", flush=True)
+        return False
+    os.replace(state_path + ".new", state_path)
+    return True
+
+
 def harvest(query, folder, refresh=False):
     """Title, abstract, year, citations and journal of every search hit with a
     PMCID, appended page by page to <folder>\\records.jsonl.gz. state.json keeps
-    the search position, so an interrupted harvest continues where it stopped."""
+    the search position, so an interrupted harvest continues where it stopped.
+    refresh=True harvests everything again into records.jsonl.gz.new with
+    state.json.new; the earlier harvest stays in place (and in use) until the
+    new one is complete and replaces it, and an interrupted refresh is continued
+    by the next refresh of the same query. Returns the records path."""
     os.makedirs(folder, exist_ok=True)
     records, state_path = os.path.join(folder, "records.jsonl.gz"), os.path.join(folder, "state.json")
-    state = {}
-    if os.path.isfile(state_path) and not refresh:
-        with open(state_path, encoding="utf-8") as handle:
-            state = json.load(handle)
+    unfinished = _read_state(state_path + ".new")
+    if unfinished.get("complete"):  # a refresh that was stopped while its files replaced the old ones
+        _finish_refresh(records, state_path)
+        unfinished, refresh = {}, False  # the refresh asked for is this one: it is done
+    if refresh:
+        if unfinished.get("query") == query:
+            print(f"Continuing the unfinished metadata refresh ({unfinished.get('records', 0):,} papers so far); "
+                  "the earlier harvest stays in use until it is complete.", flush=True)
+        else:
+            print(f"Harvesting the metadata again into {records}.new; the earlier harvest stays in use until "
+                  "it is complete.", flush=True)
+        count, _ = _harvest_pages(query, records + ".new", state_path + ".new")
+        if _finish_refresh(records, state_path):
+            print(f"Metadata: {count:,} papers in {records}")
+        else:  # the search answers wrongly: the earlier harvest as it is, and no further request in this run
+            earlier = _read_state(state_path)
+            print(f"Metadata: {earlier.get('records', 0):,} papers from {records}"
+                  + ("" if earlier.get("complete") else " (that harvest is not finished; a run without "
+                                                        "--refresh-metadata continues it)"))
+        return records
+    elif unfinished:
+        print(f"An unfinished metadata refresh exists ({unfinished.get('records', 0):,} papers so far); the earlier "
+              "harvest is used. Rerun with --refresh-metadata to continue it.", flush=True)
+    count, cached = _harvest_pages(query, records, state_path)
+    print(f"Metadata: {count:,} papers {'from' if cached else 'in'} {records}")
+    return records
+
+
+def _harvest_pages(query, records, state_path):
+    """The harvest loop on one records file and its state file. Returns (papers
+    in the file, True if the harvest was already complete)."""
+    state = _read_state(state_path)
     if state.get("query") != query:
         if os.path.isfile(records):
             os.remove(records)
-        state = {"query": query, "cursor": "*", "records": 0, "complete": False}
+        # "started": the day the harvest began (it runs for hours, possibly over several days)
+        state = {"query": query, "cursor": "*", "records": 0, "complete": False,
+                 "started": datetime.date.today().isoformat()}
+    # "bytes": the size of the records file when the progress was last saved. Anything after it is a page whose
+    # progress was never saved (possibly a gzip member cut off by a crash): cut it off, it is fetched again.
+    # A state.json from before this field has none and is left as it is.
+    if state.get("bytes") is not None and os.path.isfile(records) and os.path.getsize(records) > state["bytes"]:
+        with open(records, "r+b") as handle:
+            handle.truncate(state["bytes"])
     if state["complete"]:
-        print(f"Metadata: {state['records']:,} papers from {records}")
-        return records
+        return state["records"], True
     t0, start = time.time(), state["records"]
     while True:
         params = {"query": query, "format": "json", "resultType": "core", "pageSize": 1000,
@@ -196,6 +283,7 @@ def harvest(query, folder, refresh=False):
             with gzip.open(records, "at", encoding="utf-8") as handle:  # one gzip member per page
                 handle.write("\n".join(lines) + "\n")
         nxt = data.get("nextCursorMark")
+        state["bytes"] = os.path.getsize(records) if os.path.isfile(records) else 0
         state["records"] += len(lines)
         state["complete"] = not results or not nxt or nxt == state["cursor"]
         state["cursor"] = nxt or state["cursor"]
@@ -210,41 +298,61 @@ def harvest(query, folder, refresh=False):
             print(f"  metadata: {state['records']:,} of about {total:,} papers "
                   f"({rate:,.0f}/s, about {max(left, 0):.1f} h left)", flush=True)
         if state["complete"]:
-            print(f"Metadata: {state['records']:,} papers in {records}")
-            return records
+            return state["records"], False
 
 
 def read_records(path):
+    """The harvested records, each paper once (its first copy). A damaged file
+    (a page cut off by a crash before the harvest guarded against that) is read
+    up to the damage, with a warning, instead of stopping the run."""
     seen = set()
-    with gzip.open(path, "rt", encoding="utf-8") as handle:
-        for line in handle:
-            try:
-                rec = json.loads(line)
-            except ValueError:  # a page cut short by a crash; the harvest rewrote it after
-                continue
-            if rec["pmcid"] not in seen:
-                seen.add(rec["pmcid"])
-                yield rec
+    with gzip.open(path, "rt", encoding="utf-8") as handle:  # a missing file is an error, as before
+        try:
+            for line in handle:
+                try:
+                    rec = json.loads(line)
+                except ValueError:  # a line cut short by a crash
+                    continue
+                pmcid = rec.get("pmcid") if isinstance(rec, dict) else None
+                if pmcid and pmcid not in seen:
+                    seen.add(pmcid)
+                    yield rec
+        except (OSError, EOFError, zlib.error) as exc:  # gzip.BadGzipFile is an OSError
+            print(f"  warning: {path} is damaged ({type(exc).__name__}: {exc}); using the {len(seen):,} papers "
+                  "before the damage, everything after it is not read. --refresh-metadata harvests again.",
+                  flush=True)
 
 
-def keyword_list(records_path, keyword_path, min_hits, min_distinct, limit, rank, path, skip=()):
-    """Papers whose title and abstract match the keywords (the title counts 3
-    times), best first, as list rows; written to `path`. rank: 'density'
-    (keyword matches per square root of words) or 'cited' (most cited first).
-    Papers in `skip` (PMCIDs already downloaded) are left out of the list."""
-    import pyarrow as pa
+# Part of the key of <meta>\metadata\matches.tsv (the scored matches that later runs reuse). Raise it whenever the
+# scoring changes: data_prep.KeywordFilter.evaluate, the density formula, the language rule or the sort order
+# below. Matches scored by the old rule are then scored again instead of being reused.
+MATCH_VERSION = 1
+TITLE_WEIGHT = 3  # a keyword in the title counts this many times
 
-    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-    import data_prep as dp
 
-    kw = dp.KeywordFilter(dp.read_terms(keyword_path), [], min_hits, min_distinct, title_weight=3)
+def _matches_head(cache):
+    """The first line of a matches file (its key and counts) as a dict; {} if there is no usable file."""
+    try:
+        with open(cache, encoding="utf-8", newline="\n") as handle:
+            head = json.loads(handle.readline())
+    except (OSError, ValueError):
+        return {}
+    return head if isinstance(head, dict) else {}
+
+
+def _score_matches(records_path, kw, rank, key, cache):
+    """Score every harvested paper and write all that match, best first (no
+    skip, no limit), to `cache` under a first line holding `key` and the counts.
+    Returns that first line as a dict."""
     kept, n, t0 = [], 0, time.time()
 
     def score(chunk):
-        arrays = {"text": pa.array([r["abstract"] for r in chunk]), "title": pa.array([r["title"] for r in chunk])}
-        upper, _, _ = dp._vector_scores(arrays, kw, "text", "title", None, None)  # C++ prefilter, never too low
-        for rec, bound in zip(chunk, upper):
-            if bound < min_hits or not rec["lang"].lower().startswith(("eng", "en")) and rec["lang"]:
+        # The full check on every record, without data_prep's C++ prefilter (_vector_scores) in front of it: a
+        # prefilter pays only when it rejects most records, and with the keyword list used here it rejected
+        # 2-19 % of these abstracts and cost more than the check it saved. A much narrower keyword list
+        # (one that rejects two thirds or more) would make it worth having again.
+        for rec in chunk:
+            if rec["lang"] and not rec["lang"].lower().startswith(("eng", "en")):
                 continue
             keep, _, hits, _ = kw.evaluate(rec["title"], rec["abstract"])
             if keep:
@@ -267,15 +375,74 @@ def keyword_list(records_path, keyword_path, min_hits, min_distinct, limit, rank
         kept.sort(key=lambda p: (-p[1]["cited"], -p[0], p[1]["pmcid"]))
     else:
         kept.sort(key=lambda p: (-p[0], -p[1]["cited"], p[1]["pmcid"]))
-    kept = [k for k in kept if k[1]["pmcid"] not in skip]
-    rows = [(r["pmcid"], r["pmid"], r["year"], str(r["cited"]), r["journal"], r["title"]) for _, r in kept[:limit]]
+    head = {**key, "n": n, "matched": len(kept)}
+    part = f"{cache}.{os.getpid()}.part"
+    try:
+        with open(part, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write(json.dumps(head) + "\n")
+            for _, r in kept:
+                handle.write("\t".join((r["pmcid"], r["pmid"], r["year"], str(r["cited"]), r["journal"], r["title"]))
+                             + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(part, cache)
+    except BaseException:  # stopped (Ctrl+C) or failed (disk full, matches.tsv in use): no later run has this
+        try:               # process number, so the unfinished file (up to a gigabyte) would stay for good
+            os.remove(part)
+        except OSError:
+            pass
+        raise
+    return head
+
+
+def _select_matches(cache, limit, skip):
+    """The first `limit` rows of a matches file (it is in rank order) whose
+    PMCID is not in `skip`. The file is streamed: it can hold millions of rows."""
+    rows = []
+    with open(cache, encoding="utf-8", newline="\n") as handle:
+        handle.readline()  # the key
+        for line in handle:
+            if len(rows) >= limit:
+                break
+            row = tuple(line.rstrip("\n").split("\t"))  # not strip(): an empty title must stay a field
+            if row[0] not in skip:
+                rows.append(row)
+    return rows
+
+
+def keyword_list(records_path, keyword_path, min_hits, min_distinct, limit, rank, path, skip=(), rebuild=False):
+    """Papers whose title and abstract match the keywords (the title counts 3
+    times), best first, as list rows; written to `path`. rank: 'density'
+    (keyword matches per square root of words) or 'cited' (most cited first).
+    Papers in `skip` (PMCIDs already downloaded) are left out of the list.
+    All matches are kept, in rank order, in matches.tsv beside the records;
+    while the keywords, the thresholds, the rank and the records file are the
+    same, later calls select from that file instead of scoring again
+    (rebuild=True scores again)."""
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import data_prep as dp
+
+    terms = dp.read_terms(keyword_path)  # a file, or files and literal terms separated by commas
+    stat = os.stat(records_path)
+    key = {"version": MATCH_VERSION, "keywords": hashlib.sha256("\n".join(terms).encode("utf-8")).hexdigest(),
+           "min_hits": min_hits, "min_distinct": min_distinct, "rank": rank, "title_weight": TITLE_WEIGHT,
+           "records_size": stat.st_size, "records_mtime_ns": stat.st_mtime_ns}
+    cache = os.path.join(os.path.dirname(records_path), "matches.tsv")
+    head = {} if rebuild else _matches_head(cache)
+    reused = {k: head.get(k) for k in key} == key and "n" in head and "matched" in head
+    if not reused:
+        kw = dp.KeywordFilter(terms, [], min_hits, min_distinct, title_weight=TITLE_WEIGHT)
+        head = _score_matches(records_path, kw, rank, key, cache)
+    rows = _select_matches(cache, limit, skip)
     with open(path + ".part", "w", encoding="utf-8", newline="\n") as handle:
         handle.write(f"# keywords: {keyword_path} (min hits {min_hits}, min distinct {min_distinct}, rank {rank})\n"
                      f"# metadata: {records_path}\n# complete: {len(rows)} papers\n")
         for row in rows:
             handle.write("\t".join(row) + "\n")
     os.replace(path + ".part", path)
-    print(f"Paper list: {len(kept):,} of {n:,} papers match the keywords; the best {len(rows):,} are in {path}")
+    print(f"Paper list: {head['matched']:,} of {head['n']:,} papers match the keywords; the best {len(rows):,} "
+          + ("not downloaded yet " if skip else "") + f"are in {path}"
+          + (" (--rebuild-list scores again)" if reused else ""))
     return rows
 
 
@@ -706,11 +873,6 @@ def mathml(el, top=True):
     return "".join(k)
 
 
-def jats_to_markdown(xml_bytes):
-    """(info dict, markdown) for one JATS article."""
-    return Jats(ET.fromstring(xml_bytes)).markdown()
-
-
 # ---------------------------------------------------------------------------
 # 2. fetch + convert, in parallel
 # ---------------------------------------------------------------------------
@@ -822,6 +984,10 @@ def parse_args(argv=None):
                    help="order of keyword-selected papers: keyword density (default) or citations")
     p.add_argument("--refresh-metadata", action="store_true",
                    help="harvest the metadata again (to add papers published since the last harvest)")
+    p.add_argument("--rebuild-list", action="store_true",
+                   help="with --keywords: score the harvested metadata again (otherwise the scored matches in "
+                        "<meta>\\metadata\\matches.tsv are reused while the keywords, --min-hits, --min-distinct, "
+                        "--rank and the metadata are unchanged)")
     p.add_argument("--metadata-as-is", action="store_true",
                    help="select from the metadata harvested so far, even if the harvest is not finished "
                         "(it runs in citation order, so the part done holds the most-cited papers)")
@@ -868,7 +1034,7 @@ def main(argv=None):
             skip = {name.split("__", 1)[0] for name in os.listdir(args.out) if name.endswith(".md")}
             skip |= {k for k, v in done.items() if v in FINAL}
         rows = keyword_list(records, args.keywords, args.min_hits, args.min_distinct, args.new or args.max_papers,
-                            args.rank, os.path.join(args.meta, "list.tsv"), skip)
+                            args.rank, os.path.join(args.meta, "list.tsv"), skip, rebuild=args.rebuild_list)
     else:
         rows = build_list(args.query, args.sort, args.max_papers, os.path.join(args.meta, "list.tsv"))
     if args.list_only:
