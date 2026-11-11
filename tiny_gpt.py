@@ -3685,6 +3685,12 @@ def parse_args(argv=None):
     g.add_argument("--watermark-key", help="secret key: embed a detectable watermark in generated text")
     g.add_argument("--watermark-gamma", type=float, default=0.25, help="green-list share of the vocabulary")
     g.add_argument("--watermark-delta", type=float, default=2.0, help="logit boost for green tokens")
+    argv = sys.argv[1:] if argv is None else list(argv)
+    # --data went with the options of the original script; argparse would now read it as an abbreviation of
+    # --dataset and take an old '--data <md folder>' for a prepared dataset, so it is refused like the others
+    removed = [item for item in argv if item == "--data" or item.startswith("--data=")]
+    if removed:
+        p.error("unrecognized arguments: " + " ".join(removed))
     args = p.parse_args(argv)
     validate_args(args, p)
     return args

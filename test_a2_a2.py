@@ -885,17 +885,22 @@ class Audit2TinyGptB(unittest.TestCase):
     def test_compatibility_options_of_the_original_script_are_gone(self):
         """F334, F288, F273: the six options kept for the original script (--data, --wiki-dir, --wiki-articles,
         --include-keywords, --tokenizer-vocab-size, --suppress) and the dataset auto-build behind them are
-        removed. Five are refused as unrecognised; '--data' is now read as an abbreviation of --dataset, so an
-        old '--data <md folder>' stops at the missing folder or the missing manifest. ensure_dataset is --dataset
-        as an absolute path, or None, and starts no process."""
-        for argv in (["--wiki-dir", self.tmp], ["--wiki-articles", "5"], ["--include-keywords", "gene"],
-                     ["--tokenizer-vocab-size", "700"], ["--suppress"]):
-            self.assertIn("unrecognized arguments: " + argv[0], self._refused(argv), argv)
-        self.assertIn("--dataset folder not found", self._refused(["--data", os.path.join(self.tmp, "absent")]))
+        removed. All six are refused as unrecognised: '--data' too, which argparse would otherwise read as an
+        abbreviation of --dataset (an old '--data <md folder>' would be taken for a prepared dataset). The other
+        abbreviations of --dataset still work. ensure_dataset is --dataset as an absolute path, or None, and
+        starts no process."""
         md = os.path.join(self.tmp, "md_folder")
         os.makedirs(md)
-        args = tiny_gpt.parse_args(["--name", "x", "--out-dir", self.tmp, "--data", md])
+        absent = os.path.join(self.tmp, "absent")
+        for argv in (["--wiki-dir", self.tmp], ["--wiki-articles", "5"], ["--include-keywords", "gene"],
+                     ["--tokenizer-vocab-size", "700"], ["--suppress"], ["--data", md], ["--data=" + md],
+                     ["--data", absent]):
+            self.assertIn("unrecognized arguments: " + argv[0], self._refused(argv), argv)
+        self.assertIn("unrecognized arguments: --data", self._refused(["--dataset", md, "--data", md]))
+        self.assertNotIn("--dataset folder not found", self._refused(["--data", absent]))
+        args = tiny_gpt.parse_args(["--name", "x", "--out-dir", self.tmp, "--datas", md])  # still an abbreviation
         self.assertEqual(args.dataset, md)
+        self.assertEqual(tiny_gpt.parse_args(["--name", "x", "--out-dir", self.tmp, "--dataset=" + md]).dataset, md)
         for name in ("data", "wiki_dir", "wiki_articles", "include_keywords", "tokenizer_vocab_size", "suppress"):
             self.assertFalse(hasattr(args, name), name)
         self.assertFalse(hasattr(tiny_gpt, "compat_dataset_dir"))
@@ -912,7 +917,7 @@ class Audit2TinyGptB(unittest.TestCase):
             with self.assertRaises(SystemExit) as caught:
                 tiny_gpt._train(none)
             self.assertEqual(str(caught.exception), "No training data: pass --dataset <folder from data_prep.py>.")
-            with self.assertRaises(SystemExit) as caught:  # the old '--data <md folder>'
-                tiny_gpt.cmd_plan(tiny_gpt.parse_args(["--name", "x", "--out-dir", self.tmp, "--data", md]))
+            with self.assertRaises(SystemExit) as caught:  # a folder of Markdown files is no dataset
+                tiny_gpt.cmd_plan(tiny_gpt.parse_args(["--name", "x", "--out-dir", self.tmp, "--dataset", md]))
             self.assertIn("is not a prepared dataset (manifest.json missing)", str(caught.exception))
         started.assert_not_called()
