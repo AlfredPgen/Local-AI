@@ -239,7 +239,7 @@ def train(args):
         if not (isinstance(old, dict) and "epochs_done" in old):
             raise SystemExit(f"{partial_path} exists and is not the epoch file of an interrupted fine-tune (this "
                              "run would replace and then delete it); choose a new --name or pass --overwrite.")
-    fields =["prompt", "response"] if args.mode == "sft" else ["prompt", "chosen", "rejected"]
+    fields = ["prompt", "response"] if args.mode == "sft" else ["prompt", "chosen", "rejected"]
     rows = read_jsonl(args.data, fields)
     random.Random(args.seed).shuffle(rows)
     n_val = max(1, int(round(args.val_fraction * len(rows))))
