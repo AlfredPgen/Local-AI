@@ -1401,9 +1401,18 @@ def cmd_plot(args):
         xpos = {cs: (_f(cs[1]) if steps_known else i) for i, cs in enumerate(runs)}
         benches = sorted({r["benchmark"] for r in overall})
 
-        def model_of(r):  # a model: its _best and _final files, at one size; two models never share a line
+        def name_of(r):  # a checkpoint's _best and _final files are one name
             stem = os.path.splitext(os.path.basename(r["checkpoint"].replace("\\", "/")))[0]
-            return re.sub(r"_(best|final)$", "", stem), r["params"]
+            return re.sub(r"_(best|final)$", "", stem)
+
+        sizes = {}
+        for r in overall:
+            if r["params"]:
+                sizes.setdefault(name_of(r), set()).add(r["params"])
+
+        def model_of(r):  # a model: a name at one size; two models never share a line. A row without a
+            name = name_of(r)  # parameter count (a table edited by hand) joins the only size its name has
+            return name, r["params"] or (min(sizes[name]) if len(sizes.get(name, ())) == 1 else "")
 
         models = sorted({model_of(r) for r in overall})
         for i, b in enumerate(benches):  # colour (and from the ninth on the marker): benchmark; line style: model

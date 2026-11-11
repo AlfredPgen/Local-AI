@@ -187,6 +187,30 @@ class Audit2Benchmark(unittest.TestCase):
         self.assertEqual(ax.lines[0].get_color(), ax.lines[1].get_color())
         self.assertGreater(ax.get_legend().get_bbox_to_anchor().x0, ax.bbox.x1)
 
+    def test_progress_plot_row_without_params_joins_its_model(self):
+        """F004: rows whose params cell is empty (a table edited by hand) belong to the model of the same name
+        when that name has one parameter count: its line is not split in two. A name with two parameter counts
+        keeps such rows apart, because they could be either model."""
+        def scored(params, step, checkpoint="m/small_best.pt"):
+            return [{"checkpoint": checkpoint, "params": params, "step": step, "benchmark": bench, "category": "all",
+                     "accuracy": 0.3, "floor": 0.2} for bench in ("bench0", "bench1")]
+
+        ax = self.plot_figures("f004_empty", scored(1000000, 1000) + scored("", 2000)
+                               + scored("", 3000, "m/small_final.pt"))[0]["progress.png"].axes[0]
+        self.assertEqual([(line.get_label(), list(line.get_xdata())) for line in ax.lines],
+                         [("bench0", [1000.0, 2000.0, 3000.0]), ("bench1", [1000.0, 2000.0, 3000.0])])
+        self.assertLess(ax.get_legend().get_bbox_to_anchor().x0, ax.bbox.x1)
+        # no row of the name has a parameter count: still one model
+        ax = self.plot_figures("f004_none", scored("", 1000) + scored("", 2000))[0]["progress.png"].axes[0]
+        self.assertEqual([(line.get_label(), len(line.get_xdata())) for line in ax.lines],
+                         [("bench0", 2), ("bench1", 2)])
+        # two sizes under one name: the row without a count joins neither
+        ax = self.plot_figures("f004_two_sizes", scored(1000000, 1000) + scored(5000000, 2000) + scored("", 3000)
+                               )[0]["progress.png"].axes[0]
+        self.assertEqual([(line.get_label(), list(line.get_xdata())) for line in ax.lines[:3]],
+                         [("bench0: small", [3000.0]), ("bench0: small (1.0M)", [1000.0]),
+                          ("bench0: small (5.0M)", [2000.0])])
+
     def test_completion_text_from_a_short_decode_window(self):
         """F013: the completion text of a decode step comes from the last 16 prompt tokens plus the new tokens,
         not from the whole prompt again, and equals the text the whole-prompt decode gave: with a SentencePiece
