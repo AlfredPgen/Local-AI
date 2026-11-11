@@ -450,6 +450,57 @@ class Audit2TinyGptC(unittest.TestCase):
         self.assertRegex(out_m, r"WARNING: could not save .*SW1\.pt \(OSError: .*\); training continues, next attempt "
                                 r"in about a minute \(1/3\)\n")
 
+    # ---------------- the dataset of a resumed run ----------------
+    def test_resume_takes_the_dataset_as_an_absolute_path(self):
+        """F239 (with F246): a resumed run finds its dataset the way the other commands do (the stored path, also
+        from this script's folder, or datasets/<name> with the same fingerprint) and uses it as an absolute
+        path; --dataset is made absolute too; a dataset that is found nowhere keeps the stored text, so that
+        _train's own messages explain it."""
+        home = os.path.join(self.tmp, "repo239")
+        stored = os.path.join(home, "datasets", "bio_x")
+        elsewhere = os.path.join(self.tmp, "cwd239")
+        os.makedirs(stored)
+        os.makedirs(elsewhere)
+        with open(os.path.join(stored, "manifest.json"), "w", encoding="utf-8") as f:
+            json.dump({"format": data_prep.FORMAT, "format_version": 1, "fingerprint": "abc"}, f)
+        before = os.getcwd()
+        os.chdir(elsewhere)
+        try:
+            with unittest.mock.patch.object(tiny_gpt, "HERE", home):
+                for path in ("datasets\\bio_x", "datasets/bio_x", r"C:\Users\someone\proj\datasets\bio_x"):
+                    got = tiny_gpt.resume_dataset_dir(None, {"dataset": {"path": path, "fingerprint": "abc"}})
+                    self.assertTrue(os.path.isabs(got), got)
+                    self.assertEqual(os.path.normcase(os.path.normpath(got)), os.path.normcase(stored))
+                obj = {"dataset": {"path": "datasets/bio_x", "fingerprint": "abc"}}
+                self.assertEqual(os.path.normcase(tiny_gpt.resume_dataset_dir("ds", obj)),
+                                 os.path.normcase(os.path.join(os.getcwd(), "ds")))
+                # found nowhere, or rebuilt since: the stored text, for the 'not found' and 'differs' messages
+                for gone in ({"path": "datasets/gone", "fingerprint": "abc"},
+                             {"path": "datasets/bio_x", "fingerprint": "zzz"}):
+                    self.assertEqual(tiny_gpt.resume_dataset_dir(None, {"dataset": gone}), gone["path"])
+        finally:
+            os.chdir(before)
+
+    @base.SLOW
+    def test_resume_with_a_relative_dataset_stores_an_absolute_path(self):
+        """F239: '--resume --dataset <relative path>' no longer writes the relative text into the checkpoint, so
+        the run can be resumed again from any folder."""
+        self.pipeline()
+        script = os.path.join(HERE, "tiny_gpt.py")
+        code, out = base.run(self.common + ["--name", "R239", "--steps", "6", "--eval-every", "2", "--no-probes",
+                                            "--stop-after-steps", "2"])
+        self.assertEqual(code, 0, out)
+        resume = [script] + self.resume_args("R239")
+        code, out = base.run(resume + ["--dataset", os.path.relpath(self.ds, self.tmp), "--stop-after-steps", "2"],
+                             cwd=self.tmp)
+        self.assertEqual(code, 0, out)
+        stored = self.load("R239.pt")["dataset"]["path"]
+        self.assertTrue(os.path.isabs(stored), stored)
+        self.assertEqual(os.path.normcase(stored), os.path.normcase(self.ds))
+        code, out = base.run(resume, cwd=self.runs)  # no --dataset, another folder
+        self.assertEqual(code, 0, out)
+        self.assertEqual(self.load("R239.pt")["step"], 6)
+
 
 if __name__ == "__main__":
     unittest.main()

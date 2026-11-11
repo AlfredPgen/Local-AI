@@ -4067,6 +4067,20 @@ def ensure_dataset(args):
     return os.path.abspath(args.dataset) if args.dataset else None
 
 
+def resume_dataset_dir(given, obj):
+    """The dataset folder of a resumed run as an absolute path: --dataset when it is given, else the folder
+    resolve_dataset finds for the checkpoint (its stored path, tried from this script's folder too, or
+    datasets/<name> with the same fingerprint). The checkpoint stores what is returned here, so a relative
+    --dataset does not make the run depend on the folder it was resumed from. A dataset that is found nowhere
+    keeps the stored text: _train's own messages then explain a missing or a rebuilt dataset."""
+    if given:
+        return os.path.abspath(given)
+    try:
+        return os.path.abspath(resolve_dataset(obj))
+    except SystemExit:
+        return obj["dataset"]["path"]
+
+
 def _resume_hint(args, flag=" --resume"):
     """Name other training checkpoints in the folder (e.g. runs made before the rename to tinyGPT). `flag` ends
     the example: " --resume" after a failed --resume, nothing for a command that only reads a checkpoint."""
@@ -4219,7 +4233,7 @@ def _train(args):
         if family != "tinygpt" or kind != wanted or "train_config" not in resume_obj:
             raise SystemExit(f"{resume_path} is a {family} {kind} checkpoint; --resume needs a tinyGPT checkpoint "
                              "written by a training run. Start a new run from its weights with --init-from instead.")
-        dataset_dir = args.dataset or resume_obj["dataset"]["path"]
+        dataset_dir = resume_dataset_dir(args.dataset, resume_obj)
     else:
         existing = [p for p in (ckpt_path, best_path) if os.path.exists(p)]
         if existing and not args.overwrite:
