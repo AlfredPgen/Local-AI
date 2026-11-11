@@ -428,6 +428,28 @@ class Audit2Followers(unittest.TestCase):
             self.assertNotIn("numbered", module.__doc__)
         self.assertIn("index within their source", " ".join(ew.prompts_from_validation.__doc__.split()))
 
+    # ---------------- X12: the label writer counts columns as the probe reader does ----------------
+    def test_label_writer_ignores_trailing_tabs_like_the_probe_reader(self):
+        """X12 (F351): read_probes takes a three-column line that ends in tabs as the short form;
+        calibrate_probes.rewrite_difficulties counted the empty fields as columns and wrote the difficulty
+        over the ANSWER of such a line. It drops trailing empty fields first, as the reader does."""
+        import calibrate_probes
+        import tiny_gpt
+        path = os.path.join(self.tmp, "x12_probes.tsv")
+        with open(path, "w", encoding="utf-8", newline="\n") as f:
+            f.write("# comment\nGenes are made of\tDNA\tsugar|fat\t\t\n\n"
+                    "genetics\tunrated\tCells divide by\tmitosis\tfusion|decay\t \n")
+        self.assertEqual([p["answer"] for p in tiny_gpt.read_probes(path)], ["DNA", "mitosis"])
+        calibrate_probes.rewrite_difficulties(path, ["easy", "hard"])
+        with open(path, encoding="utf-8") as f:
+            self.assertEqual(f.read(), "# comment\ngeneral\teasy\tGenes are made of\tDNA\tsugar|fat\n\n"
+                                       "genetics\thard\tCells divide by\tmitosis\tfusion|decay\n")
+        self.assertEqual(tiny_gpt.read_probes(path), [
+            {"category": "general", "difficulty": "easy", "prompt": "Genes are made of", "answer": "DNA",
+             "distractors": ["sugar", "fat"]},
+            {"category": "genetics", "difficulty": "hard", "prompt": "Cells divide by", "answer": "mitosis",
+             "distractors": ["fusion", "decay"]}])
+
 
 if __name__ == "__main__":
     unittest.main()

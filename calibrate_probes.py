@@ -261,6 +261,8 @@ def rewrite_difficulties(path, labels):
     out, k = [], 0
     for line in lines:
         parts = line.split("\t")
+        while parts and not parts[-1].strip():  # trailing tabs are not columns (as tiny_gpt.read_probes)
+            parts.pop()
         if line.strip() and not line.lstrip().startswith("#") and len(parts) >= 3:
             if len(parts) < 5:
                 parts = ["general", "unrated"] + parts[:3]
