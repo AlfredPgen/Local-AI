@@ -623,14 +623,30 @@ class TestPipeline(unittest.TestCase):
         # viewer on training and inference-only checkpoints
         for name, expect in (("A.pt", "optimizer: AdamW state"), ("A_best.pt", "none stored (inference-only")):
             png = os.path.join(self.runs, name + ".png")
-            code, out_v = run(["view_pt.py", os.path.join(self.runs, name), "--plot", "--html", "--out", png,
-                               "--dpi", "60"])
+            code, out_v = run(["view_pt.py", os.path.join(self.runs, name), "--plot", "--panels", "all", "--html",
+                               "--out", png, "--dpi", "60"])
             self.assertEqual(code, 0, out_v)
             self.assertIn(expect, out_v)
             self.assertNotIn("panel failed", out_v)
             self.assertGreater(os.path.getsize(png), 50_000)
             self.assertTrue(os.path.isfile(os.path.splitext(png)[0] + "_embeddings.html"))
-        # default dashboard name carries the step and a timestamp (never overwrites an earlier one)
+        # the default picture (what training draws): the history panels alone, no token picture
+        png = os.path.join(self.runs, "A_history.png")
+        code, out_v = run(["view_pt.py", os.path.join(self.runs, "A_best.pt"), "--plot", "--out", png, "--dpi", "60"])
+        self.assertEqual(code, 0, out_v)
+        self.assertNotIn("panel failed", out_v)
+        self.assertGreater(os.path.getsize(png), 50_000)
+        self.assertFalse(os.path.exists(os.path.join(self.runs, "A_history_tokens.png")))
+        # the token picture, on request: <--out stem>_tokens.png and nothing else
+        png = os.path.join(self.runs, "A_tok.png")
+        code, out_v = run(["view_pt.py", os.path.join(self.runs, "A_best.pt"), "--plot-tokens", "--pca-labels", "10",
+                           "--sim-tokens", "20", "--out", png, "--dpi", "60"])
+        self.assertEqual(code, 0, out_v)
+        self.assertNotIn("panel failed", out_v)
+        self.assertEqual(out_v.count("Saved"), 1, out_v)
+        self.assertGreater(os.path.getsize(os.path.join(self.runs, "A_tok_tokens.png")), 50_000)
+        self.assertFalse(os.path.exists(png))
+        # default dashboard name: <checkpoint>_dashboard.png, replaced each run
         code, out_v = run(["view_pt.py", os.path.join(self.runs, "A_best.pt"), "--plot", "--dpi", "50", "--no-forward"])
         self.assertEqual(code, 0, out_v)
         self.assertTrue(os.path.isfile(os.path.join(self.runs, "A_best_dashboard.png")))
@@ -1443,8 +1459,8 @@ class TestPipeline(unittest.TestCase):
                            "--generate", "Genetic drift", "--length", "5"])
         self.assertEqual(code, 0, out_g)
         png = os.path.join(self.runs, "Y.png")
-        code, out_v = run(["view_pt.py", os.path.join(self.runs, "Y.pt"), "--plot", "--out", png, "--dpi", "50",
-                           "--dataset", self.ds])
+        code, out_v = run(["view_pt.py", os.path.join(self.runs, "Y.pt"), "--plot", "--panels", "all", "--out", png,
+                           "--dpi", "50", "--dataset", self.ds])
         self.assertEqual(code, 0, out_v)
         self.assertIn("experts 4 x hidden 128, 2 per token in 2 of 2 blocks", out_v)
         self.assertRegex(out_v, r"parameters [\d,]+ total, [\d,]+ active per token")

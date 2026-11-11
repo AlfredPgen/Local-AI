@@ -4,10 +4,12 @@ any PyTorch state dict, and draw a diagnostic dashboard.
 Examples
 --------
     python view_pt.py tinyGPT_best.pt                      # text summary + tensor table
-    python view_pt.py tinyGPT.pt --plot                    # 4x4 dashboard PNG next to the file (tinyGPT_dashboard.png,
-                                                           # replaced each run; --out keeps a copy)
+    python view_pt.py tinyGPT.pt --plot                    # dashboard PNG next to the file (tinyGPT_dashboard.png,
+                                                           # replaced each run; --out writes it elsewhere)
+    python view_pt.py tinyGPT.pt --plot --panels all       # + the weight and behaviour panels (runs the model)
+    python view_pt.py tinyGPT.pt --plot-tokens             # the token panels (tinyGPT_tokens.png)
     python view_pt.py tinyGPT.pt --plot --html             # + hoverable embedding explorer
-    python view_pt.py tiny_gpt_bpe_best.pt --plot --history-log log.txt --dataset datasets\bio_v1
+    python view_pt.py tinyGPT_muon_best.pt --plot --panels all --history-log log.txt --dataset datasets\bio_v1
     python view_pt.py tinyGPT.pt --tensor blocks.0.attn.q_proj.weight
     python view_pt.py tinyGPT.pt --similar genetic
 
@@ -17,21 +19,29 @@ Python objects. On PyTorch older than 2.6 this protection has a known bypass
 --export folders (safetensors, never unpickled). --trust-checkpoint lifts the
 check entirely, for your own old files only.
 
-Dashboard rows
-  1  training history   loss curves, validation perplexity, learning rate,
-                        confidence / accuracy / fact probes ("how opinionated")
-  2  tokens             embedding PCA by token class, clustered cosine
-                        similarity, embedding norms, output preference
-  3  weights            per-block component scale, RMSNorm gains, singular
-                        spectra, per-head projection scale
-  4  behaviour          calibration, cloze fact probes, attention entropy,
-                        Adam update size
+Dashboard (--plot): nine panels from the stored evaluations; the model is not run
+  is the run healthy             loss, validation minus training, gradient norm
+  is it learning what it is for  validation by source, biology facts over
+                                 time and by subject
+  is it worth the hours          improvement per 1,000 steps, speed, plan
+  mixture of experts only        expert balance, load per block, router bias
+A training or best checkpoint's curves go on with the evaluations its run has
+since appended to <name>_metrics.jsonl beside it.
+--panels all adds the learning rate, calibration, weight scale per block,
+RMSNorm gains by depth, singular spectra, per-head projection scale and
+attention entropy, and shows the fact benchmark of the file's own weights
+(scored now unless training stored it for this step).
+--plot-tokens writes a second picture: embedding PCA by token class, clustered
+cosine similarity, embedding norms, output preference.
 Panels that need data the checkpoint does not have say so instead of
 plotting invented values.
 """
 
 import argparse
+import bisect
+import datetime
 import html
+import json
 import math
 import os
 import re
@@ -61,6 +71,8 @@ DIVERGING = ["#104281", "#3987e5", "#b7d3f6", "#f0efec", "#f3b4b0", "#e34948", "
 TOKEN_CLASSES = ["word start", "word piece", "number", "punctuation", "symbol/math", "non-Latin letters",
                  "byte fallback", "special/whitespace"]
 MARKERS = ["o", "s", "^", "D", "v", "P", "X", "*"]
+# File types matplotlib's savefig writes without another program (the extensions --plot --out accepts).
+PICTURE_TYPES = ("png", "pdf", "svg", "svgz", "jpg", "jpeg", "webp", "tif", "tiff", "eps", "ps", "raw", "rgba")
 
 
 def parse_args():
@@ -70,6 +82,14 @@ def parse_args():
     p.add_argument("--similar", metavar="TOKEN", help="nearest tokens by embedding cosine similarity")
     p.add_argument("--top", type=int, default=10, help="neighbours shown by --similar")
     p.add_argument("--plot", action="store_true", help="write the dashboard PNG")
+    p.add_argument("--panels", choices=("history", "all"), default="history",
+                   help="what --plot draws. history (default): nine panels from the stored evaluations (is the run "
+                        "healthy, is it learning what it is for, is it worth the hours); the model is not run. "
+                        "all: those and the weight and behaviour panels, which build the model and run it on "
+                        "validation windows (slower)")
+    p.add_argument("--plot-tokens", action="store_true",
+                   help="write a second picture with the four token panels (embedding PCA, similarity, norms, output "
+                        "preference): <checkpoint>_tokens.png, or X_tokens.png with --out X.png. Never pushed")
     p.add_argument("--html", action="store_true", help="write a hoverable token-embedding explorer (HTML)")
     p.add_argument("--out", help="dashboard path (default <checkpoint>_dashboard.png, replaced each run)")
     p.add_argument("--no-push", action="store_true",
@@ -77,15 +97,16 @@ def parse_args():
                         "this repository's folder)")
     p.add_argument("--dpi", type=int, default=150)
     p.add_argument("--pca-labels", type=int, default=50,
-                   help="most frequent tokens labelled in the 'Token embeddings (PCA)' panel (without a forward "
-                        "pass: the lowest token IDs)")
+                   help="--plot-tokens: most frequent tokens labelled in the 'Token embeddings (PCA)' panel "
+                        "(without a forward pass: the lowest token IDs)")
     p.add_argument("--sim-tokens", type=int, default=100,
-                   help="most frequent word tokens in the 'Token similarity (clustered)' panel (without a forward "
-                        "pass: the lowest token IDs)")
+                   help="--plot-tokens: most frequent word tokens in the 'Token similarity (clustered)' panel "
+                        "(without a forward pass: the lowest token IDs)")
     p.add_argument("--dataset", help="dataset folder for forward-pass panels (default: the one in the checkpoint)")
     p.add_argument("--eval-text", help="plain-text file for forward-pass panels when no dataset is available")
     p.add_argument("--probes", default=os.path.join(HERE, "probes_biology.tsv"), help="cloze fact probes TSV")
-    p.add_argument("--no-forward", action="store_true", help="skip panels that run the model")
+    p.add_argument("--no-forward", action="store_true",
+                   help="--panels all, --plot-tokens: do not run the model (its panels say so)")
     p.add_argument("--full", action="store_true",
                    help="also the slow parts for big models (singular value spectra above d_model 2048)")
     p.add_argument("--history-log", help="log.txt to read loss curves from (for checkpoints without history)")
@@ -106,6 +127,14 @@ def parse_args():
         value = getattr(args, name)
         if value and not os.path.exists(value):
             p.error(f"--{name.replace('_', '-')} not found: {value}")
+    # checked here, not when the finished picture is saved; without an output that uses it --out is ignored
+    if args.out and (args.plot or args.plot_tokens or args.html):
+        folder = os.path.dirname(os.path.abspath(args.out))
+        if not os.path.isdir(folder):
+            p.error(f"--out: the folder does not exist: {folder}")
+        ext = os.path.splitext(args.out)[1].lstrip(".").lower()  # none means PNG; --html and --plot-tokens use the stem
+        if args.plot and ext and ext not in PICTURE_TYPES:
+            p.error(f"--out: cannot write a .{ext} picture (use one of: {', '.join(PICTURE_TYPES)})")
     return args
 
 
@@ -190,20 +219,6 @@ class Checkpoint:
         vocab = self.obj.get("vocab") if isinstance(self.obj, dict) else None
         return list(vocab) if isinstance(vocab, (list, tuple)) else None
 
-    def adam_names(self):
-        """Parameter name for each optimizer state index."""
-        o = self.obj
-        if o.get("optimizer_param_names"):
-            return list(o["optimizer_param_names"])
-        names, seen = [], set()
-        for name, tensor in self.weights.items():
-            ptr = (tensor.data_ptr(), tuple(tensor.shape))
-            if ptr in seen or (name == "lm_head.weight" and self.cfg is not None and self.cfg.tie_embeddings):
-                continue
-            seen.add(ptr)
-            names.append(name)
-        return names
-
 
 def load_checkpoint(path, trust=False):
     """tiny_gpt.load_any, memory-mapped where that is safe: tensors (the optimizer
@@ -285,7 +300,7 @@ def fmt(v, spec=".4f"):
 
 def output_name(ck, kind, ext):
     """<checkpoint>_<kind><ext>: the same name every time, so a new dashboard replaces the
-    previous one (the step and the time it was drawn are in the picture's title)."""
+    previous one (the picture's header names the run, its step and when it was drawn)."""
     base = os.path.normpath(ck.path)
     stem = base if os.path.isdir(base) else os.path.splitext(base)[0]  # export folders may contain dots
     return f"{stem}_{kind}{ext}"
@@ -338,7 +353,6 @@ def print_summary(ck):
         print(f"step: {o['step']:,} / {total if total is not None else '?'}{extra}"
               + (" (base model's pre-training)" if ck.finetune else ""))
     ft = ck.finetune
-    base_note = ""
     if ft:
         hist = ft.get("history") or []
         held = (f" | held-out loss {hist[-1]['val_loss']:.4f} after epoch {hist[-1].get('epoch', len(hist))}"
@@ -346,11 +360,13 @@ def print_summary(ck):
         base = path_name(ft.get("base"))
         print(f"fine-tuned: {finetune_label(ft)} from {base}, {ft.get('examples', '?')} examples, "
               f"{ft.get('epochs', '?')} epochs, lr {ft.get('lr', '?')}{held}")
-        base_note = " (base model, before fine-tuning)"
+    base_note = derived_note(ck)  # whose stored numbers these are, for a fine-tuned or an edited file
     m = ck.metrics
     # fine-tuned and edited files keep the base model's last evaluation (newer ones as base_last_eval)
     last = m.get("last_eval") or (m.get("base_last_eval") if ft or ck.edit else None)
-    last_note = base_note or (" (original model, before the edit)" if ck.edit and not m.get("last_eval") else "")
+    last_note = base_note if ft or not m.get("last_eval") else ""
+    if not last_note and holds_ema(ck):  # training evaluates the raw weights; the average only when it picks it
+        last_note = " (raw weights; this file holds the EMA average)"
     if last:
         per = last.get("per_source") or {}
         per_text = (" [" + ", ".join(f"{k} {v:.4f}" for k, v in per.items()) + "]") if len(per) > 1 else ""
@@ -366,8 +382,11 @@ def print_summary(ck):
         print("  note: v3 logs printed the latest validation value at every report step, so values between "
               "evaluations (every --eval-every steps, default 1000) were not fresh measurements.")
     if ck.history:
+        newer = newer_rows(ck)
         print(f"history{base_note}: {len(ck.history)} evaluations stored "
-              f"(steps {ck.history[0]['step']}-{ck.history[-1]['step']})")
+              f"(steps {ck.history[0]['step']}-{ck.history[-1]['step']})"
+              + (f" + {len(newer)} newer in {os.path.basename(metrics_file(ck))} (to step {newer[-1]['step']})"
+                 if newer else ""))
     ds = o.get("dataset")
     if isinstance(ds, dict):
         exists = os.path.isdir(ds.get("path", ""))
@@ -438,8 +457,7 @@ def eval_windows(ck, args, max_windows=None):
     max_windows is the TOTAL number of windows (default window_budget: 16, fewer
     for models above ~220M parameters), handed out round-robin over the
     validation sources, biggest first: with 12 sources a per-source share would
-    be 1 for any total up to 23 and could not shrink with the model. The windows
-    stay float32 on the CPU (bf16 is slower there)."""
+    be 1 for any total up to 23 and could not shrink with the model."""
     if ck.tok is None or ck.cfg is None:
         return None, "no tokenizer/architecture in this checkpoint"
     ctx = ck.cfg.ctx
@@ -491,11 +509,6 @@ def eval_windows(ck, args, max_windows=None):
     return None, "no evaluation text: the checkpoint's dataset is not available; pass --dataset or --eval-text"
 
 
-def _fingerprint(ds_path):
-    """The fingerprint in a dataset folder's manifest (None if it has no readable manifest)."""
-    return tiny_gpt.dataset_fingerprint(ds_path)
-
-
 @torch.no_grad()
 def forward_stats(model, windows, vocab, device, bins=10, token_budget=4096, rows=1024):
     """Output-preference and calibration statistics over the windows. The model runs
@@ -540,12 +553,15 @@ def forward_stats(model, windows, vocab, device, bins=10, token_budget=4096, row
 
 
 @torch.no_grad()
-def attention_entropy(model, window, device, budget=2 ** 25):
+def attention_entropy(model, window, device, budget=2 ** 25, with_rms=False):
     """Mean entropy (bits) of each head's attention distribution over one window,
-    computed for a few heads at a time (about `budget` values per heads x T x T table)."""
+    computed for a few heads at a time (about `budget` values per heads x T x T table).
+    with_rms=True also returns the RMS of the residual stream after the embedding and
+    after every block (layers + 1 values) from the same pass."""
     x = window[None, :-1].to(device)
     h = model.token_embedding(x)
     out = []
+    rms = [h.float().pow(2).mean().sqrt().item()]
     t = x.shape[1]
     denom = torch.log2(torch.arange(1, t + 1, device=device).float()).clamp(min=1e-9)
     mask = torch.ones(t, t, dtype=torch.bool, device=device).triu(1)
@@ -568,7 +584,9 @@ def attention_entropy(model, window, device, budget=2 ** 25):
         h = block(h, model.rope)
         if isinstance(h, tuple):  # a mixture-of-experts block returns (residual stream, aux terms)
             h = h[0]
-    return np.stack(out)  # (layers, heads), 0 = attends to one token, 1 = uniform over the prefix
+        rms.append(h.float().pow(2).mean().sqrt().item())
+    entropy = np.stack(out)  # (layers, heads), 0 = attends to one token, 1 = uniform over the prefix
+    return (entropy, np.array(rms)) if with_rms else entropy
 
 
 # ---------------------------------------------------------------------------
@@ -583,7 +601,8 @@ def history_from_log(path, ck_path=None, max_step=None, family=None):
     """History of the viewed checkpoint's run from log.txt. tinyGPT sessions are
     matched by the checkpoint path in their header ("checkpoints: ...<name>.pt"),
     and all sessions of that run (resumes included) are merged, the latest value
-    per step winning, up to the checkpoint's step. A tinyGPT checkpoint that no
+    per step winning, up to the checkpoint's step; sessions before the last fresh
+    start under that name are another run and are left out. A tinyGPT checkpoint that no
     session names gets no curve (never another run's); a legacy (original script)
     checkpoint is read from the last v3 run only; a file of unknown family falls
     back to the last run, and the source label says so. v3 lines repeat a stale
@@ -596,18 +615,27 @@ def history_from_log(path, ck_path=None, max_step=None, family=None):
     stem = re.sub(r"_best$", "", os.path.splitext(path_name(ck_path))[0]) if ck_path else None
     legacy = bool(family) and family.startswith("legacy")
     tiny = [] if legacy else [b for b in blocks if NEW_LINE.search(b)]
-    mine = [b for b in tiny if stem and re.search(r"checkpoints: .*?[\\/]" + re.escape(stem) + r"\.pt ", b)]
+    named = [b for b in blocks if stem and not legacy
+             and re.search(r"checkpoints: .*?[\\/]" + re.escape(stem) + r"\.pt ", b)]
+    # a fresh start under the same name (--overwrite, --init-from) begins a new curve, also when that session
+    # ended before its first evaluation; a block without such a RUN line (older logs) is merged as before
+    fresh = [i for i, b in enumerate(named) for run_line in [re.search(r"^RUN .*$", b, re.MULTILINE)]
+             if run_line and re.search(r"\| (fresh run|initialised from )", run_line.group(0))]
+    mine = [b for b in named[fresh[-1] if fresh else 0:] if NEW_LINE.search(b)]
+    if fresh and not mine:
+        return [], f"no evaluation in {os.path.basename(path)} since the last fresh start of {stem}.pt"
     if family == "tinygpt" and not mine:
         return [], f"no tinyGPT session in {os.path.basename(path)} names {stem}.pt"
     if mine or tiny:
-        merged = {}
+        merged, sessions = {}, 0
         for block in (mine or tiny[-1:]):
+            sessions += 1
             for s, _, tr, va, vs, lr in NEW_LINE.findall(block):
                 if int(vs) == int(s) and (max_step is None or int(s) <= int(max_step)):
                     merged[int(s)] = {"step": int(s), "train_loss": float(tr), "val_loss": float(va), "lr": float(lr),
                                       "ppl": math.exp(min(float(va), 50))}
         if merged:
-            label = (f"log ({len(mine)} session(s) of {stem})" if mine
+            label = (f"log ({sessions} session(s) of {stem})" if mine
                      else "log (last tinyGPT run; no session names this checkpoint)")
             return [merged[s] for s in sorted(merged)], label
     for block in reversed(blocks):
@@ -664,18 +692,35 @@ def _renderable(ch):
     return ord(ch) in _GLYPHS
 
 
+# The dashboard's matplotlib settings, at the sizes of --panels all (_draw replaces the sizes per mode).
+BASE_STYLE = {"font.family": "DejaVu Sans", "axes.titlesize": 10, "axes.titleweight": "bold",
+              "axes.labelsize": 8.5, "axes.labelcolor": INK2, "text.color": INK,
+              "axes.titlecolor": INK, "figure.facecolor": SURFACE, "legend.fontsize": 7,
+              "legend.frameon": False}
+# Font sizes (points) per mode, read by titled, message, heatmap and the panels' notes. history: the default
+# picture, legible when its 3,840 x 2,160 px fill a screen (nothing below 9.5 pt); all: the dense 26 in wide
+# picture meant for zooming, also used for the token picture. wrap: characters per subtitle line.
+SIZES = {
+    "history": {"title": 14, "label": 11, "sub": 10, "tick": 10, "legend": 10, "note": 10, "message": 11, "heat": 10,
+                "cell": 9.5, "head": 15, "head2": 10, "wrap": 58},
+    "all": {"title": 10.5, "label": 8.5, "sub": 7.5, "tick": 8, "legend": 7, "note": 7.5, "message": 9, "heat": 7,
+            "cell": 6, "head": 12, "head2": 8.5, "wrap": 92},
+}
+_SIZE = dict(SIZES["all"])  # the table of the picture being drawn (set by _draw)
+
+
 def titled(ax, main, sub=None):
-    """Bold panel title plus a wrapped grey subtitle (keeps titles inside their column)."""
-    lines = textwrap.wrap(scrub(sub), 92) if sub else []
-    ax.set_title(scrub(main), loc="left", fontsize=10.5, pad=6 + 10.5 * len(lines))
+    """Bold panel title plus a wrapped grey subtitle: whole lines, never cut; the title moves up to make room."""
+    lines = textwrap.wrap(scrub(sub), _SIZE["wrap"]) if sub else []
+    ax.set_title(scrub(main), loc="left", fontsize=_SIZE["title"], pad=6 + 1.25 * _SIZE["sub"] * len(lines))
     if lines:
-        ax.text(0, 1.012, "\n".join(lines), transform=ax.transAxes, fontsize=7.5, color=INK2, va="bottom",
+        ax.text(0, 1.012, "\n".join(lines), transform=ax.transAxes, fontsize=_SIZE["sub"], color=INK2, va="bottom",
                 ha="left", linespacing=1.25)
 
 
 def message(ax, text, title):
     titled(ax, title)
-    ax.text(0.5, 0.5, scrub(text), ha="center", va="center", wrap=True, fontsize=9, color=INK2,
+    ax.text(0.5, 0.5, scrub(text), ha="center", va="center", wrap=True, fontsize=_SIZE["message"], color=INK2,
             transform=ax.transAxes)
     ax.set_xticks([])
     ax.set_yticks([])
@@ -683,69 +728,103 @@ def message(ax, text, title):
         spine.set_color(GRID)
 
 
-def style_axes(ax, grid=True):
+def style_axes(ax, grid=True, ticksize=8):
     ax.set_facecolor(SURFACE)
     for side in ("top", "right"):
         ax.spines[side].set_visible(False)
     for side in ("left", "bottom"):
         ax.spines[side].set_color("#c9c8c2")
         ax.spines[side].set_linewidth(0.8)
-    ax.tick_params(colors=INK2, labelsize=8, length=3, width=0.6)
+    ax.tick_params(colors=INK2, labelsize=ticksize, length=3, width=0.6)
     ax.grid(grid, color=GRID, linewidth=0.6)
     ax.set_axisbelow(True)
 
 
-def heatmap(ax, fig, matrix, rows, cols, cmap, label, vmin=None, vmax=None, annotate=True, fmt_spec=".3g"):
+def heatmap(ax, matrix, rows, cols, cmap, label, vmin=None, vmax=None, annotate=True, fmt_spec=".3g"):
     ax.grid(False)
     im = ax.imshow(matrix, aspect="auto", cmap=cmap, vmin=vmin, vmax=vmax, interpolation="nearest")
     ax.set_yticks(range(len(rows)))
-    ax.set_yticklabels(rows, fontsize=7)
+    ax.set_yticklabels(rows, fontsize=_SIZE["heat"])
     ax.set_xticks(range(len(cols)))
-    ax.set_xticklabels(cols, fontsize=7, rotation=0 if len(cols) <= 8 else 90)
+    ax.set_xticklabels(cols, fontsize=_SIZE["heat"], rotation=0 if len(cols) <= 8 else 90)
     for spine in ax.spines.values():
         spine.set_visible(False)
     ax.tick_params(length=0)
     cb = ax.figure.colorbar(im, ax=ax, fraction=0.05, pad=0.02)
-    cb.set_label(label, fontsize=8, color=INK2)
-    cb.ax.tick_params(labelsize=7, colors=INK2)
+    cb.set_label(label, fontsize=_SIZE["tick"], color=INK2)
+    cb.ax.tick_params(labelsize=_SIZE["heat"], colors=INK2)
     cb.outline.set_visible(False)
     if annotate and matrix.size <= 120:
-        lo, hi = np.nanmin(matrix), np.nanmax(matrix)
-        mid = (lo + hi) / 2
         for (i, j), v in np.ndenumerate(matrix):
             if np.isfinite(v):
-                ax.text(j, i, format(v, fmt_spec), ha="center", va="center", fontsize=6,
-                        color="#ffffff" if (v > mid if cmap.name.startswith("seq") else abs(v) > 0.6) else INK)
+                pos = float(im.norm(v))  # where the cell's colour lies on the drawn scale (vmin and vmax included)
+                dark = pos > 0.5 if cmap.name.startswith("seq") else abs(pos - 0.5) > 0.3
+                ax.text(j, i, format(v, fmt_spec), ha="center", va="center", fontsize=_SIZE["cell"],
+                        color="#ffffff" if dark else INK)
     return im
 
 
-def create_dashboard(ck, args):
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-    from matplotlib.colors import LinearSegmentedColormap
+def train_config(ck):
+    """The checkpoint's stored training settings ({} when it has none)."""
+    return (ck.obj.get("train_config") if isinstance(ck.obj, dict) else None) or {}
 
-    warnings.filterwarnings("ignore", message="Glyph .* missing")
-    plt.rcParams.update({"font.family": "DejaVu Sans", "axes.titlesize": 10, "axes.titleweight": "bold",
-                         "axes.labelsize": 8.5, "axes.labelcolor": INK2, "text.color": INK,
-                         "axes.titlecolor": INK, "figure.facecolor": SURFACE, "legend.fontsize": 7,
-                         "legend.frameon": False})
-    seq = LinearSegmentedColormap.from_list("seq_blue", BLUES)
-    div = LinearSegmentedColormap.from_list("div_blue_red", DIVERGING)
 
-    # One sub-figure per row: panels align within a row only, so a colorbar or
-    # long tick labels in one panel do not shrink the whole column. A mixture-of-experts
-    # checkpoint gets a fifth row (expert balance, load per block, router bias).
-    n_rows = 5 if ck.moe else 4
-    fig = plt.figure(figsize=(26, 23 * n_rows / 4), layout="constrained")
-    fig.get_layout_engine().set(w_pad=0.1, h_pad=0.12)
-    axs = []
-    for row in fig.subfigures(n_rows, 1, hspace=0.015):
-        row.set_facecolor(SURFACE)
-        axs.extend(row.subplots(1, 4, gridspec_kw={"wspace": 0.08}))
-    for ax in axs:
-        style_axes(ax)
+def _finite(v):
+    return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
 
+
+def rows_after(history, metrics_path):
+    """The evaluations in <name>_metrics.jsonl that follow the last one of `history` (a checkpoint's stored
+    rows), so a best file's curves reach the run's latest evaluation. The file is read once; lines that do not
+    parse (a half-written last line) are skipped; rows are taken in file order and, when a row's step is not
+    above the last kept one, the kept rows from that step on are dropped (a resumed session's rows replace the
+    abandoned tail). [] unless some row has the history's last step with the same val_loss, which is what shows
+    that the file continues this history (and not another run of the same name)."""
+    if not history or not os.path.isfile(metrics_path):
+        return []
+    last = history[-1]
+    try:
+        with open(metrics_path, encoding="utf-8", errors="replace") as handle:
+            lines = handle.readlines()
+    except OSError:
+        return []
+    kept, anchored = [], False
+    for line in lines:
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(row, dict) or not _finite(row.get("step")):
+            continue
+        if row["step"] == last.get("step") and row.get("val_loss") == last.get("val_loss"):
+            anchored = True
+        while kept and kept[-1]["step"] >= row["step"]:
+            kept.pop()
+        kept.append(row)
+    return [row for row in kept if row["step"] > last["step"]] if anchored and _finite(last.get("step")) else []
+
+
+def metrics_file(ck):
+    """<folder>/<run>_metrics.jsonl beside a checkpoint file, the run's name being the file's without _best."""
+    stem = re.sub(r"_best$", "", os.path.splitext(os.path.basename(ck.path))[0])
+    return os.path.join(os.path.dirname(os.path.abspath(ck.path)), stem + "_metrics.jsonl")
+
+
+def newer_rows(ck):
+    """rows_after for the viewed file: only for a tinyGPT training or best checkpoint (a fine-tuned, edited or
+    exported model has left its run). Read once per file."""
+    cached = getattr(ck, "_newer", None)
+    if cached is None:
+        o = ck.obj if isinstance(ck.obj, dict) else {}
+        own = (ck.family == "tinygpt" and os.path.isfile(ck.path) and not ck.finetune and not ck.edit
+               and not o.get("exported_from"))
+        cached = ck._newer = rows_after(ck.history, metrics_file(ck)) if own else []
+    return cached
+
+
+def dashboard_history(ck, args):
+    """The evaluations the history panels draw: the checkpoint's stored history, else the --history-log curve,
+    then the newer evaluations of the run's metrics file (newer_rows)."""
     history = ck.history
     if not history and args.history_log:
         # an --export folder is named in no log header: match the checkpoint it was exported from
@@ -753,15 +832,75 @@ def create_dashboard(ck, args):
         history, ck.history_source = history_from_log(args.history_log, src,
                                                       ck.obj.get("step") if isinstance(ck.obj, dict) else None,
                                                       ck.family)
-    pieces = ck.pieces()
-    classes = [token_class(ck.tok, i) for i in range(ck.tok.vocab_size)] if ck.tok is not None else None
+    return list(history) + newer_rows(ck)
+
+
+def dashboard_header(ck, history=None, now=None):
+    """The two header lines of a picture. Line 1: run, step, validation loss, bits per byte, fact score and when
+    it was drawn, each only when the file has it (a file with none of them: its model name alone). Line 2:
+    architecture and parameter count, whose history a fine-tuned or edited file shows, and how far the curves
+    go when the metrics file added evaluations after the checkpoint's."""
+    o = ck.obj if isinstance(ck.obj, dict) else {}
+    history = ck.history if history is None else history
+    last = history[-1] if history else {}
+    stem = path_name(ck.path) if os.path.isdir(ck.path) else os.path.splitext(path_name(ck.path))[0]
+    parts = []
+    step, total = o.get("step"), train_config(ck).get("steps")
+    beyond = _finite(step) and _finite(last.get("step")) and last["step"] > step
+    shown = last["step"] if beyond else step
+    if _finite(shown):
+        parts.append(f"step {shown:,}"
+                     + (f" of {total:,} ({shown / total:.0%})" if _finite(total) and total > 0 else "")
+                     + (" (base model's pre-training)" if ck.finetune else derived_note(ck)))
+    best, best_step = ck.metrics.get("best_val"), ck.metrics.get("best_step")
+    best_text = f"best {float(best):.3f} @{best_step:,}" if _finite(best) and _finite(best_step) else ""
+    if _finite(last.get("val_loss")):
+        parts.append(f"val {last['val_loss']:.3f}" + (f" ({best_text})" if best_text else ""))
+    elif best_text:
+        parts.append(best_text.replace("best", "best val", 1))
+    if _finite(last.get("bpb")):
+        parts.append(f"{last['bpb']:.3f} bits/byte")
+    if _finite(last.get("probe_acc")):
+        parts.append(f"facts {last['probe_acc']:.0%}"
+                     + (f" (floor {last['probe_floor']:.0%})" if _finite(last.get("probe_floor")) else ""))
+    if not parts:
+        return scrub(ck.model_name), ""
+    drawn = time.strftime("drawn %Y-%m-%d %H:%M", now or time.localtime())
+    line1 = " | ".join([re.sub(r"_best$", "", stem)] + parts + [drawn])
+    line2 = ck.model_name + (f", {tiny_gpt.count_params(ck.cfg)[0]:,} parameters" if ck.cfg is not None else "")
+    if ck.finetune:
+        line2 += (f" | fine-tuned ({finetune_label(ck.finetune)}) from {path_name(ck.finetune.get('base'))}: "
+                  "the pre-training history panels show the base model before fine-tuning")
+    elif ck.edit:
+        line2 += " | edited weights: the history panels show the" + derived_note(ck).replace(" (", " ").rstrip(")")
+    if beyond:
+        line2 += f" | weights: {'best ' if stem.endswith('_best') else ''}@{step:,}; curves to step {last['step']:,}"
+    return scrub(line1), scrub(line2)
+
+
+def create_dashboard(ck, args):
+    """Draw what the command line asks for: the dashboard (--plot; nine history panels, or with --panels all
+    the weight and behaviour panels too) and the token picture (--plot-tokens). The model is built and run only
+    for --panels all and --plot-tokens, once for both. Returns the dashboard's path when it was written under
+    its own name (the one picture that is pushed), else None."""
+    import matplotlib
+    matplotlib.use("Agg")
+    from matplotlib.colors import LinearSegmentedColormap
+
+    warnings.filterwarnings("ignore", message="Glyph .* missing")
+    seq = LinearSegmentedColormap.from_list("seq_blue", BLUES)
+    div = LinearSegmentedColormap.from_list("div_blue_red", DIVERGING)
+    history = dashboard_history(ck, args)
+    everything = args.plot and args.panels == "all"
+    wants_model = everything or args.plot_tokens
 
     # forward-pass material, computed once; the model is kept when only the windows or statistics fail,
     # so the fact benchmark (which needs much less memory) can still be scored
     model = fstats = windows = None
-    fnote = "forward-pass panels disabled (--no-forward)" if args.no_forward else ""
+    fnote = ("add --panels all" if not wants_model
+             else "forward-pass panels disabled (--no-forward)" if args.no_forward else "")
     device = torch.device("cpu")
-    if not args.no_forward and ck.cfg is not None and ck.tok is not None:
+    if wants_model and not args.no_forward and ck.cfg is not None and ck.tok is not None:
         try:
             device = torch.device("cpu") if args.device == "cpu" else tiny_gpt.select_device(args.device)
             model = build_model(ck, device)
@@ -780,34 +919,86 @@ def create_dashboard(ck, args):
             except Exception as exc:  # noqa: BLE001 - a failed forward pass only disables the forward panels
                 fstats = windows = None
                 fnote = f"forward pass failed: {type(exc).__name__}: {str(exc)[:120]}"
-    elif not args.no_forward:
+    elif wants_model and not args.no_forward:
         fnote = "no tiny_gpt architecture/tokenizer in this file"
 
     panels = [
-        ("Loss by step", lambda ax: panel_loss(ax, history, ck)),
-        ("Validation perplexity", lambda ax: panel_ppl(ax, history, ck)),
-        ("Learning rate", lambda ax: panel_lr(ax, history, ck)),
-        ("How opinionated the model is", lambda ax: panel_confidence(ax, history, ck)),
-        ("Token embeddings (PCA)", lambda ax: panel_pca(ax, ck, pieces, classes, fstats, args.pca_labels)),
-        ("Token similarity (clustered)",
-         lambda ax: panel_similarity(ax, fig, ck, pieces, classes, fstats, div, args.sim_tokens)),
-        ("Token embedding norms", lambda ax: panel_norms(ax, ck, classes)),
-        ("Output preference", lambda ax: panel_preference(ax, ck, pieces, classes, fstats, fnote)),
-        ("Weight scale per block", lambda ax: panel_components(ax, fig, ck, seq)),
-        ("RMSNorm gains", lambda ax: panel_norm_gains(ax, ck)),
-        ("Singular value spectra", lambda ax: panel_spectra(ax, ck, getattr(args, "full", False))),
-        ("Per-head projection scale", lambda ax: panel_heads(ax, fig, ck, seq)),
-        ("Calibration", lambda ax: panel_calibration(ax, ck, fstats, fnote)),
-        ("Cloze fact probes", lambda ax: panel_probes(ax, ck, model, device, args, fnote)),
-        ("Attention entropy", lambda ax: panel_attention(ax, fig, model, windows, device, seq, fnote)),
-        ("Adam update size", lambda ax: panel_adam(ax, fig, ck, seq)),
+        ("Loss", lambda ax: panel_loss(ax, history, ck)),
+        ("Validation minus training", lambda ax: panel_gap(ax, history, ck)),
+        ("Gradient norm", lambda ax: panel_grad_norm(ax, history, ck)),
+        ("Validation by source", lambda ax: panel_sources(ax, history, ck)),
+        ("Biology facts", lambda ax: panel_facts(ax, history, ck, args)),
+        ("Fact benchmark", lambda ax: panel_probes(ax, ck, model, device, args, fnote)) if everything else
+        ("Biology facts by subject", lambda ax: panel_facts_subjects(ax, history, ck, args, fnote)),
+        ("Improvement per 1,000 steps", lambda ax: panel_improvement(ax, history, ck)),
+        ("Speed", lambda ax: panel_speed(ax, history, ck)),
+        ("Plan", lambda ax: panel_plan(ax, history, ck)),
     ]
+    if everything:
+        panels += [
+            ("Learning rate", lambda ax: panel_lr(ax, history, ck)),
+            ("Calibration of the top prediction", lambda ax: panel_calibration(ax, ck, fstats, fnote)),
+            ("Weight scale per block", lambda ax: panel_components(ax, ck, seq)),
+            ("RMSNorm gains by depth", lambda ax: panel_norm_gains(ax, ck)),
+            ("Singular value spectra", lambda ax: panel_spectra(ax, ck, args.full)),
+            ("Per-head projection scale", lambda ax: panel_heads(ax, ck, seq)),
+            ("Attention entropy", lambda ax: panel_attention(ax, model, windows, device, seq, fnote)),
+        ]
     if ck.moe:
         panels += [
             ("Expert balance", lambda ax: panel_moe_balance(ax, history, ck)),
-            ("Expert load per block", lambda ax: panel_moe_load(ax, fig, ck, history, seq)),
-            ("Router bias", lambda ax: panel_router_bias(ax, fig, ck, div)),
+            ("Expert load per block", lambda ax: panel_moe_load(ax, ck, history, seq)),
+            ("Router bias", lambda ax: panel_router_bias(ax, ck, div)),
         ]
+    header = dashboard_header(ck, history)
+    out = None
+    if args.plot:
+        if not everything and (ck.finetune or ck.edit or not history):
+            print("weight and behaviour panels: add --panels all")
+        # history: 3 columns on 25.6 x 14.4 in (3,840 x 2,160 px at the default 150 dpi); all: 4 columns, 26 in
+        # wide; a mixture-of-experts file has one more row of the same height
+        cols, width, row_height = (4, 26, 23 / 4) if everything else (3, 25.6, 14.4 / 3)
+        target = args.out or output_name(ck, "dashboard", ".png")
+        written = _draw(panels, cols, (width, row_height * math.ceil(len(panels) / cols)), SIZES[args.panels], target,
+                        header, args.dpi)
+        print(f"Saved dashboard: {written}")
+        out = written if written == target else None  # a fallback name is not pushed
+    if args.plot_tokens:
+        pieces = ck.pieces()
+        classes = [token_class(ck.tok, i) for i in range(ck.tok.vocab_size)] if ck.tok is not None else None
+        token_panels = [
+            ("Token embeddings (PCA)", lambda ax: panel_pca(ax, ck, pieces, classes, fstats, args.pca_labels)),
+            ("Token similarity (clustered)",
+             lambda ax: panel_similarity(ax, ck, pieces, classes, fstats, div, args.sim_tokens)),
+            ("Token embedding norms", lambda ax: panel_norms(ax, ck, classes)),
+            ("Output preference", lambda ax: panel_preference(ax, pieces, classes, fstats, fnote)),
+        ]
+        target = os.path.splitext(args.out)[0] + "_tokens.png" if args.out else output_name(ck, "tokens", ".png")
+        print(f"Saved token panels: {_draw(token_panels, 4, (26, 6.4), SIZES['all'], target, header, args.dpi)}")
+    return out
+
+
+def _draw(panels, cols, figsize, sizes, out, header, dpi):
+    """One picture: a two-line header, then the panels in rows of `cols`. One sub-figure per row: panels align
+    within a row only, so a colour bar or long tick labels in one panel do not shrink a whole column. `sizes`
+    is the mode's font table. A panel that fails says so in its place. Returns the path written (a time-stamped
+    one when `out` is locked by another program)."""
+    import matplotlib.pyplot as plt
+    _SIZE.update(sizes)
+    plt.rcParams.update({**BASE_STYLE, "axes.titlesize": sizes["title"], "axes.labelsize": sizes["label"],
+                         "legend.fontsize": sizes["legend"]})
+    n_rows = math.ceil(len(panels) / cols)
+    head_height = 2.1 * (sizes["head"] + sizes["head2"]) / 72  # inches
+    fig = plt.figure(figsize=figsize, layout="constrained")
+    fig.get_layout_engine().set(w_pad=0.1, h_pad=0.12)
+    head, *rows = fig.subfigures(n_rows + 1, 1, hspace=0.015, squeeze=False, height_ratios=[
+        head_height] + [(figsize[1] - head_height) / n_rows] * n_rows)[:, 0]
+    axs = []
+    for row in rows:
+        row.set_facecolor(SURFACE)
+        axs.extend(row.subplots(1, cols, squeeze=False, gridspec_kw={"wspace": 0.08})[0])
+    for ax in axs:
+        style_axes(ax, ticksize=sizes["tick"])
     for ax in axs[len(panels):]:
         ax.set_axis_off()
     for ax, (title, draw) in zip(axs, panels):
@@ -819,19 +1010,14 @@ def create_dashboard(ck, args):
             ax.cla()
             message(ax, f"panel failed: {type(exc).__name__}: {scrub(exc)[:120]}", title)  # it may be published
             print(f"WARNING: dashboard panel '{title}' failed: {type(exc).__name__}: {exc}")
-
-    suptitle = ck.model_name
-    if ck.finetune:
-        suptitle += (f"  |  fine-tuned ({finetune_label(ck.finetune)}) from {path_name(ck.finetune.get('base'))}: "
-                     "the pre-training history panels show the base model before fine-tuning")
-    fig.suptitle(scrub(suptitle), fontsize=12, color=INK, x=0.01, ha="left")
-    out = args.out or output_name(ck, "dashboard", ".png")
+    head.set_facecolor(SURFACE)
+    head.text(0.005, 0.5, header[0], fontsize=sizes["head"], fontweight="bold", color=INK, ha="left", va="bottom")
+    head.text(0.005, 0.42, header[1], fontsize=sizes["head2"], color=INK2, ha="left", va="top")
     finalize_legends(fig)
     fmt_name = os.path.splitext(out)[1].lstrip(".").lower() or "png"
-    written = save_replacing(lambda tmp: fig.savefig(tmp, dpi=args.dpi, facecolor=SURFACE, format=fmt_name), out)
+    written = save_replacing(lambda tmp: fig.savefig(tmp, dpi=dpi, facecolor=SURFACE, format=fmt_name), out)
     plt.close(fig)
-    print(f"Saved dashboard: {written}")
-    return written if written == out else None  # a fallback name is not pushed
+    return written
 
 
 def save_replacing(write, out):
@@ -861,15 +1047,24 @@ def save_replacing(write, out):
                 pass
 
 
-# ---- row 1: training history -------------------------------------------------
+# ---- history panels (the default picture) -------------------------------------
+def derived_note(ck):
+    """Label for the numbers a fine-tuned or edited file carries over from the model it was made from."""
+    if ck.finetune:
+        return " (base model, before fine-tuning)"
+    return " (original model, before the edit)" if ck.edit else ""
+
+
 def _history_sub(ck, sub=None):
-    """Subtitle plus where the curve came from (a log file) and, for a fine-tuned
-    file, that it is the base model's pre-training."""
+    """Subtitle plus where the curve came from (a log file) and, for a fine-tuned or
+    edited file, that it is the base model's pre-training."""
     parts = [sub] if sub else []
     if ck.history_source and ck.history_source != "checkpoint":
         parts.append("curve from " + ck.history_source)
     if ck.finetune:
         parts.append(f"base model pre-training (before {finetune_label(ck.finetune)})")
+    elif ck.edit:
+        parts.append(derived_note(ck).strip(" ()"))
     return "; ".join(parts) or None
 
 
@@ -886,6 +1081,57 @@ def _no_history(ax, ck, title):
     message(ax, why, title)
 
 
+def _series(history, key):
+    """(step, value) of the evaluations whose `key` is a finite number."""
+    return [(h["step"], h[key]) for h in history or [] if _finite(h.get(key))]
+
+
+def _log_y(ax):
+    ax.set_yscale("log")
+    ax.tick_params(which="minor", labelsize=_SIZE["tick"], colors=INK2)
+
+
+def source_shares(ck):
+    """The share of the training windows drawn from each source (TokenBatcher.share(): weight x tokens, from
+    the stored --mix, --mix-alpha and the dataset's train-token counts), or None when the file does not say."""
+    o = ck.obj if isinstance(ck.obj, dict) else {}
+    counts = o["dataset"].get("train_tokens") if isinstance(o.get("dataset"), dict) else None
+    if not isinstance(counts, dict) or not counts:
+        return None
+    tc = o.get("train_config") or {}
+    try:
+        weights = tiny_gpt.mix_weights(tc.get("mix"), counts, counts, float(tc.get("mix_alpha", 1.0)))
+        raw = {name: max(float(weights.get(name, 0.0)), 0.0) * float(n) for name, n in counts.items()}
+    except (SystemExit, TypeError, ValueError):  # a --mix naming a source this dataset does not have
+        return None
+    total = sum(raw.values())
+    return {name: v / total for name, v in raw.items()} if total > 0 else None
+
+
+def val_mix_of(row, ck):
+    """A history row's validation loss weighted like the training mix: the stored val_mix, else the same mean
+    from the row's per-source losses and the file's sampling shares (as evaluate's mix_mean: a source the
+    shares do not know counts 0). None when the row or the file lacks what it takes."""
+    if _finite(row.get("val_mix")):
+        return float(row["val_mix"])
+    per = row.get("val_per_source")
+    share = source_shares(ck) if isinstance(per, dict) and per else None
+    if not share:
+        return None
+    weights = {name: share.get(name, 0.0) for name in per}
+    total = sum(weights.values())
+    return float(sum(per[name] * weights[name] for name in per) / total) if total > 0 else None
+
+
+def corpus_tokens(ck):
+    """Training tokens of the sources the run samples (one 'epoch' of tokens sampled), or None."""
+    share = source_shares(ck)
+    if not share:
+        return None
+    counts = ck.obj["dataset"]["train_tokens"]
+    return sum(n for name, n in counts.items() if share.get(name, 0) > 0)
+
+
 def panel_finetune_loss(ax, ck):
     """The SFT/DPO curve stored in the fine-tuned file (finetune["history"], one point per epoch)."""
     ft = ck.finetune
@@ -899,75 +1145,511 @@ def panel_finetune_loss(ax, ck):
     if va:
         ax.plot(*zip(*va), color=SERIES[1], lw=2, marker="o", ms=3.5, label="held-out (after each epoch)")
         ax.annotate(f"{va[-1][1]:.3f}", va[-1], xytext=(-4, 8), textcoords="offset points", ha="right",
-                    fontsize=7.5, color=INK2)
+                    fontsize=_SIZE["note"], color=INK2)
     ax.set_xlabel(f"{method} optimizer step" if any(h.get("step") is not None for h in rows) else "epoch")
     ax.set_ylabel("cross-entropy of the answer tokens (nats)" if method == "SFT" else f"{method} loss")
     place_legend(ax)
     titled(ax, f"Fine-tuning loss ({method})",
-           f"{len(rows)} epochs from {path_name(ft.get('base'))}; the other row-1 panels show its pre-training")
+           f"{len(rows)} epochs from {path_name(ft.get('base'))}; the other history panels show its pre-training")
+
+
+# upper limit of the loss axis once five evaluations lie below it (the first ones start near 10) and while the
+# newest one does
+LOSS_TOP = 4.0
 
 
 def panel_loss(ax, history, ck):
-    title = "Loss by step"
+    """Training loss, validation at the training mix (val_mix_of) and the balanced validation mean that picks
+    the best checkpoint. x is the tokens seen on a log axis when every row has them over more than a 20-fold
+    range (then with marks at one corpus of tokens and at the planned end), else the step."""
+    title = "Loss"
     if ck.finetune and ck.finetune.get("history"):
         return panel_finetune_loss(ax, ck)
     if not history:
         return _no_history(ax, ck, title)
-    tr = [(h["step"], h["train_loss"]) for h in history if h.get("train_loss") is not None]
-    va = [(h["step"], h["val_loss"]) for h in history if h.get("val_loss") is not None]
     legacy = (ck.history_source or "").startswith("log (v3")
+    tokens = [h.get("tokens") for h in history]
+    positive = [t for t in tokens if _finite(t) and t > 0]
+    by_tokens = all(_finite(t) for t in tokens) and len(positive) > 1 and max(positive) > 20 * min(positive)
+    xs = [t / 1e9 for t in tokens] if by_tokens else [h["step"] for h in history]
+
+    def points(values):  # a log axis has no place for the baseline's 0 tokens
+        return [(x, v) for x, v in zip(xs, values) if _finite(v) and (x > 0 or not by_tokens)]
+
+    mix = [val_mix_of(h, ck) for h in history]
+    tr, vm = points([h.get("train_loss") for h in history]), points(mix)
+    va = points([h.get("val_loss") for h in history])
+    drawn = [p for series in (tr, vm, va) for p in series]
+    if not drawn:
+        return _no_history(ax, ck, title)
+    few = {"marker": "o", "ms": 4} if len(history) < 3 else {}
     if tr:
-        ax.plot(*zip(*tr), color=SERIES[0], lw=2,
-                label="training (one batch, v3 log)" if legacy else "training (mean since previous line)")
+        ax.plot(*zip(*tr), color=SERIES[0], lw=2, **few, label="training (one batch, v3 log)" if legacy
+                else "training (mean since the previous evaluation)")
+    if vm:
+        ax.plot(*zip(*vm), color=SERIES[1], lw=2, **few, label="validation, training mix")
     if va:
-        ax.plot(*zip(*va), color=SERIES[1], lw=2, marker="o", ms=3.5, label="validation (mean over sources)")
-    per = {}
-    for h in history:
-        for k, v in (h.get("val_per_source") or {}).items():
-            per.setdefault(k, []).append((h["step"], v))
-    if len(per) > 1:
-        for i, (k, pts) in enumerate(sorted(per.items())):
-            ax.plot(*zip(*pts), color=SERIES[2 + i % 6], lw=1, alpha=0.9, label=f"validation: {k}")
-    best = min(va, key=lambda p: p[1]) if va else None
-    if best:
-        ax.scatter([best[0]], [best[1]], s=90, marker="*", color=SERIES[1], edgecolor=SURFACE, lw=1.5, zorder=5)
-        ax.annotate(f"best {best[1]:.3f} @{best[0]}", best, xytext=(6, 8), textcoords="offset points",
-                    fontsize=7.5, color=INK2)
-    ax.set_xlabel("optimizer step")
+        ax.plot(*zip(*va), color=SERIES[2], lw=2, **few, label="validation, sources equal; picks the best")
+    notes = []
+    if va:
+        best = min(va, key=lambda p: p[1])
+        ax.scatter([best[0]], [best[1]], s=90, marker="*", color=SERIES[2], edgecolor=SURFACE, lw=1.5, zorder=5)
+        ax.annotate(f"best {best[1]:.3f}", best, xytext=(6, 8), textcoords="offset points",
+                    fontsize=_SIZE["note"], color=INK2)
+        notes.append(f"validation now {va[-1][1]:.3f} (perplexity {math.exp(min(va[-1][1], 50)):,.1f})")
+    left = min(x for x, _ in drawn)
+    # the cut is for the first descent: a run whose newest evaluation is above it again (unstable, diverging) is
+    # drawn whole, so every curve's last point is always inside the axes
+    newest = max(series[-1][1] for series in (tr, vm, va) if series)
+    if (len([v for _, v in va if v <= LOSS_TOP]) >= 5 and max(v for _, v in drawn) > LOSS_TOP
+            and newest <= LOSS_TOP):
+        low = min(v for _, v in drawn if v <= LOSS_TOP)
+        ax.set_ylim(low - 0.04 * (LOSS_TOP - low), LOSS_TOP)
+        left = min(x for x, v in drawn if v <= LOSS_TOP)  # the axis starts at the first point it can show
+        above = sum(1 for _, v in va if v > LOSS_TOP)
+        notes.append(f"{above} evaluation{'s' if above != 1 else ''} above {LOSS_TOP:g} not shown")
+    right = max(x for x, _ in drawn)
+    if by_tokens:
+        ax.set_xscale("log")
+        ax.tick_params(which="minor", labelsize=_SIZE["tick"], colors=INK2)
+        tc, last = train_config(ck), history[-1]
+        marks = []
+        if _finite(tc.get("steps")) and _finite(tc.get("tokens_per_step")) and tc["steps"] > last["step"]:
+            marks.append((xs[-1] + (tc["steps"] - last["step"]) * tc["tokens_per_step"] / 1e9, "planned end"))
+            right = max(right, marks[-1][0])
+        corpus = corpus_tokens(ck)
+        if corpus and left <= corpus / 1e9 <= right:
+            marks.append((corpus / 1e9, "tokens sampled = corpus size"))
+        for x, text in marks:  # vlines, not axvline: the panel's lines stay its three curves
+            ax.vlines(x, 0, 1, transform=ax.get_xaxis_transform(), color=MUTED, lw=1, ls=":")
+            ax.text(x, 0.98, text + " ", transform=ax.get_xaxis_transform(), rotation=90, ha="right", va="top",
+                    fontsize=_SIZE["note"], color=MUTED)
+        ax.set_xlim(left / 1.12, right * 1.12)
+        ax.set_xlabel("training tokens (billions, log)")
+    else:
+        if left > min(x for x, _ in drawn):
+            ax.set_xlim(left=left - 0.02 * (right - left))
+        ax.set_xlabel("optimizer step")
     ax.set_ylabel("cross-entropy (nats per token)")
     place_legend(ax)
-    titled(ax, title, _history_sub(ck, "training: one batch per step; validation: random batches" if legacy else
-                                   "training: mean since the previous line; validation: fixed windows"))
+    if legacy:
+        notes.append("training: one batch per step; validation: random batches")
+    if vm and any(m is not None and not _finite(h.get("val_mix")) for m, h in zip(mix, history)):
+        notes.append("training mix: recomputed with today's sampling shares where a row stores none")
+    titled(ax, title, _history_sub(ck, "; ".join(notes)))
 
 
-def panel_ppl(ax, history, ck):
-    title = "Validation perplexity"
-    va = [(h["step"], h.get("ppl") or math.exp(min(h["val_loss"], 50))) for h in history or []
-          if h.get("val_loss") is not None]
-    if not va:
+def gap_points(history, ck):
+    """(step, validation at the training mix minus training loss) of the evaluations that have both."""
+    out = []
+    for h in history or []:
+        mix = val_mix_of(h, ck)
+        if mix is not None and _finite(h.get("train_loss")):
+            out.append((h["step"], mix - h["train_loss"]))
+    return out
+
+
+def panel_gap(ax, history, ck):
+    title = "Validation minus training"
+    if not history:
         return _no_history(ax, ck, title)
-    ax.plot(*zip(*va), color=SERIES[1], lw=2, marker="o", ms=3.5)
-    ax.set_yscale("log")
-    s, p = va[-1]
-    ax.annotate(f"{p:,.1f} @{s}", (s, p), xytext=(-4, 8), textcoords="offset points", ha="right", fontsize=7.5,
-                color=INK2)
+    pts = gap_points(history, ck)
+    if len(pts) < 2:
+        return message(ax, "Needs two evaluations with a training loss and a validation loss at the training mix\n"
+                           "(per-source losses and the dataset's token counts).", title)
+    ax.axhline(0, color=INK2, lw=0.8)
+    ax.plot(*zip(*pts), color=SERIES[0], lw=2, **({"marker": "o", "ms": 4} if len(pts) < 3 else {}))
+    warm = train_config(ck).get("warmup_steps") or 0
+    ys = [g for s, g in pts if s >= warm] or [g for _, g in pts]  # the first steps fall too fast to compare
+    low, high = min(ys + [0.0]), max(ys + [0.0])
+    pad = 0.08 * (high - low) or 0.01
+    ax.set_ylim(low - pad, high + pad)
     ax.set_xlabel("optimizer step")
-    ax.set_ylabel("exp(validation loss)")
-    titled(ax, title, _history_sub(ck, "log scale; lower is better"))
+    ax.set_ylabel("nats per token")
+    titled(ax, title, _history_sub(ck, f"now {pts[-1][1]:+.3f}; same source mix on both sides; above 0 = worse on "
+                                       "held-out text"))
+
+
+def panel_grad_norm(ax, history, ck):
+    title = "Gradient norm"
+    if not history:
+        return _no_history(ax, ck, title)
+    pts = [(s, v) for s, v in _series(history, "grad_norm") if v > 0]
+    if not pts:
+        return message(ax, "this history has no gradient norms", title)
+    ax.plot(*zip(*pts), color=SERIES[0], lw=1.6, marker="o", ms=3)
+    _log_y(ax)
+    clip = train_config(ck).get("grad_clip")
+    if _finite(clip) and clip > 0:
+        ax.axhline(clip, color=INK2, lw=0.9, ls="--")
+        ax.annotate(f"clipped at {clip:g}", (pts[0][0], clip), xytext=(2, 3), textcoords="offset points",
+                    fontsize=_SIZE["note"], color=INK2)
+    ax.set_xlabel("optimizer step")
+    ax.set_ylabel("L2 norm of the gradient (log)")
+    titled(ax, title, _history_sub(ck, f"now {pts[-1][1]:.2f}; one step before each evaluation, before clipping"))
+
+
+def panel_sources(ax, history, ck):
+    """The last evaluation by source: bits per byte (nats per token when the row has no bytes), sorted, with
+    the source's share of the training windows and the change over the last 20 evaluations."""
+    title = "Validation by source"
+    if not history:
+        return _no_history(ax, ck, title)
+    last = history[-1]
+    key, unit = next(((k, u) for k, u in (("bpb_per_source", "bits per byte"), ("val_per_source", "nats per token"))
+                      if isinstance(last.get(k), dict) and last[k]), (None, None))
+    if key is None:
+        return message(ax, "the last evaluation has no per-source values", title)
+    now = {name: v for name, v in last[key].items() if _finite(v)}
+    if len(now) < 2:
+        return message(ax, "one source: its loss is the Loss panel's", title)
+    back = min(20, len(history) - 1)
+    then = history[-1 - back].get(key) if back else None
+    then = then if isinstance(then, dict) else {}
+    share = source_shares(ck) or {}
+    names = sorted(now, key=now.get, reverse=True)  # drawn bottom to top: the lowest value on top
+    ax.barh(range(len(names)), [now[n] for n in names], color=SERIES[0], height=0.62)
+    for i, name in enumerate(names):
+        change = f" ({round(now[name] - then[name], 3) + 0.0:+.3f})" if _finite(then.get(name)) else ""
+        ax.annotate(f"{now[name]:.3f}{change}", (now[name], i), xytext=(4, 0), textcoords="offset points",
+                    va="center", fontsize=_SIZE["note"], color=INK2)
+    ax.set_yticks(range(len(names)))
+    ax.set_yticklabels([f"{n} ({'<0.1%' if 0 < share[n] < 0.001 else format(share[n], '.1%')} of training)"
+                        if n in share else n for n in names], fontsize=_SIZE["tick"])
+    ax.set_xlim(0, max(now.values()) * 1.3)
+    ax.grid(axis="y", visible=False)
+    ax.set_xlabel(f"{unit} (lower is better)")
+    titled(ax, title, _history_sub(ck, f"at step {last['step']:,}" + (
+        f"; in brackets after a value: change over the last {back} evaluation{'s' if back != 1 else ''}"
+        if then else "")))
+
+
+def trailing(values, k, mean=np.mean):
+    """For each value the mean (or `mean`) of it and the up to k - 1 values before it."""
+    return [float(mean(values[max(0, i - k + 1):i + 1])) for i in range(len(values))]
+
+
+def stored_probes(ck, args, raw_weights=False):
+    """The fact-benchmark report training stored for these weights (probe_report without a model), or None.
+    raw_weights: for a panel that draws the history's scores, as probe_report."""
+    try:
+        return (probe_report(ck, None, None, args, raw_weights) if args.probes and os.path.isfile(args.probes)
+                else None)
+    except (OSError, SystemExit):
+        return None
+
+
+def floor_colour(group):
+    """Bar colour of one group of probes: green or red only when its 95 % interval excludes its floor
+    (accuracy with the question words shuffled), grey when the interval includes it or is not known."""
+    if not group or not all(_finite(group.get(k)) for k in ("low", "high", "floor")):
+        return OTHER
+    return GOOD if group["low"] > group["floor"] else CRITICAL if group["high"] < group["floor"] else OTHER
+
+
+def panel_facts(ax, history, ck, args):
+    """Fact-probe accuracy and its floor at every evaluation: faint points, and the mean of the last five as
+    the line (one evaluation of a few hundred probes moves by chance)."""
+    from matplotlib.ticker import FuncFormatter
+    title = "Biology facts"
+    acc, floor = _series(history, "probe_acc"), _series(history, "probe_floor")
+    report = stored_probes(ck, args, raw_weights=bool(acc))  # without a curve it would be shown as this file's score
+    derived = ck.finetune or ck.edit
+    if not acc:
+        if report:
+            low, high = tiny_gpt.wilson_interval(report["correct"], report["n"])
+            return message(ax, f"{report['correct'] / max(report['n'], 1):.0%} correct ({low:.0%}-{high:.0%}) of "
+                               f"{report['n']} probes at step {ck.obj.get('step')}"
+                               + (f", floor {report['floor']:.0%}" if _finite(report.get("floor")) else "")
+                               + ".\nThis file has no score per evaluation to draw a curve from.", title)
+        return message(ax, "No fact-benchmark scores in this file's history.\n--panels all scores the probes now.",
+                       title)
+    k, now = 5, []
+    for pts, color, label in ((acc, SERIES[0], "correct answer preferred"),
+                              (floor, SERIES[1], "floor: question words shuffled")):
+        if not pts:
+            continue
+        xs, ys = zip(*pts)
+        if len(ys) >= k:
+            ax.scatter(xs, ys, s=12, color=color, alpha=0.35, linewidths=0)
+            line = trailing(ys, k)
+            ax.plot(xs, line, color=color, lw=2, label=f"{label} (mean of {k})")
+        else:
+            line = list(ys)
+            ax.plot(xs, line, color=color, lw=2, marker="o", ms=3.5, label=label)
+        now.append(line[-1])
+    values = [v for pts in (acc, floor) for _, v in pts]
+    if report and _finite(report.get("chance")):
+        ax.axhline(report["chance"], color=MUTED, lw=0.8, ls=":")
+        ax.annotate(f"chance {report['chance']:.0%}", (acc[0][0], report["chance"]), xytext=(2, 3),
+                    textcoords="offset points", fontsize=_SIZE["note"], color=MUTED)
+        values.append(report["chance"])
+    pad = 0.12 * (max(values) - min(values)) or 0.02
+    ax.set_ylim(max(0.0, min(values) - pad), min(0.999, max(values) + pad))
+    # as many decimals as the tick has (15%, 15.5%): whole percents would repeat when the scores lie close together
+    ax.yaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{round(100 * v, 2):g}%"))
+    ax.set_xlabel("optimizer step")
+    ax.set_ylabel("probes answered correctly")
+    place_legend(ax)
+    notes = []
+    steps = np.diff([v for _, v in acc])
+    if len(steps) >= 2:
+        notes.append(f"one evaluation moves about ±{100 * float(np.std(steps, ddof=1)) / math.sqrt(2):.1f} "
+                     "points by chance")
+    if report:
+        by = report.get("difficulty") or {}
+        notes.append(", ".join(f"{d} {by[d]['accuracy']:.0%}" for d in ("easy", "medium", "hard") if d in by))
+    if derived:
+        notes.append("these weights: --panels all")
+    titled(ax, f"{title}: {now[0]:.0%} right" + (f", floor {now[1]:.0%}" if len(now) > 1 else ""),
+           _history_sub(ck, "; ".join(n for n in notes if n)))
+
+
+def panel_facts_subjects(ax, history, ck, args, fnote=""):
+    """Fact-probe accuracy per subject, the mean of the last five evaluations; a bar is green or red only when
+    the stored report of the last evaluation puts its 95 % interval clear of the subject's floor."""
+    from matplotlib.ticker import PercentFormatter
+    title = "Biology facts by subject"
+    rows = [h["probe_by_category"] for h in history or [] if isinstance(h.get("probe_by_category"), dict)
+            and h["probe_by_category"]][-5:]
+    if not rows:
+        return panel_probes(ax, ck, None, None, args, fnote)  # the stored report's bars, or what it takes
+    means = {}
+    for name in sorted({n for r in rows for n in r}):
+        got = [r[name] for r in rows if _finite(r.get(name))]
+        if got:
+            means[name] = float(np.mean(got))
+    report = stored_probes(ck, args, raw_weights=True)
+    groups = report["category"] if report and set(report.get("category") or {}) == set(means) else {}
+    names = sorted(means, key=means.get)
+    y = np.arange(len(names))
+    ax.barh(y, [means[n] for n in names], color=[floor_colour(groups.get(n)) for n in names], height=0.62, alpha=0.9)
+    for i, name in enumerate(names):
+        ax.annotate(f"{means[name]:.0%}", (means[name], i), xytext=(4, 0), textcoords="offset points", va="center",
+                    fontsize=_SIZE["note"], color=INK2)
+    floors = [(groups[n]["floor"], i) for i, n in enumerate(names) if n in groups and _finite(groups[n].get("floor"))]
+    if floors:
+        ax.scatter(*zip(*floors), marker="|", s=140, color=INK, lw=2, zorder=4,
+                   label="floor (question words shuffled)")
+        place_legend(ax)
+    ax.set_yticks(y)
+    ax.set_yticklabels([f"{n} (n={groups[n]['n']})" if n in groups else n for n in names], fontsize=_SIZE["tick"])
+    ax.set_xlim(0, 1)
+    ax.xaxis.set_major_formatter(PercentFormatter(1.0, decimals=0))
+    ax.grid(axis="y", visible=False)
+    ax.set_xlabel("probes of the subject answered correctly")
+    colours = ("; green or red: the last evaluation's 95% interval is clear of the subject's floor" if groups
+               else "")
+    titled(ax, title, _history_sub(ck, f"mean of the last {len(rows)} evaluation{'s' if len(rows) != 1 else ''}"
+                                       + colours))
+
+
+def _rate(v):
+    """A loss change per 1,000 steps as text: four decimals, or powers of ten below that."""
+    return f"{v:.4f}" if abs(v) >= 1e-4 else f"{v:.1e}"
+
+
+def improvement_width(points, window=1000):
+    """Steps in each of the two groups of evaluations that improvement_points compares: `window`, or the usual
+    distance between evaluations when that is larger (--eval-every above 1,000: one evaluation a group)."""
+    gaps = np.diff(sorted({s for s, _ in points}))
+    return max(window, int(np.median(gaps))) if len(gaps) else window
+
+
+def improvement_points(points, start=0, window=1000):
+    """(step s, fall of the loss per `window` steps) at the evaluations with s >= start + 2 x width, width from
+    improvement_width: the mean over the evaluations in (s - 2 x width, s - width] minus the mean over those
+    in (s - width, s], over the distance between the two groups' mean steps (`window` steps when the
+    evaluations divide it evenly; any other --eval-every would give the fall over more steps than it says)."""
+    width = improvement_width(points, window)
+    ordered = sorted(points, key=lambda point: point[0])  # by step: each group is one slice, found by bisection
+    steps = [t for t, _ in ordered]
+    out = []
+    for s, _ in points:
+        if s < start + 2 * width:
+            continue
+        first, middle, last = (bisect.bisect_right(steps, s - k * width) for k in (2, 1, 0))
+        before, recent = ordered[first:middle], ordered[middle:last]
+        if before and recent:
+            apart = np.mean([t for t, _ in recent]) - np.mean([t for t, _ in before])
+            fall = np.mean([v for _, v in before]) - np.mean([v for _, v in recent])
+            out.append((s, float(fall * (window / apart))))
+    return out
+
+
+def panel_improvement(ax, history, ck):
+    title = "Improvement per 1,000 steps"
+    if not history:
+        return _no_history(ax, ck, title)
+    warm = int(train_config(ck).get("warmup_steps") or 0)
+    mix = [(h["step"], m) for h in history for m in [val_mix_of(h, ck)] if m is not None]
+    hidden = drew = 0
+    for label, color, pts in (("validation, training mix", SERIES[1], mix),
+                              ("validation, sources equal", SERIES[2], _series(history, "val_loss"))):
+        rate = improvement_points(pts, warm)
+        if len(rate) < 4:
+            continue
+        hidden += sum(1 for _, v in rate if v <= 0)
+        ax.plot([s for s, _ in rate], [v if v > 0 else np.nan for _, v in rate], color=color, lw=2, label=label)
+        if rate[-1][1] > 0:
+            ax.annotate(_rate(rate[-1][1]), rate[-1], xytext=(5, 0), textcoords="offset points", va="center",
+                        fontsize=_SIZE["note"], color=INK2)
+        drew += 1
+    width = improvement_width(_series(history, "val_loss"))  # 1,000, or more when the evaluations are further apart
+    if not drew:
+        return message(ax, f"Drawn once four evaluations lie at or after step {2 * width + warm:,}:\nthe fall of "
+                           f"the validation loss from one {width:,} steps to the next.", title)
+    _log_y(ax)
+    ax.set_xlabel("optimizer step")
+    ax.set_ylabel("nats per 1,000 steps (log)")
+    place_legend(ax)
+    titled(ax, title, _history_sub(ck, f"mean validation loss of the {width:,} steps before, minus that of the last "
+                                       f"{width:,}" + (", per 1,000 steps" if width != 1000 else "")
+                                       + (f"; {hidden} value{'s' if hidden != 1 else ''} at or below 0 not drawn"
+                                          if hidden else "")))
+
+
+def panel_speed(ax, history, ck):
+    title = "Speed"
+    if not history:
+        return _no_history(ax, ck, title)
+    pts = [(s, v) for s, v in _series(history, "tok_s") if v > 0]
+    if not pts:
+        return message(ax, "this history has no training speed (tok_s)", title)
+    xs, ys = zip(*pts)
+    for a, b in zip(history, history[1:]):  # a stop and resume (only the metrics file's rows carry the run id)
+        if a.get("run_id") and b.get("run_id") and a["run_id"] != b["run_id"]:
+            ax.vlines(b["step"], 0, 1, transform=ax.get_xaxis_transform(), color=GRID, lw=1.2, zorder=0)
+    ax.scatter(xs, ys, s=14, color=SERIES[0], alpha=0.5, linewidths=0)
+    median = trailing(ys, 10, np.median)
+    ax.plot(xs, median, color=SERIES[0], lw=2)
+    ax.set_ylim(0, max(ys) * 1.1)
+    ax.set_xlabel("optimizer step")
+    ax.set_ylabel("tokens per second")
+    last = history[-1]
+    notes = [f"median of the last {min(10, len(ys))}: {median[-1]:,.0f} tok/s between evaluations"]
+    if _finite(last.get("peak_mem_gib")):
+        notes.append(f"peak memory {last['peak_mem_gib']:.1f} GiB")
+    notes += _used(last)
+    titled(ax, title, _history_sub(ck, "; ".join(notes)))
+
+
+def _used(row):
+    """['12.3 kWh', '£3.07'] of a history row, each only when the row has it."""
+    out = []
+    energy = row.get("energy_wh")
+    if isinstance(energy, dict) and energy and all(_finite(v) for v in energy.values()):
+        out.append(f"{sum(energy.values()) / 1000:.1f} kWh")
+    if _finite(row.get("cost_gbp")):
+        out.append(f"£{row['cost_gbp']:.2f}")
+    return out
+
+
+def _hours_per_day(history):
+    """(training hours per day over the last 7 days of the history, time of the last evaluation), or None
+    unless the rows' time stamps span 7 days."""
+    stamped = []
+    for h in history:
+        try:
+            stamped.append((datetime.datetime.fromisoformat(h["time"]), float(h["train_seconds"])))
+        except (KeyError, TypeError, ValueError):
+            continue
+    try:
+        if len(stamped) < 2 or (stamped[-1][0] - stamped[0][0]).total_seconds() < 7 * 86400:
+            return None
+        week = [(t, s) for t, s in stamped if (stamped[-1][0] - t).total_seconds() <= 7 * 86400]
+        days = (week[-1][0] - week[0][0]).total_seconds() / 86400
+    except TypeError:  # time stamps with and without a time zone
+        return None
+    hours = (week[-1][1] - week[0][1]) / 3600
+    return (hours / days, stamped[-1][0]) if days > 0 and hours > 0 else None
+
+
+def plan_lines(history, ck):
+    """The Plan tile as (headline, detail) pairs; a pair, or a part of one, whose inputs the file lacks is left
+    out: progress, the losses, the rate of improvement, the time left, energy and cost, the learning rate."""
+    tc, last = train_config(ck), history[-1]
+    step, total, per_step = last.get("step"), tc.get("steps"), tc.get("tokens_per_step")
+    planned = _finite(step) and _finite(total) and total > 0
+    out = []
+    if _finite(step):
+        corpus, tokens = corpus_tokens(ck), last.get("tokens")
+        detail = ""
+        if corpus and _finite(tokens):
+            ahead = (f" of {(tokens + (total - step) * per_step) / corpus:.2f}"
+                     if planned and _finite(per_step) and total >= step else "")
+            detail = f"epoch {tokens / corpus:.2f}{ahead} (tokens sampled / corpus size)"
+        out.append((f"step {step:,}" + (f" of {total:,} ({step / total:.1%})" if planned else ""), detail))
+    if _finite(last.get("val_loss")):
+        best, best_step = ck.metrics.get("best_val"), ck.metrics.get("best_step")
+        mix = val_mix_of(last, ck)
+        out.append((f"validation {last['val_loss']:.3f}"
+                    + (f" (best {float(best):.3f} @{best_step:,})" if _finite(best) and _finite(best_step) else ""),
+                    " | ".join(([f"at the training mix {mix:.3f}"] if mix is not None else [])
+                               + ([f"training {last['train_loss']:.3f}"] if _finite(last.get("train_loss")) else []))))
+    scores = _series(history, "val_loss")
+    rate = improvement_points(scores, int(tc.get("warmup_steps") or 0))
+    if rate:
+        gain, detail, width = rate[-1][1], "", improvement_width(scores)
+        timed = [(h["step"], h["train_seconds"]) for h in history
+                 if _finite(h.get("train_seconds")) and _finite(step) and h["step"] >= step - width]
+        if len(timed) > 1 and timed[-1][1] > timed[0][1]:
+            per_day = gain / 1000 * (timed[-1][0] - timed[0][0]) / (timed[-1][1] - timed[0][1]) * 86400
+            detail = f"{per_day:.3f} per 24 h of training"
+        out.append((f"improving {_rate(gain)} per 1,000 steps" if gain > 0
+                    else f"not improving (validation up {_rate(-gain)} per 1,000 steps)" if gain < 0
+                    else "not improving (validation flat: 0 per 1,000 steps)", detail))
+    speeds = [v for _, v in _series(history, "tok_s") if v > 0][-10:]
+    if speeds and planned and _finite(per_step) and total > step:
+        hours = (total - step) * per_step / float(np.median(speeds)) / 3600
+        detail = f"at {float(np.median(speeds)):,.0f} tok/s (median of the last {len(speeds)} evaluations)"
+        duty = _hours_per_day(history)
+        if duty:
+            done = duty[1] + datetime.timedelta(days=hours / duty[0])
+            detail += f"; at {duty[0]:.1f} h a day (last 7 days) done about {done:%Y-%m-%d}"
+        out.append((f"about {hours:,.0f} h of training left", detail))
+    if _used(last):
+        out.append((", ".join(_used(last)) + " used so far", ""))
+    if _finite(last.get("lr")):
+        detail = ""
+        if planned and all(k in tc for k in ("schedule", "lr", "min_lr", "warmup_steps")):
+            start = tiny_gpt.LRSchedule(tc["schedule"], total, tc["lr"], tc["min_lr"], tc["warmup_steps"],
+                                        tc.get("decay_frac", 0.2), tc.get("decay_shape", "1-sqrt")).decay_start
+            detail = f"decay starts at step {start:,}" if step < start else f"decaying since step {start:,}"
+        out.append((f"learning rate {last['lr']:.2e}", detail))
+    return out
+
+
+def panel_plan(ax, history, ck):
+    """A text tile: where the run is, what it has reached, how fast it still improves and what is left."""
+    title = "Plan"
+    if not history:
+        return _no_history(ax, ck, title)
+    ax.set_axis_off()
+    lines = plan_lines(history, ck)
+    for i, (headline, detail) in enumerate(lines):
+        y = 0.97 - i / max(len(lines), 6)
+        ax.annotate(scrub(headline), (0, y), xycoords="axes fraction", va="top", fontsize=_SIZE["title"], color=INK)
+        if detail:
+            ax.annotate(scrub(detail), (0, y), xycoords="axes fraction", xytext=(0, -1.5 * _SIZE["title"]),
+                        textcoords="offset points", va="top", fontsize=_SIZE["sub"], color=INK2)
+    titled(ax, title, _history_sub(ck))
 
 
 def panel_lr(ax, history, ck):
     title = "Learning rate"
-    tc = (ck.obj.get("train_config") if isinstance(ck.obj, dict) else None) or {}
+    tc = train_config(ck)
     drew = False
     if tc.get("steps"):
         sched = tiny_gpt.LRSchedule(tc["schedule"], tc["steps"], tc["lr"], tc["min_lr"], tc["warmup_steps"],
                                     tc.get("decay_frac", 0.2), tc.get("decay_shape", "1-sqrt"))
         xs = np.unique(np.linspace(1, tc["steps"], 400).astype(int))
         ax.plot(xs, [sched.lr_at(int(x)) for x in xs], color=MUTED, lw=1.2, label="planned schedule")
-        ax.axvline(ck.obj.get("step", 0), color=INK2, lw=0.8)
-        ax.annotate(f"now: step {ck.obj.get('step', 0):,}", (ck.obj.get("step", 0), sched.peak), xytext=(4, -10),
-                    textcoords="offset points", fontsize=7.5, color=INK2)
+        # the last evaluation drawn: later than the file's step when the metrics file added rows
+        now = max([ck.obj.get("step", 0)] + [h["step"] for h in (history or [])[-1:]])
+        ax.axvline(now, color=INK2, lw=0.8)
+        ax.annotate(f"now: step {now:,}", (now, sched.peak), xytext=(4, -10),
+                    textcoords="offset points", fontsize=_SIZE["note"], color=INK2)
         drew = True
     pts = [(h["step"], h["lr"]) for h in history or [] if h.get("lr")]
     if pts:
@@ -983,30 +1665,8 @@ def panel_lr(ax, history, ck):
     titled(ax, title, _history_sub(ck))
 
 
-def panel_confidence(ax, history, ck):
-    title = "How opinionated the model is"
-    rows = [h for h in history or [] if h.get("confidence") is not None]
-    if not rows:
-        return message(ax, "Confidence is recorded at each evaluation by tinyGPT.\n"
-                            "This checkpoint has no such history.", title)
-    steps = [h["step"] for h in rows]
-    ax.plot(steps, [h["confidence"] for h in rows], color=SERIES[0], lw=2, label="mean top-1 probability (confidence)")
-    ax.plot(steps, [h["top1"] for h in rows], color=SERIES[1], lw=2, label="top-1 accuracy")
-    probes = [(h["step"], h["probe_acc"]) for h in rows if h.get("probe_acc") is not None]
-    if probes:
-        ax.plot(*zip(*probes), color=SERIES[2], lw=1.5, marker="o", ms=3, label="fact-probe accuracy")
-    floors = [(h["step"], h["probe_floor"]) for h in rows if h.get("probe_floor") is not None]
-    if floors:
-        ax.plot(*zip(*floors), color=SERIES[2], lw=1.2, ls="--", label="fact-probe floor (shuffled questions)")
-    ax.set_ylim(0, 1)
-    ax.set_xlabel("optimizer step")
-    ax.set_ylabel("proportion")
-    place_legend(ax)
-    titled(ax, title, _history_sub(ck, "confidence above accuracy = overconfident"))
-
-
-# ---- row 2: tokens ------------------------------------------------------------
-def _token_order(ck, classes, fstats, want):
+# ---- token panels (--plot-tokens) ------------------------------------------------
+def _token_order(classes, fstats, want):
     """Most frequent tokens of the wanted classes (eval-text frequency, else low
     merge ID, which in BPE means an early/frequent merge)."""
     ids = [i for i, c in enumerate(classes) if c in want]
@@ -1018,10 +1678,7 @@ def _token_order(ck, classes, fstats, want):
 def place_labels(ax, points, texts, fontsize=6.5, max_labels=None):
     """Annotate points without overlapping labels: try a few offsets around each
     point and skip the label if every position collides with one already placed."""
-    root = ax.figure
-    while getattr(root, "figure", root) is not root:
-        root = root.figure
-    renderer = root.canvas.get_renderer()
+    renderer = _root_figure(ax.figure).canvas.get_renderer()
     ax.autoscale_view()
     placed, shown = [], 0
     offsets = [(4, 3), (4, -9), (-4, 3), (-4, -9), (6, 11), (6, -16), (-6, 11), (-6, -16)]
@@ -1161,7 +1818,7 @@ def panel_pca(ax, ck, pieces, classes, fstats, n_labels=50):
                    color=color, alpha=0.65, linewidths=0, label=f"{cls} ({len(idx):,})")
         counts[cls] = len(idx)
     # candidates beyond n_labels, because labels that would overlap one already placed are skipped
-    top = _token_order(ck, classes, fstats, {"word start", "word piece", "number", "punctuation"})[:3 * n_labels + 40]
+    top = _token_order(classes, fstats, {"word start", "word piece", "number", "punctuation"})[:3 * n_labels + 40]
     shown = place_labels(ax, [coords[i] for i in top], [label_text(pieces[i]) for i in top],
                          fontsize=6.5 if n_labels <= 25 else 5.5, max_labels=n_labels) if n_labels else 0
     ax.set_xlabel(f"PC 1 ({var[0]:.1%} of variance)")
@@ -1172,11 +1829,11 @@ def panel_pca(ax, ck, pieces, classes, fstats, n_labels=50):
     titled(ax, title, f"one dot per token; {shown} {which} labelled; \u2581 marks a word start")
 
 
-def panel_similarity(ax, fig, ck, pieces, classes, fstats, cmap, n_tokens=100):
+def panel_similarity(ax, ck, pieces, classes, fstats, cmap, n_tokens=100):
     title = "Token similarity (clustered)"
     if ck.embedding is None or classes is None:
         return message(ax, "no token embedding or tokenizer in this file", title)
-    ids = [i for i in _token_order(ck, classes, fstats, {"word start", "word piece"})
+    ids = [i for i in _token_order(classes, fstats, {"word start", "word piece"})
            if len(pieces[i].replace("\u2581", "")) >= 3][:n_tokens]
     if len(ids) < 4:
         return message(ax, "fewer than 4 word tokens", title)
@@ -1192,7 +1849,7 @@ def panel_similarity(ax, fig, ck, pieces, classes, fstats, cmap, n_tokens=100):
         order = np.argsort(np.linalg.eigh(sims)[1][:, -2])
     sims = sims[np.ix_(order, order)]
     labels = [label_text(pieces[ids[k]], 10) for k in order]
-    heatmap(ax, fig, sims, labels, labels, cmap, "cosine similarity", -1, 1, annotate=False)
+    heatmap(ax, sims, labels, labels, cmap, "cosine similarity", -1, 1, annotate=False)
     tick_size = min(4.5, 300 / len(ids))   # 4.5 pt up to ~65 tokens, then smaller so 100 rows still fit the panel
     ax.set_xticklabels(labels, fontsize=tick_size, rotation=90)
     ax.set_yticklabels(labels, fontsize=tick_size)
@@ -1223,7 +1880,7 @@ def panel_norms(ax, ck, classes):
     titled(ax, title, "tied: each row is also the token's output weights" if tied else None)
 
 
-def panel_preference(ax, ck, pieces, classes, fstats, fnote):
+def panel_preference(ax, pieces, classes, fstats, fnote):
     title = "Output preference"
     if fstats is None:
         return message(ax, "Needs a forward pass: " + fnote + "\n\nThis model has no output-bias tensor, so its\n"
@@ -1248,7 +1905,7 @@ def panel_preference(ax, ck, pieces, classes, fstats, fnote):
     titled(ax, title, "above the diagonal = predicted more often than it occurs")
 
 
-# ---- row 3: weights -----------------------------------------------------------
+# ---- weights (--panels all) ----------------------------------------------------
 COMPONENTS = [("attn.q_proj", "attn.q_proj.weight"), ("attn.k_proj", "attn.k_proj.weight"),
               ("attn.v_proj", "attn.v_proj.weight"), ("attn.o_proj", "attn.o_proj.weight"),
               ("ffn.gate", "ffn.gate.weight"), ("ffn.up", "ffn.up.weight"), ("ffn.down", "ffn.down.weight")]
@@ -1291,7 +1948,7 @@ def _rms_of(ck, b, rels):
     return math.sqrt(sq / n) if n else np.nan
 
 
-def panel_components(ax, fig, ck, cmap):
+def panel_components(ax, ck, cmap):
     title = "Weight scale per block"
     layers = _layers(ck)
     if not layers:
@@ -1301,36 +1958,54 @@ def panel_components(ax, fig, ck, cmap):
     for j, b in enumerate(layers):
         for i, (_, rels) in enumerate(comps):
             m[i, j] = _rms_of(ck, b, rels)
-    heatmap(ax, fig, m, [c for c, _ in comps], [f"block {b}" for b in layers], cmap, "RMS of weights",
-            annotate=m.size <= 160)
+    heatmap(ax, m, [c for c, _ in comps], [f"block {b}" for b in layers], cmap, "RMS of weights")
     titled(ax, title, "RMS of each weight matrix" + ("; an expert row is its gate_up and down together" if ck.moe
                                                     else ""))
 
 
-def panel_norm_gains(ax, ck):
-    title = "RMSNorm gains"
-    items = []
+NORM_KINDS = ("attn_norm", "ffn_norm", "q_norm", "k_norm")
+
+
+def norm_gain_profiles(ck):
+    """{kind: [(block, 10th percentile, median, 90th percentile of the gain vector)]} by depth, for the kinds of
+    RMSNorm the file has (q_norm and k_norm only with QK-norm)."""
+    out = {}
     for name, t in ck.weights.items():
-        m = re.match(r"blocks\.(\d+)\.(attn_norm|ffn_norm)\.weight$", name)
+        m = re.match(r"blocks\.(\d+)\.(?:attn\.)?(attn_norm|ffn_norm|q_norm|k_norm)\.weight$", name)
         if m:
-            items.append((f"block {m.group(1)}\n{m.group(2)}", t))
-    if "norm.weight" in ck.weights:
-        items.append(("final\nnorm", ck.weights["norm.weight"]))
-    if not items:
+            low, mid, high = np.quantile(t.float().numpy(), [0.1, 0.5, 0.9])
+            out.setdefault(m.group(2), []).append((int(m.group(1)), float(low), float(mid), float(high)))
+    return {kind: sorted(rows) for kind, rows in out.items()}
+
+
+def panel_norm_gains(ax, ck):
+    from matplotlib.ticker import MaxNLocator
+    title = "RMSNorm gains by depth"
+    profiles = norm_gain_profiles(ck)
+    final = ck.weights.get("norm.weight")
+    if not profiles and final is None:
         return message(ax, "no RMSNorm gains found", title)
-    bp = ax.boxplot([t.float().numpy() for _, t in items], showfliers=False, patch_artist=True, widths=0.6)
-    for k, box in enumerate(bp["boxes"]):
-        box.set(facecolor=SERIES[0] if "attn" in items[k][0] else (SERIES[1] if "ffn" in items[k][0] else OTHER),
-                alpha=0.55, edgecolor=INK2, linewidth=0.6)
-    for part in ("whiskers", "caps", "medians"):
-        for line in bp[part]:
-            line.set(color=INK2, linewidth=0.8)
     ax.axhline(1.0, color=MUTED, lw=0.8)
-    ax.set_xticks(range(1, len(items) + 1))
-    ax.set_xticklabels([n for n, _ in items], fontsize=6.5, rotation=0 if len(items) <= 9 else 90)
+    for k, kind in enumerate(NORM_KINDS):
+        if kind in profiles:
+            blocks, low, mid, high = zip(*profiles[kind])
+            ax.fill_between(blocks, low, high, color=SERIES[k], alpha=0.18, linewidth=0)
+            ax.plot(blocks, mid, color=SERIES[k], lw=1.8, marker="o", ms=3, label=kind)
+    if final is not None:
+        x = max((rows[-1][0] for rows in profiles.values()), default=-1) + 1
+        y = float(final.float().median())
+        ax.scatter([x], [y], s=36, color=INK2, zorder=4)
+        ax.annotate("final norm", (x, y), xytext=(0, 6), textcoords="offset points", ha="center",
+                    fontsize=_SIZE["note"], color=INK2)
+    low, high = ax.get_ylim()
+    low = min(0.0, low)  # from zero: a gain's size is read off the axis, not only its spread
+    ax.set_ylim(low, high + 0.1 * (high - low))  # room above the highest gain for the final norm's label
+    ax.xaxis.set_major_locator(MaxNLocator(nbins=12, integer=True))
+    ax.set_xlabel("block")
     ax.set_ylabel("gain per channel (1.0 at initialisation)")
-    ax.grid(axis="x", visible=False)
-    titled(ax, title, "attn_norm blue, ffn_norm orange, final grey; 1.0 at initialisation")
+    place_legend(ax)
+    titled(ax, title, "line: median over the channels; band: 10th to 90th percentile; q_norm and k_norm (QK-norm) "
+                      "set how sharp attention is")
 
 
 SPECTRA_MAX_D = 2048  # wider models: the full SVDs take minutes on the CPU, so only with --full
@@ -1364,7 +2039,7 @@ def panel_spectra(ax, ck, full=False):
     titled(ax, title, "a fast drop means low effective rank")
 
 
-def panel_heads(ax, fig, ck, cmap):
+def panel_heads(ax, ck, cmap):
     title = "Per-head projection scale"
     if ck.cfg is None:
         return message(ax, "needs the architecture settings (head counts)", title)
@@ -1383,7 +2058,7 @@ def panel_heads(ax, fig, ck, cmap):
                 vals.append(part.float().square().mean().sqrt().item())
             rows.append(f"{proj}_proj head {h}")
             data.append(vals)
-    heatmap(ax, fig, np.array(data), rows, [f"block {b}" for b in layers], cmap, "RMS of head slice",
+    heatmap(ax, np.array(data), rows, [f"block {b}" for b in layers], cmap, "RMS of head slice",
             annotate=len(rows) * len(layers) <= 120)
     ax.set_yticklabels(rows, fontsize=5.5 if len(rows) > 24 else 7)
     share = c.n_heads // c.n_kv_heads
@@ -1391,20 +2066,32 @@ def panel_heads(ax, fig, ck, cmap):
     titled(ax, title, note)
 
 
-# ---- row 4: behaviour -----------------------------------------------------------
+# ---- behaviour (--panels all) ----------------------------------------------------
+def holds_ema(ck):
+    """Whether the file's weights are the EMA average: its stored evaluation (calibration, fact benchmark,
+    latest validation) measured the raw weights, which the file does not hold."""
+    return isinstance(ck.obj, dict) and ck.obj.get("weights") == "ema"
+
+
 def panel_calibration(ax, ck, fstats, fnote):
+    """The reliability diagram: from the run's own evaluation when it measured these weights at this step (all
+    of --eval-tokens, sources equal), else from the forward pass over the dashboard's windows, else the stored
+    evaluation labelled as another model's."""
     title = "Calibration of the top prediction"
     derived = ck.finetune or ck.edit  # weights changed after the stored evaluation (fine-tuned or edited)
     last = ck.metrics.get("last_eval") or (ck.metrics.get("base_last_eval") if derived else None) or {}
-    cal, ece = None, None
-    if fstats is not None:
+    step = ck.obj.get("step") if isinstance(ck.obj, dict) else None
+    cal, ece, source = None, None, ""
+    if last.get("calibration") and last.get("step") == step and not derived and not holds_ema(ck):
+        cal, ece = last["calibration"], last.get("ece")
+        source = f"from the run's evaluation at step {step:,} (sources equal)"
+    elif fstats is not None:
         cal, ece = fstats["calibration"], fstats["ece"]
+        source = f"from {fstats['tokens']:,} tokens of this forward pass (biggest sources first)"
     elif last.get("calibration"):
         cal, ece = last["calibration"], last.get("ece")
-        if ck.finetune:
-            title += " (base model, before fine-tuning)"
-        elif ck.edit:
-            title += " (original model, before the edit)"
+        source = f"from the stored evaluation at step {last.get('step')}"
+        title += derived_note(ck) or (" (raw weights; this file holds the EMA average)" if holds_ema(ck) else "")
     if cal is None:
         return message(ax, "No calibration data: " + fnote, title)
     conf, acc, cnt = (np.array(cal[k]) for k in ("confidence", "accuracy", "count"))
@@ -1420,19 +2107,22 @@ def panel_calibration(ax, ck, fstats, fnote):
     ax.set_xlabel("confidence (probability of the top prediction)")
     ax.set_ylabel("fraction of top predictions that were right")
     place_legend(ax)
-    titled(ax, title, f"expected calibration error {ece:.3f}; bars below the diagonal = overconfident")
+    titled(ax, title, f"expected calibration error {fmt(ece, '.3f')}; bars below the diagonal = overconfident; "
+                      f"{source}")
 
 
-def probe_report(ck, model, device, args):
+def probe_report(ck, model, device, args, raw_weights=False):
     """The checkpoint's own probe results when training scored this probe file
-    at this step (no model run); otherwise score the probes now."""
+    at this step (no model run); otherwise score the probes now. raw_weights: the
+    caller shows the history's per-evaluation scores, which are the raw weights'
+    like the stored report, so a best file that holds the EMA average may use it."""
     sha = tiny_gpt.file_sha256(args.probes)
     last = ck.metrics.get("last_eval") or {}
     stored = last.get("probes")
     step = ck.obj.get("step") if isinstance(ck.obj, dict) else None
-    # a fine-tuned or edited file carries the base model's last_eval (and step): its stored report is not these
-    # weights'
-    derived = ck.finetune or ck.edit
+    # a fine-tuned or edited file carries the base model's last_eval (and step), and a best file that holds the
+    # EMA average the raw weights': the stored report is not these weights'
+    derived = ck.finetune or ck.edit or (holds_ema(ck) and not raw_weights)
     if stored and stored.get("file_sha256") == sha and last.get("step") == step and not derived:
         return stored
     if model is None:
@@ -1458,80 +2148,42 @@ def panel_probes(ax, ck, model, device, args, fnote=""):
     floors = np.array([s["floor"] for _, s in summary])
     floor = report["floor"]
     y = np.arange(len(summary))
-    ax.barh(y, accs, color=[GOOD if a > f else CRITICAL for a, f in zip(accs, floors)], height=0.62, alpha=0.9)
+    ax.barh(y, accs, color=[floor_colour(s) for _, s in summary], height=0.62, alpha=0.9)
+    ax.scatter([], [], marker="s", s=40, color=OTHER, label="grey: the 95% interval includes the floor")
     ax.errorbar(accs, y, xerr=[lows, highs], fmt="none", ecolor=INK2, elinewidth=0.8, capsize=2)
     ax.scatter(floors, y, marker="|", s=140, color=INK, lw=2, zorder=4, label="floor (question words shuffled)")
     ax.axvline(chance, color=MUTED, lw=0.8, ls=":")
     ax.axvline(floor, color=INK, lw=1, ls="--")
     ax.annotate(f"floor {floor:.0%}", (floor, len(summary) - 0.4), xytext=(3, 0), textcoords="offset points",
-                fontsize=7, color=INK, va="bottom")
+                fontsize=_SIZE["heat"], color=INK, va="bottom")
     ax.annotate(f"chance {chance:.0%}", (chance, -0.6), xytext=(-3, 0), textcoords="offset points",
-                fontsize=7, color=MUTED, va="top", ha="right")
+                fontsize=_SIZE["heat"], color=MUTED, va="top", ha="right")
     ax.set_yticks(y)
-    ax.set_yticklabels(names, fontsize=7)
+    ax.set_yticklabels(names, fontsize=_SIZE["heat"])
     ax.set_xlim(0, 1)
     ax.grid(axis="y", visible=False)
     ax.set_xlabel("accuracy (correct continuation preferred over all distractors); lines: 95% interval")
     low, high = tiny_gpt.wilson_interval(report["correct"], report["n"])
     by_diff = report["difficulty"]
     diff_text = ", ".join(f"{d} {by_diff[d]['accuracy']:.0%}" for d in ("easy", "medium", "hard") if d in by_diff)
-    place_legend(ax, fontsize=6.5)
+    place_legend(ax)
     titled(ax, f"{title}: {acc:.0%} correct ({low:.0%}-{high:.0%}), floor {floor:.0%}",
-           f"{diff_text}; green = above its floor (question words shuffled)")
+           f"{diff_text}; green or red: the 95% interval is clear of the subject's floor (question words shuffled)")
 
 
-def panel_attention(ax, fig, model, windows, device, cmap, fnote):
+def panel_attention(ax, model, windows, device, cmap, fnote):
     title = "Attention entropy"
     if model is None or windows is None:
         return message(ax, "Needs a forward pass: " + (fnote or "no model"), title)
-    ent = attention_entropy(model, windows[0], device)
-    heatmap(ax, fig, ent, [f"block {b}" for b in range(ent.shape[0])], [f"head {h}" for h in range(ent.shape[1])],
+    ent, rms = attention_entropy(model, windows[0], device, with_rms=True)
+    heatmap(ax, ent, [f"block {b}" for b in range(ent.shape[0])], [f"head {h}" for h in range(ent.shape[1])],
             cmap, "normalised entropy", 0, 1, fmt_spec=".2f")
     ax.set_xlabel("query head")
-    titled(ax, title, "0 = attends to one token, 1 = spread evenly")
+    titled(ax, title, f"0 = attends to one token, 1 = spread evenly; residual stream RMS {rms[0]:.2f} after the "
+                      f"embedding, {rms[-1]:.2f} after the last block")
 
 
-def panel_adam(ax, fig, ck, cmap):
-    title = "Adam update size"
-    opt = ck.obj.get("optimizer") if isinstance(ck.obj, dict) else None
-    if not isinstance(opt, dict) or not opt.get("state"):
-        return message(ax, "optimizer state is saved only in the training checkpoint", title)
-    names = ck.adam_names()
-    size, momentum = {}, {}
-    for idx, st in opt["state"].items():
-        idx = int(idx)
-        if idx < len(names) and isinstance(st, dict) and "exp_avg" in st and "exp_avg_sq" in st:
-            m, v = st["exp_avg"].float(), st["exp_avg_sq"].float()
-            size[names[idx]] = (m.abs() / (v.sqrt() + 1e-8)).mean().item()
-        elif idx < len(names) and isinstance(st, dict) and "momentum_buffer" in st:  # Muon
-            momentum[names[idx]] = st["momentum_buffer"].float().pow(2).mean().sqrt().item()
-    layers = _layers(ck)
-    comps = components(ck)
-    # AdamW also trains the norm gains (and the MoE routers) in a Muon run, so decide from the block matrices only
-    matrices = {f"blocks.{b}.{rel}" for b in layers for _, rels in comps for rel in rels}
-    tc = (ck.obj.get("train_config") if isinstance(ck.obj, dict) else None) or {}
-    muon = bool(momentum) and (tc.get("optimizer") == "muon" or not matrices & set(size))
-    values = momentum if muon else size
-    if not values or not layers:
-        return message(ax, "optimizer state could not be matched to parameter names", title)
-    grid = np.full((len(comps), len(layers)), np.nan)
-    for j, b in enumerate(layers):
-        for i, (_, rels) in enumerate(comps):
-            # a row of several matrices (an expert): the mean of what the optimizer holds for them
-            got = [values[f"blocks.{b}.{rel}"] for rel in rels if f"blocks.{b}.{rel}" in values]
-            grid[i, j] = float(np.mean(got)) if got else np.nan
-    if muon:
-        heatmap(ax, fig, grid, [c for c, _ in comps], [f"block {b}" for b in layers], cmap,
-                "RMS of the momentum", fmt_spec=".2g", annotate=grid.size <= 160)
-        titled(ax, "Muon momentum size", "RMS of each matrix's averaged gradient"
-               + ("; the routers are on AdamW and show blank" if ck.moe else ""))
-        return
-    heatmap(ax, fig, grid, [c for c, _ in comps], [f"block {b}" for b in layers], cmap,
-            "mean |m| / (sqrt(v) + eps)", annotate=grid.size <= 160)
-    titled(ax, title, "near 1 = gradient sign consistent across steps")
-
-
-# ---- row 5 (mixture of experts only) -----------------------------------------------
+# ---- mixture of experts only (both modes) ------------------------------------------
 def _moe_blocks(ck):
     return [i for i in range(ck.cfg.n_layers) if ck.cfg.is_moe_block(i)]
 
@@ -1551,7 +2203,7 @@ def panel_moe_balance(ax, history, ck):
     ax.set_xlabel("optimizer step")
     ax.set_ylabel("E x sum f_e P_e (1.0 = even)")
     ax2 = ax.twinx()
-    style_axes(ax2, grid=False)
+    style_axes(ax2, grid=False, ticksize=_SIZE["tick"])
     ax2.plot(steps, [h.get("moe_load_max") for h in rows], color=SERIES[1], lw=1.4, marker="s", ms=3,
              label="busiest expert / mean")
     dead = [(s, h.get("dead_experts")) for s, h in zip(steps, rows) if h.get("dead_experts")]
@@ -1560,12 +2212,12 @@ def panel_moe_balance(ax, history, ck):
     ax2.set_ylabel("load of the busiest expert (1.0 = even)")
     lines = ax.get_legend_handles_labels()
     lines2 = ax2.get_legend_handles_labels()
-    ax.legend(lines[0] + lines2[0], lines[1] + lines2[1], loc="upper right", fontsize=7)
+    ax.legend(lines[0] + lines2[0], lines[1] + lines2[1], loc="upper right")
     titled(ax, title, _history_sub(ck, "blue: Switch loss; orange: busiest expert's tokens / mean; red x: experts "
                                        "that saw no token"))
 
 
-def panel_moe_load(ax, fig, ck, history, cmap):
+def panel_moe_load(ax, ck, history, cmap):
     """Tokens per expert relative to the block's mean since the last evaluation, per MoE block (last history row)."""
     title = "Expert load per block"
     rows = [h for h in history or [] if h.get("moe_load")]
@@ -1574,12 +2226,12 @@ def panel_moe_load(ax, fig, ck, history, cmap):
     load = np.array(rows[-1]["moe_load"], dtype=float)
     blocks = _moe_blocks(ck)
     cols = [f"block {b}" for b in blocks[:load.shape[0]]]
-    heatmap(ax, fig, load.T, [f"expert {e}" for e in range(load.shape[1])], cols, cmap, "tokens / mean tokens",
-            vmin=0.0, annotate=load.size <= 160)
+    heatmap(ax, load.T, [f"expert {e}" for e in range(load.shape[1])], cols, cmap, "tokens / mean tokens",
+            vmin=0.0)
     titled(ax, title, f"at step {rows[-1]['step']:,}: 1.0 = even; 0 = a dead expert")
 
 
-def panel_router_bias(ax, fig, ck, cmap):
+def panel_router_bias(ax, ck, cmap):
     """DeepSeek-V3's balancing bias per expert and MoE block (a buffer in the weights)."""
     title = "Router bias"
     items = [(b, ck.weights.get(f"blocks.{b}.ffn.router.bias")) for b in _moe_blocks(ck)]
@@ -1588,13 +2240,13 @@ def panel_router_bias(ax, fig, ck, cmap):
         return message(ax, "no router bias buffers in this file", title)
     grid = np.stack([t.float().numpy() for _, t in items], axis=1)  # (E, blocks)
     lim = max(float(np.abs(grid).max()), 1e-6)
-    heatmap(ax, fig, grid, [f"expert {e}" for e in range(grid.shape[0])], [f"block {b}" for b, _ in items], cmap,
-            "bias added to the routing score", vmin=-lim, vmax=lim, annotate=grid.size <= 160, fmt_spec=".2g")
+    heatmap(ax, grid, [f"expert {e}" for e in range(grid.shape[0])], [f"block {b}" for b, _ in items], cmap,
+            "bias added to the routing score", vmin=-lim, vmax=lim, fmt_spec=".2g")
     titled(ax, title, "negative = the expert was overloaded and is now chosen less (auxiliary-loss-free balancing)")
 
 
 # ---------------------------------------------------------------------------
-# HTML embedding explorer (hover labels)
+# GitHub push
 # ---------------------------------------------------------------------------
 def _git(*args):
     return subprocess.run(["git", "-C", HERE, *args], capture_output=True, text=True, timeout=300)
@@ -1609,8 +2261,10 @@ def push_dashboard(png, ck):
         top = _git("rev-parse", "--show-toplevel")
         if top.returncode != 0:
             return
-        root = os.path.normcase(os.path.abspath(top.stdout.strip()))
-        ck_dir = os.path.normcase(os.path.dirname(os.path.abspath(ck.path)))
+        # realpath on both folders: git names the real folder, the checkpoint may be reached through a link to
+        # it. The file's own name is not resolved: a checkpoint that is a link belongs to the folder it is in.
+        root = os.path.normcase(os.path.realpath(top.stdout.strip()))
+        ck_dir = os.path.normcase(os.path.realpath(os.path.dirname(os.path.abspath(ck.path))))
         if os.path.commonpath([root, ck_dir]) != root:
             return
         rel = "dashboards/" + os.path.basename(png)
@@ -1621,6 +2275,9 @@ def push_dashboard(png, ck):
         print(f"WARNING: dashboard not pushed ({type(exc).__name__}: {exc})")
 
 
+# ---------------------------------------------------------------------------
+# HTML embedding explorer (hover labels)
+# ---------------------------------------------------------------------------
 def write_embedding_html(ck, out_path):
     if ck.embedding is None or ck.tok is None:
         print("--html needs token embeddings and a tokenizer.")
@@ -1676,12 +2333,15 @@ def main():
         pass
     ck = Checkpoint(args.file, args.trust_checkpoint)
     print_summary(ck)
-    print_tensors(ck)
+    # the tensor table is for the plain call and for looking a name up, not for every picture the trainer draws
+    if not (args.plot or args.html) or args.tensor or args.similar:
+        print_tensors(ck)
     if args.tensor:
         if args.tensor not in ck.weights:
             sys.exit(f"\nNo tensor named {args.tensor!r}. Use one of the names listed above.")
         torch.set_printoptions(precision=4, edgeitems=4, linewidth=120, sci_mode=False)
-        print(f"\n{args.tensor} ({pretty_name(args.tensor)}):\n{ck.weights[args.tensor]}")
+        label = pretty_name(args.tensor, tied=ck.cfg is None or ck.cfg.tie_embeddings)
+        print(f"\n{args.tensor} ({label}):\n{ck.weights[args.tensor]}")
     if args.similar:
         pieces = ck.pieces()
         if ck.embedding is None or pieces is None:
@@ -1704,7 +2364,7 @@ def main():
         print(f"\nTokens closest to {pieces[token_id]!r} (id {token_id}) by cosine similarity of embedding rows:")
         for i in order:
             print(f"  {i:6d} {pieces[i]!r:28.28s} {sims[i].item():.3f}")
-    if args.plot:
+    if args.plot or args.plot_tokens:
         out = create_dashboard(ck, args)
         if out and not args.no_push:
             push_dashboard(out, ck)
