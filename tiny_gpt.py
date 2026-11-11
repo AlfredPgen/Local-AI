@@ -4330,7 +4330,9 @@ def _train(args):
         stored_ctx = config_from_checkpoint(init_obj).ctx
         cfg = config_from_checkpoint(init_obj, ctx=args.ctx)
         # the planner sizes memory, batch, steps and learning rate for exactly this architecture (experts included)
-        _, settings, plan_lines = plan_with_time_budget(args, manifest, device, amp_dtype, fixed_cfg=cfg)
+        # verbose=False here and for a fresh run: the plan lines without what the run header says itself
+        _, settings, plan_lines = plan_with_time_budget(args, manifest, device, amp_dtype, fixed_cfg=cfg,
+                                                        verbose=False)
         if args.experts and args.experts != cfg.n_experts:
             plan_lines.append(f"--experts {args.experts} ignored: the architecture is the checkpoint's "
                               f"({cfg.n_experts or 'no'} experts); start a fresh run to change it")
@@ -4354,7 +4356,7 @@ def _train(args):
             plan_lines.append(f"steps: the schedule continues at the --init-from checkpoint's step {init_step:,}, "
                               f"so the planned steps run from there: {settings['steps']:,} in total")
     else:
-        cfg, settings, plan_lines = plan_with_time_budget(args, manifest, device, amp_dtype)
+        cfg, settings, plan_lines = plan_with_time_budget(args, manifest, device, amp_dtype, verbose=False)
     if cfg.vocab_size != tok.vocab_size:
         raise SystemExit(f"Model vocabulary {cfg.vocab_size} != dataset tokenizer {tok.vocab_size}.")
     total_steps = int(settings["steps"])
