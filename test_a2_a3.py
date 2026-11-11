@@ -761,6 +761,54 @@ class Audit2TinyGptC(unittest.TestCase):
         self.console_runs()
         self.assertEqual(sorted(self.load("C.pt")["interval"]), ["loss_sum", "micro"])
 
+    # ---------------- the experiments table ----------------
+    def test_a_broken_experiments_table_does_not_end_the_run(self):
+        """F354: record_experiment is called when a run ends, before its last line. A table it cannot read (saved
+        in another encoding) costs the row and one note, not a traceback; a row with a stray cell is carried
+        through the one-time rewrite of the header, which then leaves one backup copy and no .tmp file."""
+        import csv
+        import glob
+
+        def record(label, data):
+            out = os.path.join(self.tmp, "exp_" + label)
+            os.makedirs(os.path.join(out, "results"))
+            path = os.path.join(out, "results", "experiments.csv")
+            with open(path, "wb") as handle:
+                handle.write(data)
+            said = []
+            for k in range(2):
+                with redirect_stdout(io.StringIO()) as buffer:
+                    tiny_gpt.record_experiment(out, {"event": "training run", "name": f"r{k}"})
+                said.append(buffer.getvalue())
+            self.assertFalse(os.path.exists(path + ".tmp"))
+            with open(path, "rb") as handle:
+                return path, said, handle.read()
+
+        # not UTF-8 (saved from a spreadsheet program): untouched, both rows refused with a note
+        data = "time,event,name\n2026,training run,caf\xa3\n".encode("cp1252")
+        path, said, now = record("cp1252", data)
+        self.assertEqual(now, data)
+        self.assertEqual(glob.glob(path + ".before-columns-*"), [])
+        for k, text in enumerate(said):
+            self.assertIn(f"{path} could not be read or written (UnicodeDecodeError: ", text)
+            self.assertIn(f"this row was not recorded: {{'event': 'training run', 'name': 'r{k}'}}", text)
+        # an old header and a row with one cell too many: rewritten once, the stray cell stays in the backup
+        data = b"time,event\n2026,training run,STRAY\n"
+        path, said, now = record("extracell", data)
+        self.assertEqual(said, ["", ""])
+        backups = glob.glob(path + ".before-columns-*")
+        self.assertEqual(len(backups), 1)
+        with open(backups[0], "rb") as handle:
+            self.assertEqual(handle.read(), data)
+        with open(path, encoding="utf-8-sig", newline="") as handle:
+            rows = list(csv.reader(handle))
+        self.assertEqual(rows[0], tiny_gpt.EXPERIMENT_COLUMNS)
+        self.assertEqual({len(row) for row in rows}, {len(tiny_gpt.EXPERIMENT_COLUMNS)})
+        at = rows[0].index("name")
+        self.assertEqual([(row[1], row[at]) for row in rows[1:]],
+                         [("training run", ""), ("training run", "r0"), ("training run", "r1")])
+        self.assertNotIn(b"STRAY", now)
+
 
 if __name__ == "__main__":
     unittest.main()

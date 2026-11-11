@@ -5467,51 +5467,65 @@ def record_experiment(out_dir, row):
     """Append one row to <out_dir>/results/experiments.csv (opens in Excel), the
     single permanent record of every run, benchmark and comparison; paths show
     the home folder as ~. A table left by older versions directly in <out_dir>
-    is moved there first (lose nothing)."""
+    is moved there first (lose nothing). A table that cannot be read or written
+    (another encoding, a damaged file, a full disk) costs this row and one note:
+    a run calls this as it ends, and must still reach its last line."""
     import csv
     path = experiments_path(out_dir)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     legacy = os.path.join(out_dir, "experiments.csv")
-    if os.path.isfile(legacy) and not os.path.exists(path):
-        with open(legacy, encoding="utf-8-sig") as handle:
-            text = _hide_home(handle.read())
-        with open(path, "w", encoding="utf-8-sig", newline="") as handle:
-            handle.write(text)
-        os.remove(legacy)
-    new = not os.path.exists(path)
-    if not new:
-        try:
-            with open(path, encoding="utf-8-sig", newline="") as handle:
-                header = next(csv.reader(handle), [])
-            with open(path, encoding="utf-8-sig", newline="") as handle:
-                old_rows = list(csv.DictReader(handle))
-            # known columns in the standard order; columns this version does not know are kept at the end
-            target = (EXPERIMENT_COLUMNS if set(header) <= set(EXPERIMENT_COLUMNS)
-                      else header + [c for c in EXPERIMENT_COLUMNS if c not in header])
-            if header != target:
-                # a newer version added columns: keep a copy, rewrite once with the full header, lose nothing
-                stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-                import shutil
-                shutil.copy2(path, f"{path}.before-columns-{stamp}")
-                tmp = path + ".tmp"
-                with open(tmp, "w", encoding="utf-8-sig", newline="") as handle:
-                    writer = csv.DictWriter(handle, fieldnames=target)
-                    writer.writeheader()
-                    writer.writerows(old_rows)
-                os.replace(tmp, path)
-            columns = target
-        except PermissionError:
-            columns = EXPERIMENT_COLUMNS  # the append below reports the locked file
-    else:
-        columns = EXPERIMENT_COLUMNS
     try:
-        with open(path, "a", encoding="utf-8-sig" if new else "utf-8", newline="") as handle:
-            writer = csv.DictWriter(handle, fieldnames=columns, extrasaction="ignore")
-            if new:
-                writer.writeheader()
-            writer.writerow({"time": now_iso(), **{k: _hide_home(v) for k, v in row.items() if v is not None}})
-    except PermissionError:
-        print(f"Note: {path} is open in another program (Excel?); this row was not recorded: {row}")
+        if os.path.isfile(legacy) and not os.path.exists(path):
+            with open(legacy, encoding="utf-8-sig") as handle:
+                text = _hide_home(handle.read())
+            with open(path, "w", encoding="utf-8-sig", newline="") as handle:
+                handle.write(text)
+            os.remove(legacy)
+        new = not os.path.exists(path)
+        if not new:
+            try:
+                with open(path, encoding="utf-8-sig", newline="") as handle:
+                    header = next(csv.reader(handle), [])
+                with open(path, encoding="utf-8-sig", newline="") as handle:
+                    # restkey: a row with more cells than the header has columns keeps them under a name that is
+                    # no column (None, the default, is refused by the writer)
+                    old_rows = list(csv.DictReader(handle, restkey="_extra"))
+                # known columns in the standard order; columns this version does not know are kept at the end
+                target = (EXPERIMENT_COLUMNS if set(header) <= set(EXPERIMENT_COLUMNS)
+                          else header + [c for c in EXPERIMENT_COLUMNS if c not in header])
+                if header != target:
+                    # a newer version added columns: keep a copy, rewrite once with the full header, lose nothing
+                    # (cells beyond the header stay in the copy only)
+                    stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+                    import shutil
+                    shutil.copy2(path, f"{path}.before-columns-{stamp}")
+                    tmp = path + ".tmp"
+                    with open(tmp, "w", encoding="utf-8-sig", newline="") as handle:
+                        writer = csv.DictWriter(handle, fieldnames=target, extrasaction="ignore")
+                        writer.writeheader()
+                        writer.writerows(old_rows)
+                    os.replace(tmp, path)
+                columns = target
+            except PermissionError:
+                columns = EXPERIMENT_COLUMNS  # the append below reports the locked file
+        else:
+            columns = EXPERIMENT_COLUMNS
+        try:
+            with open(path, "a", encoding="utf-8-sig" if new else "utf-8", newline="") as handle:
+                writer = csv.DictWriter(handle, fieldnames=columns, extrasaction="ignore")
+                if new:
+                    writer.writeheader()
+                writer.writerow({"time": now_iso(), **{k: _hide_home(v) for k, v in row.items() if v is not None}})
+        except PermissionError:
+            print(f"Note: {path} is open in another program (Excel?); this row was not recorded: {row}")
+            return
+    except (OSError, ValueError, csv.Error) as exc:  # UnicodeDecodeError is a ValueError
+        try:
+            os.remove(path + ".tmp")
+        except OSError:
+            pass
+        print(f"Note: {path} could not be read or written ({type(exc).__name__}: {str(exc)[:160]}); this row was not "
+              f"recorded: {row}")
         return
     if os.path.normcase(os.path.abspath(out_dir)) == os.path.normcase(HERE):  # this folder's runs, not test runs
         publish_experiments(path, row)
