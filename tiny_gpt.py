@@ -4588,8 +4588,10 @@ def _train(args):
                     del newer
                 except (Exception, SystemExit) as exc:  # noqa: BLE001 - safe_load reports a bad file as SystemExit
                     print(f"Note: could not read {best_path} ({exc}); it may be replaced by the next best.")
+            # no best: every save of the best file so far failed and was tolerated
+            best_text = f"{best_val:.4f} @{best_step}" if best_step is not None else "none"
             resume_note = (f"RESUMED {ckpt_path} at step {start_step:,} (optimizer state {restored}/{total_p} "
-                           f"tensors; best {best_val:.4f} @{best_step}; last eval "
+                           f"tensors; best {best_text}; last eval "
                            f"{last_eval['loss']:.4f} @{last_eval['step']})" if last_eval else
                            f"RESUMED {ckpt_path} at step {start_step:,}")
     elif init_obj is not None:

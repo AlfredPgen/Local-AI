@@ -460,6 +460,16 @@ class Audit2TinyGptC(unittest.TestCase):
         self.assertEqual([(row["step"], row["is_best"], row.get("best_weights")) for row in rows_f[1:]],
                          [(4, False, None), (8, False, None), (12, False, None)])
         self.assertRegex(out_f, r"(?m)^RUN \S+ failed at \S+ \| step 12/16 \| best val none \| ")
+        # a pause after a tolerated first failure, then a resume: its RUN line has no best to name either
+        code, out_p = self.patched_run("bestfail", 1, args + ["--name", "BH", "--stop-after-steps", "4"])
+        self.assertEqual(code, 0, out_p)
+        self.assertRegex(out_p, r"(?m)^RUN \S+ stopped at \S+ \| step 4/16 \| best val none \| last val \d+\.\d{4} @4 ")
+        code, out_r = base.run(["tiny_gpt.py"] + self.resume_args("BH") + ["--stop-after-steps", "1"])
+        self.assertEqual(code, 0, out_r)
+        self.assertNotIn("inf @None", out_p + out_r)
+        self.assertRegex(out_r, r"(?m)^RUN \S+ started \S+ \| RESUMED .+BH\.pt at step 4 \(optimizer state \d+/\d+ "
+                                r"tensors; best none; last eval \d+\.\d{4} @4\)$")
+        self.assertRegex(out_r, r"(?m)^RUN \S+ stopped at \S+ \| step 5/16 \| best val none \| last val \d+\.\d{4} @4 ")
 
     def test_dashboard_is_drawn_after_every_evaluation_with_a_best_file(self):
         """F368 (tiny_gpt.py half): the dashboard of the best file is launched after every evaluation, a new best
