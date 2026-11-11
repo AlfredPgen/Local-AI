@@ -262,6 +262,7 @@ class Audit2Benchmark(unittest.TestCase):
     def fake_download(self, label, force):
         """download_one on a made-up benchmark with huggingface_hub replaced by a stand-in (no network):
         (manifest entry, status, keyword arguments of every hf_hub_download call, items written)."""
+        import importlib
         import json
         import types
         b = self.b
@@ -288,6 +289,9 @@ class Audit2Benchmark(unittest.TestCase):
 
         spec = b._spec("toy", "Toy", "knowledge", "someone/toy", ["data/t.jsonl"], "MIT", normalise)
         hub = types.SimpleNamespace(HfApi=HfApi, hf_hub_download=hf_hub_download)
+        # download_one imports data_prep (and with it numpy): loaded here first, because leaving patch.dict drops
+        # every module first imported inside it, and numpy cannot be loaded a second time in one process
+        importlib.import_module("data_prep")
         with unittest.mock.patch.dict(sys.modules, {"huggingface_hub": hub}), \
                 unittest.mock.patch.object(b, "BENCH_DIR", bench):
             entry, status = b.download_one(spec, {"benchmarks": {}}, force=force)
@@ -371,6 +375,14 @@ class Audit2Benchmark(unittest.TestCase):
         self.assertEqual((entry["items"], entry["dropped_items"]), (3, 1))
         self.assertEqual([list(pair) for pair in entry["dropped_examples"]],
                          [["bad", "answer not among the options"]])
+
+    def test_start_loads_neither_data_prep_nor_numpy(self):
+        """F001: benchmark.py takes sha256_file from data_prep inside download_one, the only place that hashes;
+        starting it (--help, plot, sandbox-setup, the import) loads neither data_prep nor numpy, as before."""
+        code = ("import sys; sys.path.insert(0, sys.argv[1]); import benchmark; "
+                "print(sorted(m for m in ('data_prep', 'numpy', 'torch') if m in sys.modules))")
+        proc = subprocess.run([sys.executable, "-c", code, HERE], capture_output=True, text=True, timeout=300)
+        self.assertEqual((proc.returncode, proc.stdout.strip()), (0, "[]"), proc.stderr)
 
     def test_printed_lists(self):
         """F002 (guard: passes before and after): _list reads numpy's printed form, a Python literal, and text

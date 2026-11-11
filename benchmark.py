@@ -61,7 +61,6 @@ import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-import data_prep  # noqa: E402
 
 BENCH_DIR = os.path.join(HERE, "benchmarks")
 MANIFEST = os.path.join(BENCH_DIR, "manifest.json")
@@ -513,6 +512,7 @@ def folder_bytes(path):
 
 def download_one(spec, man, force=False):
     from huggingface_hub import HfApi, hf_hub_download
+    import data_prep  # here, not at the top: it loads numpy, which no other sub-command start needs
     info = HfApi().dataset_info(spec["repo"])
     if info.gated:
         raise RuntimeError(f"{spec['repo']} is gated ({info.gated}); not downloaded")
