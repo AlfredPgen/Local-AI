@@ -5250,7 +5250,7 @@ def _train(args):
             "train_hours": f"{train_seconds / 3600:.2f}", "run_hours": f"{run_seconds() / 3600:.2f}",
             **energy_columns(meter, device, fail_note), "checkpoint": ckpt_path})
         print(f"RUN {run_id} {status} at {now_iso()} | step {step:,}/{total_steps:,} | best val "
-              f"{best_val:.4f} @{best_step} | last val "
+              + (f"{best_val:.4f} @{best_step}" if best_step is not None else "none") + " | last val "
               + (f"{last_eval['loss']:.4f} @{last_eval['step']}" if last_eval else "none")
               + f" | this session {fmt_hms(time.perf_counter() - t_run)} | whole run: "
               f"{fmt_hms(run_seconds())} in total, {fmt_hms(train_seconds)} of it training, {meter.short()} "
