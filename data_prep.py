@@ -307,10 +307,15 @@ def read_manifest(dataset_dir):
     return manifest
 
 
-def sha256_file(path, chunk=1 << 22):
+def sha256_file(path, chunk=1 << 22, stop=None):
+    """SHA-256 of a file, as hex. `stop` (a threading.Event) is looked at before
+    every block: once it is set the rest of the file is left unread and the
+    result is None."""
     digest = hashlib.sha256()
     with open(path, "rb") as handle:
         while True:
+            if stop is not None and stop.is_set():
+                return None
             block = handle.read(chunk)
             if not block:
                 break
@@ -324,7 +329,8 @@ def open_token_files(dataset_dir, verify=True):
     Returns (manifest, {"train": {source: memmap}, "val": {source: memmap}}).
     Sizes are always checked; SHA-256 checksums when verify=True, in a few
     threads (hashlib releases the GIL), all before returning: a mismatch names
-    the first failing file in manifest order.
+    the first failing file in manifest order. Ctrl+C stops the check at once,
+    as it did when the files were hashed one after another.
     """
     manifest = read_manifest(dataset_dir)
     dtype = np.dtype(manifest["dtype"])
@@ -347,9 +353,20 @@ def open_token_files(dataset_dir, verify=True):
                 checks.append((path, entry["sha256"]))
             arrays[split][source] = np.memmap(path, dtype=dtype, mode="r", shape=(int(entry["tokens"]),))
     if checks:
-        from concurrent.futures import ThreadPoolExecutor
-        with ThreadPoolExecutor(max_workers=min(4, os.cpu_count() or 1)) as pool:
-            digests = list(pool.map(sha256_file, [path for path, _ in checks]))
+        import threading
+        from concurrent.futures import ThreadPoolExecutor, wait
+        stop = threading.Event()
+        pool = ThreadPoolExecutor(max_workers=min(4, os.cpu_count() or 1))
+        try:
+            pending = futures = [pool.submit(sha256_file, path, stop=stop) for path, _ in checks]
+            # Windows cannot interrupt a plain wait for a thread: look up five times a second, so that
+            # Ctrl+C is seen while the files are being hashed and not when they are done
+            while pending:
+                pending = wait(pending, timeout=0.2).not_done
+            digests = [future.result() for future in futures]
+        finally:  # after Ctrl+C or a read error: drop the files not started, stop the others at their next block
+            stop.set()
+            pool.shutdown(wait=False, cancel_futures=True)
         for (path, expected), digest in zip(checks, digests):
             if digest != expected:
                 raise SystemExit(f"{path} failed its SHA-256 check. Rebuild the dataset.")

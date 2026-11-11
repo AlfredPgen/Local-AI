@@ -452,6 +452,59 @@ class Audit2DataPrep(unittest.TestCase):
         with unittest.mock.patch.object(data_prep, "sha256_file", side_effect=AssertionError("hashed")):
             data_prep.open_token_files(ds, verify=False)  # sizes only: nothing is hashed
 
+    def test_ctrl_c_during_the_hash_check_is_not_held_until_every_file_is_hashed(self):
+        """Hashed one after another, Ctrl+C stopped the check at once. In threads it must do the same: the
+        files not yet started are dropped and the hashes in flight are told to stop at their next block."""
+        import _thread
+        ds = self.folder("f258_int")
+        sources = {}
+        for k in range(24):
+            tokens = np.arange(k, k + 8, dtype=np.uint16)
+            tokens.tofile(os.path.join(ds, f"train.s{k}.bin"))
+            sources[f"s{k}"] = {"train": {"file": f"train.s{k}.bin", "tokens": 8,
+                                          "sha256": hashlib.sha256(tokens.tobytes()).hexdigest()}}
+        with open(os.path.join(ds, "manifest.json"), "w", encoding="utf-8") as f:
+            json.dump({"format": data_prep.FORMAT, "format_version": data_prep.FORMAT_VERSION, "dtype": "uint16",
+                       "sources": sources}, f)
+        data_prep.open_token_files(ds, verify=True)  # the files are good
+        real, started, lock = data_prep.sha256_file, [], threading.Lock()
+
+        def slow(path, chunk=1 << 22, stop=None):  # every file takes half a second: 3 s for the 24 in 4 threads
+            with lock:
+                first = not started
+                started.append(stop)
+            time.sleep(0.1)
+            if first:  # by now the main thread has queued every file and waits for the hashes
+                _thread.interrupt_main()  # Ctrl+C while the first files are being hashed
+            time.sleep(0.4)
+            return real(path, chunk)
+
+        t0 = time.time()
+        with unittest.mock.patch.object(data_prep, "sha256_file", slow), self.assertRaises(KeyboardInterrupt):
+            data_prep.open_token_files(ds, verify=True)
+        took = time.time() - t0
+        self.assertLess(len(started), 24, f"the files not started are dropped (it took {took:.1f} s)")
+        self.assertTrue(all(isinstance(stop, threading.Event) and stop.is_set() for stop in started),
+                        "the hashes in flight are told to stop")
+        # the hash itself: it stops between two blocks once it is told to
+        path = os.path.join(ds, "train.s0.bin")
+        with open(path, "rb") as f:
+            whole = hashlib.sha256(f.read()).hexdigest()
+        stop = threading.Event()
+        self.assertEqual(data_prep.sha256_file(path, 4, stop), whole)
+        self.assertEqual(data_prep.sha256_file(path, 4), whole)
+        asked = []
+
+        class After2:
+            def is_set(self):
+                asked.append(1)
+                return len(asked) > 2
+
+        self.assertIsNone(data_prep.sha256_file(path, 4, After2()), "16 bytes in blocks of 4: stopped after 2 blocks")
+        self.assertEqual(len(asked), 3)
+        stop.set()
+        self.assertIsNone(data_prep.sha256_file(path, 4, stop))
+
     def test_an_error_in_the_leakage_audit_still_only_skips_it(self):
         out = os.path.join(self.tmp, "f057err")
         real = data_prep._audit_chunk
