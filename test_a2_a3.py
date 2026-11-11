@@ -11,6 +11,7 @@ import re
 import shutil
 import sys
 import tempfile
+import time
 import unittest
 import unittest.mock
 from contextlib import redirect_stdout
@@ -1017,6 +1018,25 @@ class Audit2TinyGptC(unittest.TestCase):
                 json.dump({"pid": os.getppid(), "started": None}, f)  # a live process that is not this one
             self.assertTrue(tiny_gpt.gpu_busy(folder, smi=False))
             self.assertEqual(smi.call_count, 1)
+
+    # ---------------- dashboard pushes ----------------
+    def test_dashboard_is_pushed_every_twelve_hours_by_default(self):
+        """F438: every pushed dashboard stays in the repository's history, so the default --dashboard-push-hours
+        is 12 (it was 3); the option still takes any value."""
+        args = tiny_gpt.parse_args(["--name", "x", "--out-dir", self.tmp])
+        self.assertEqual(args.dashboard_push_hours, 12.0)
+        self.assertEqual(tiny_gpt.parse_args(["--name", "x", "--out-dir", self.tmp, "--dashboard-push-hours", "3"])
+                         .dashboard_push_hours, 3.0)
+        with redirect_stdout(io.StringIO()) as out, self.assertRaises(SystemExit):
+            tiny_gpt.parse_args(["--help"])
+        text = " ".join(out.getvalue().split())
+        self.assertIn("push the dashboard to GitHub at most this often (0 = every time; default 12, ", text)
+        launches = []
+        state = {"proc": None, "pushed": time.time() - 4 * 3600}  # last pushed four hours ago
+        with unittest.mock.patch.object(tiny_gpt.subprocess, "Popen", side_effect=lambda cmd, **kw: launches.append(cmd)):
+            tiny_gpt.launch_dashboard(os.path.join(self.tmp, "X_best.pt"), args, state)
+        self.assertEqual(len(launches), 1)
+        self.assertIn("--no-push", launches[0])
 
 
 if __name__ == "__main__":

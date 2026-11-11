@@ -3698,8 +3698,8 @@ def parse_args(argv=None):
     g.add_argument("--dashboard", choices=("auto", "on", "off"), default="auto",
                    help="redraw view_pt.py's dashboard of the best checkpoint in the background after each "
                         "evaluation (auto: for runs saved in this script's folder; test runs elsewhere are skipped)")
-    g.add_argument("--dashboard-push-hours", type=float, default=3.0,
-                   help="push the dashboard to GitHub at most this often (0 = every time; default 3, since every "
+    g.add_argument("--dashboard-push-hours", type=float, default=12.0,
+                   help="push the dashboard to GitHub at most this often (0 = every time; default 12, since every "
                         "1.6 MB version stays in the repository's history)")
     g.add_argument("--sample-every", type=int,
                    help="write a sample at evaluations whose step is a multiple of N (default: every evaluation; 0 = off)")
