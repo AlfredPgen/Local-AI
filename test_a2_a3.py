@@ -115,6 +115,27 @@ tiny_gpt.free_device_memory = free
 tiny_gpt.atomic_save = save
 tiny_gpt.main(sys.argv[3:])
 '''
+# tiny_gpt.main(args) in a child process whose torch.compile compiles nothing: it prints the cache folder it would
+# use, and whether torch's compiler had been imported by then (the import is what writes the variable)
+COMPILE_RUN = r'''
+import os
+import sys
+
+import torch
+
+sys.path.insert(0, sys.argv[1])
+import tiny_gpt  # noqa: E402
+
+
+def compile_stub(module, **kwargs):
+    print(f"COMPILE CACHE dynamo={'torch._dynamo' in sys.modules} {os.environ.get('TORCHINDUCTOR_CACHE_DIR')}")
+    return module
+
+
+tiny_gpt.device_memory_budget = lambda device: (8 * 2 ** 30, "8.0 GiB (test)")
+torch.compile = compile_stub
+tiny_gpt.main(sys.argv[2:])
+'''
 
 
 class Audit2TinyGptC(unittest.TestCase):
@@ -845,17 +866,42 @@ class Audit2TinyGptC(unittest.TestCase):
 
     # ---------------- torch.compile ----------------
     def test_compile_cache_stays_beside_the_script(self):
-        """F326: maybe_compile points torch.compile's cache at .compile_cache beside the script (the default is
-        the temp folder, which gets emptied) unless TORCHINDUCTOR_CACHE_DIR is already set."""
+        """F326: a training run compiles with torch.compile's cache in .compile_cache beside the script (the
+        default is the temp folder, which gets emptied) unless the user set TORCHINDUCTOR_CACHE_DIR. torch sets
+        the variable itself, to the temp folder, when its compiler is first imported, and building an optimizer
+        imports it: a run builds its optimizer before it compiles, so the value torch wrote must not win."""
+        beside = os.path.join(tiny_gpt.HERE, ".compile_cache")
+        # a whole run in a child process (torch writes the variable once per process): what torch.compile finds
+        self.pipeline()
+        script = os.path.join(self.tmp, "compile_run.py")
+        with open(script, "w", encoding="utf-8") as f:
+            f.write(COMPILE_RUN)
+        args = list(self.common[1:]) + ["--steps", "2", "--eval-every", "2", "--no-probes", "--compile", "on"]
+        given = os.path.join(self.tmp, "given_cache")
+        for name, value, expected in (("CC", None, beside), ("CD", given, given)):
+            with unittest.mock.patch.dict(os.environ):
+                os.environ.pop("TORCHINDUCTOR_CACHE_DIR", None)
+                if value:
+                    os.environ["TORCHINDUCTOR_CACHE_DIR"] = value
+                code, out = base.run([script, HERE] + args + ["--name", name])
+            self.assertEqual(code, 0, out)
+            self.assertEqual([line for line in out.splitlines() if line.startswith("COMPILE CACHE ")],
+                             ["COMPILE CACHE dynamo=True " + expected], out)
+        # maybe_compile alone: nothing is set unless it compiles, and it puts the folder in place of torch's
         cpu, model = torch.device("cpu"), base.TestFixes.small_model(self)
-        with unittest.mock.patch.dict(os.environ), \
-                unittest.mock.patch.object(tiny_gpt.torch, "compile", lambda module, **kwargs: module):
+        stub = unittest.mock.patch.object(tiny_gpt.torch, "compile", lambda module, **kwargs: module)
+        with unittest.mock.patch.dict(os.environ), stub, \
+                unittest.mock.patch.object(tiny_gpt, "COMPILE_CACHE_GIVEN", False):
             os.environ.pop("TORCHINDUCTOR_CACHE_DIR", None)
             self.assertIs(tiny_gpt.maybe_compile(model, "off", cpu), model)
             self.assertNotIn("TORCHINDUCTOR_CACHE_DIR", os.environ, "nothing is compiled: nothing is set")
             self.assertIs(tiny_gpt.maybe_compile(model, "on", cpu, micro=2), model)
-            self.assertEqual(os.environ["TORCHINDUCTOR_CACHE_DIR"], os.path.join(tiny_gpt.HERE, ".compile_cache"))
-            os.environ["TORCHINDUCTOR_CACHE_DIR"] = "elsewhere"
+            self.assertEqual(os.environ["TORCHINDUCTOR_CACHE_DIR"], beside)
+            os.environ["TORCHINDUCTOR_CACHE_DIR"] = "the folder torch chose"
+            tiny_gpt.maybe_compile(model, "on", cpu, micro=2)
+            self.assertEqual(os.environ["TORCHINDUCTOR_CACHE_DIR"], beside, "torch's own choice does not win")
+        with unittest.mock.patch.dict(os.environ, {"TORCHINDUCTOR_CACHE_DIR": "elsewhere"}), stub, \
+                unittest.mock.patch.object(tiny_gpt, "COMPILE_CACHE_GIVEN", True):
             tiny_gpt.maybe_compile(model, "on", cpu, micro=2)
             self.assertEqual(os.environ["TORCHINDUCTOR_CACHE_DIR"], "elsewhere", "a setting of the user's wins")
         self.assertFalse(os.path.exists(os.path.join(HERE, ".compile_cache")), "this test compiles nothing")
@@ -884,12 +930,14 @@ class Audit2TinyGptC(unittest.TestCase):
         self.assertEqual(len(seen), 1)
         self.assertEqual((seen[0].shape, seen[0].stride(), seen[0].dtype), (x.shape, x.stride(), x.dtype))
         self.assertEqual(x.stride(), (model.ctx + 1, 1))
-        # the real thing, without a code generator: one graph for the warm-up and the first batches
+        # the real thing, without a code generator: one graph for the warm-up and the first batches (torch makes
+        # its cache folder for this backend too: a folder of this test, not the one beside the script)
         eager = functools.partial(torch.compile, backend="eager")
+        given = {"TORCHINDUCTOR_CACHE_DIR": os.path.join(self.tmp, "eager_cache")}
         torch._dynamo.reset()
         counters.clear()
         try:
-            with unittest.mock.patch.dict(os.environ), unittest.mock.patch.object(tiny_gpt.torch, "compile", eager):
+            with unittest.mock.patch.dict(os.environ, given),                     unittest.mock.patch.object(tiny_gpt, "COMPILE_CACHE_GIVEN", True),                     unittest.mock.patch.object(tiny_gpt.torch, "compile", eager):
                 with redirect_stdout(io.StringIO()) as said:
                     compiled = tiny_gpt.maybe_compile(model, "on", cpu, micro=2)
             self.assertIsNot(compiled, model, said.getvalue())
@@ -901,7 +949,7 @@ class Audit2TinyGptC(unittest.TestCase):
             self.assertEqual(counters["stats"]["unique_graphs"], 1)
         finally:
             torch._dynamo.reset()
-        self.assertFalse(os.path.exists(os.path.join(HERE, ".compile_cache")), "the eager backend writes no cache")
+        self.assertFalse(os.path.exists(os.path.join(HERE, ".compile_cache")), "no cache beside the script")
 
     # ---------------- the log file and the command line ----------------
     def test_abbreviated_log_file_option_reaches_the_logger(self):

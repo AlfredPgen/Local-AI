@@ -5547,6 +5547,12 @@ def record_experiment(out_dir, row):
         publish_experiments(path, row)
 
 
+# Whether the user chose the folder of torch.compile's cache. Asked when this module is imported, because torch
+# writes its own choice (a folder in the temp folder) into the variable when its compiler is first imported, and
+# building an optimizer imports it: a training run does that before maybe_compile is reached.
+COMPILE_CACHE_GIVEN = "TORCHINDUCTOR_CACHE_DIR" in os.environ
+
+
 def maybe_compile(model, mode, device, return_hidden=False, amp_dtype=None, micro=1, return_aux=False):
     """The model compiled with torch.compile, warmed up once with exactly the call
     training makes (a (micro, ctx) batch with the layout of TokenBatcher.next()'s,
@@ -5573,8 +5579,11 @@ def maybe_compile(model, mode, device, return_hidden=False, amp_dtype=None, micr
     compiled, failure = None, None
     try:
         # the compiled graphs are kept beside the script, not in the temp folder (which gets emptied: every graph
-        # is then compiled again at the next start); a TORCHINDUCTOR_CACHE_DIR that is already set wins
-        os.environ.setdefault("TORCHINDUCTOR_CACHE_DIR", os.path.join(HERE, ".compile_cache"))
+        # is then compiled again at the next start); a TORCHINDUCTOR_CACHE_DIR the user set wins. Assigned, not
+        # setdefault: by now torch has put its temp folder into the variable (see COMPILE_CACHE_GIVEN), and it
+        # reads the variable each time it needs the folder
+        if not COMPILE_CACHE_GIVEN:
+            os.environ["TORCHINDUCTOR_CACHE_DIR"] = os.path.join(HERE, ".compile_cache")
         # dynamic=False: a new shape (a halved micro-batch after an out-of-memory error) gets its own static graph
         # instead of turning the training graph into a slower dynamic-shape one
         compiled = torch.compile(model, dynamic=False)
