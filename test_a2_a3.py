@@ -973,6 +973,16 @@ class Audit2TinyGptC(unittest.TestCase):
         for argv in (["--log-fi", "x.txt"], ["--log-f=Y"], ["--log-file", "a", "--log-file", "b"], []):
             args = tiny_gpt.parse_args(["--name", "x", "--out-dir", self.tmp] + argv)
             self.assertEqual(tiny_gpt._log_path_from(argv), args.log_file, argv)
+        # also on the abbreviations the full parser refuses as ambiguous (--log-every, --lr, ...): the value
+        # after one (a mistyped '--log 50') is no log file, and the error goes to the log named in full, if any
+        for short in ("--l", "--lo", "--log", "--log-"):
+            for argv in ([short, "50", "--name", "x"], [short + "=50"], ["--name", "x", short, "50"]):
+                self.assertEqual(tiny_gpt._log_path_from(argv), default, argv)
+                with unittest.mock.patch("sys.stderr", new=io.StringIO()) as err, self.assertRaises(SystemExit):
+                    tiny_gpt.parse_args(argv)
+                self.assertRegex(err.getvalue(), f"ambiguous option: {short}(=50)? could match --log-file, ", argv)
+            self.assertEqual(tiny_gpt._log_path_from([short, "50", "--log-file", "a.txt"]), "a.txt")
+            self.assertEqual(tiny_gpt._log_path_from(["--log-f", "a.txt", short, "50"]), "a.txt")
 
     def test_help_is_not_written_to_the_log(self):
         """F323: --help prints the options and exits without opening the log file; an argument error is still

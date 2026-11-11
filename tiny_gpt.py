@@ -5657,12 +5657,15 @@ def cmd_plan(args):
 
 def _log_path_from(argv):
     """--log-file is read before full parsing so argument errors are logged too: by a parser that knows this one
-    option, so that an abbreviation ('--log-f X') means here what it means to parse_args."""
+    option, so that an abbreviation ('--log-f X') means here what it means to parse_args. '--l', '--lo', '--log'
+    and '--log-' are not shown to it: parse_args refuses them as ambiguous (--log-every, --lr, ...), so the
+    value after a mistyped '--log 50' is no log file."""
     default = os.path.join(HERE, "log.txt")
     pre = argparse.ArgumentParser(add_help=False, exit_on_error=False)
     pre.add_argument("--log-file", default=default)
     try:
-        return pre.parse_known_args(argv)[0].log_file
+        return pre.parse_known_args([item for item in argv if item.split("=", 1)[0] not in
+                                     ("--l", "--lo", "--log", "--log-")])[0].log_file
     except argparse.ArgumentError:  # no value after it: parse_args reports that, into the default log
         return default
 
