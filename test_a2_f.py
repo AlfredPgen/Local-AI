@@ -428,14 +428,31 @@ class Audit2DocsYoutubeConvert(unittest.TestCase):
         with unittest.mock.patch.object(pymupdf, "open", counting_open):
             self.assertEqual([conv.page_count(two) for _ in range(3)], [2, 2, 2])
             self.assertEqual([conv.page_count(broken) for _ in range(3)], [0, 0, 0])
-            self.assertEqual(max(conv.page_count(broken), 1), 1)  # the time limit counts at least one page
             args = argparse.Namespace(out=os.path.join(folder, "out"), by_type=True, name_prefix="", book_pages=2,
                                       no_gwas=False)
             kinds = [os.path.basename(os.path.dirname(conv.plan_target(p, args))) for p in (two, broken)]
             args.book_pages = 3
             kinds.append(os.path.basename(os.path.dirname(conv.plan_target(two, args))))
+            # the time limit main gives each PDF's process: per page, and a PDF that cannot be opened counts as one
+            limits = []
+
+            def child(cmd, timeout):  # in place of the process: the file and the limit it would get
+                limits.append((os.path.basename(cmd[2]), timeout))
+                return 0, "skipped\tnot converted in this test\n", []
+
+            page, ocr_page = conv.PDF_SECONDS_PER_PAGE, conv.OCR_SECONDS_PER_PAGE
+            for extra, want in ((["--timeout", "1"], [page, 2 * page]), (["--timeout", "1", "--ocr"],
+                                                                         [ocr_page, 2 * ocr_page]), ([], [3600, 3600])):
+                del limits[:]
+                argv = ["convert_to_markdown.py", folder, "--out", os.path.join(folder, "out"), "--by-type"] + extra
+                with unittest.mock.patch.object(sys, "argv", argv), \
+                        unittest.mock.patch.object(conv, "_run_child", child), \
+                        unittest.mock.patch.object(conv, "_lower_priority"), \
+                        unittest.mock.patch("sys.stdout", new_callable=__import__("io").StringIO):
+                    conv.main()
+                self.assertEqual(limits, list(zip(["broken.pdf", "two.pdf"], want)), extra)
         self.assertEqual(kinds, ["books", "articles", "articles"])
-        self.assertEqual(opened, [two, broken])  # once each, whatever asked
+        self.assertEqual(opened, [two, broken])  # once each, whatever asked: the folder, the names, the time limit
 
     def test_output_names_are_made_lazily_in_the_same_order(self):
         """F028: the candidate output names of an input come one at a time (the first is nearly always enough), in
