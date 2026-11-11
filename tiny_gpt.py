@@ -4612,7 +4612,7 @@ def _train(args):
         resume_note = note + "; best/last validation reset because the validation set is new"
         if start_step >= total_steps:
             raise SystemExit(f"--init-from checkpoint is at step {start_step:,}; set --steps above that.")
-        if schedule.phase(start_step + 1) == "decay":
+        if start_step and schedule.phase(start_step + 1) == "decay":
             # the schedule of a training state is continued over the old and the new steps together, so its decay
             # (a share of that total) can begin before the first step of this run
             plan_lines.append(f"WARNING: this run starts at step {start_step + 1:,}, inside the decay of the "

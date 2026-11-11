@@ -583,13 +583,15 @@ class Audit2TinyGptC(unittest.TestCase):
 
     def init_runs(self):
         """Two short runs continued from N with --init-from: from its best file with options that belong to
-        the checkpoint's architecture, and from its training state (step 8) for two more steps."""
+        the checkpoint's architecture (and a cosine schedule without warm-up, which decays from step 1), and
+        from its training state (step 8) for two more steps."""
         if "init" not in self.cache:
             self.notes_runs()
             short = self.common + ["--eval-every", "2", "--no-probes"]
             code, out_best = base.run(short + ["--name", "I1", "--init-from", os.path.join(self.runs, "N_best.pt"),
                                                "--steps", "2", "--d-model", "128", "--tie-embeddings", "off",
-                                               "--rope-base", "2000"])
+                                               "--rope-base", "2000", "--schedule", "cosine",
+                                               "--warmup-steps", "0"])
             self.assertEqual(code, 0, out_best)
             code, out_state = base.run(short + ["--name", "I2", "--init-from", os.path.join(self.runs, "N.pt"),
                                                 "--train-tokens", "1024"])
@@ -633,8 +635,10 @@ class Audit2TinyGptC(unittest.TestCase):
         self.assertIn("step 9", warned[0])
         self.assertIn("--steps", warned[0])
         self.assertRegex(out_state, r"(?m)^RUN \S+ completed at \S+ \| step 10/10 \| ")
-        # from a best file the schedule starts at step 0: the whole run, no range, no warning
+        # from a best file the schedule starts at step 0: the whole run, no range, and no warning although this
+        # cosine schedule without warm-up is in its decay from the first step (nothing is continued)
         head = self.header(out_best)
+        self.assertRegex("\n".join(head), r"(?m)^schedule: cosine: ")
         self.assertRegex("\n".join(head), r"(?m)^budget: 2 steps x 512 tokens \(8 x 1 x 64\) = 1,024 tokens = ")
         self.assertFalse([line for line in head if line.startswith("plan: WARNING: ") and "decay" in line], head)
         # a resumed run keeps the whole run's count
