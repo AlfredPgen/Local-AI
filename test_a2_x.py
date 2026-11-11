@@ -496,6 +496,56 @@ class Audit2Followers(unittest.TestCase):
             self.assertEqual(dataset_lines(export), missing)
         self.assertEqual(dataset_lines(file), [whole[0].replace("(found)", "(NOT FOUND)")])
 
+    # ---------------- X14: compare_models finds a model's training dataset as tiny_gpt does ----------------
+    def test_training_overlap_finds_a_dataset_stored_by_name_in_datasets(self):
+        """X14 (F284): a model from an export folder (or from another machine) records its training dataset
+        as a name and a fingerprint. compare_models.training_overlap asks tiny_gpt.resolve_dataset for the
+        folder, so the documents that model trained on are found in datasets/<name>/docs.tsv and left out;
+        the bare name was tried from the current folder only ('not on this computer'). A folder of that name
+        with another fingerprint, or a name without a fingerprint, is not taken."""
+        import compare_models
+        import data_prep
+        import tiny_gpt
+        work = os.path.join(self.tmp, "x14")
+        dataset = os.path.join(work, "compared")
+        with redirect_stdout(io.StringIO()):
+            data_prep.prepare(["--out", dataset, "--md-dir", H.Audit2PipelineTools.text_folder(self, "x14_text", 30),
+                               "--vocab-size", "700", "--val-fraction", "0.3", "--threads", "2", "--workers", "1"])
+        layout = {}
+        docs = compare_models.validation_documents(dataset, 4, 2000, layout)
+        self.assertGreater(len(docs), 1)
+        # the other model's dataset: the same documents, all of them in its training split
+        other, fingerprint = os.path.join(work, "datasets", "ds_other"), "b" * 64
+        os.makedirs(other)
+        with open(os.path.join(dataset, "docs.tsv"), encoding="utf-8", newline="") as f:
+            ledger = f.read()
+        self.assertIn("\tval\t", ledger)
+        with open(os.path.join(other, "docs.tsv"), "w", encoding="utf-8", newline="") as f:
+            f.write(ledger.replace("\tval\t", "\ttrain\t"))
+
+        def overlap(entry, written=fingerprint):
+            with open(os.path.join(other, "manifest.json"), "w", encoding="utf-8") as f:
+                json.dump({"format": data_prep.FORMAT, "format_version": data_prep.FORMAT_VERSION,
+                           "fingerprint": written}, f)
+            with unittest.mock.patch.object(tiny_gpt, "HERE", work), redirect_stdout(io.StringIO()) as out:
+                found = compare_models.training_overlap(docs, dataset, layout, {"B": entry})
+            return found, out.getvalue()
+
+        everything = set(range(len(docs)))
+        found, said = overlap({"path": "ds_other", "fingerprint": fingerprint})
+        self.assertEqual(found, (everything, {}, {}))
+        self.assertIn(f"model B was trained on {other}: {len(docs)} of these documents", said)
+        # stored on the other kind of system: the last part of the path is the name
+        self.assertEqual(overlap({"path": "/data/sets/ds_other/", "fingerprint": fingerprint})[0],
+                         (everything, {}, {}))
+        # a full path that is the dataset is used as before
+        self.assertEqual(overlap({"path": other, "fingerprint": fingerprint})[0], (everything, {}, {}))
+        missing = {"B": "its training dataset ds_other (or its docs.tsv) is not on this computer"}
+        self.assertEqual(overlap({"path": "ds_other", "fingerprint": fingerprint}, written="c" * 64),
+                         ((set(), missing, {}), ""), "datasets/ds_other was rebuilt since")
+        self.assertEqual(overlap({"path": "ds_other"}), ((set(), missing, {}), ""),
+                         "without a fingerprint a folder found by its name cannot be checked")
+
 
 if __name__ == "__main__":
     unittest.main()

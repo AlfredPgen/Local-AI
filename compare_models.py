@@ -215,6 +215,10 @@ def training_overlap(docs, dataset, layout, models):
         if not path:
             unknown[label] = "its checkpoint does not say which dataset it was trained on"
             continue
+        try:  # where that dataset is on this machine: an export folder stores its name and fingerprint only
+            path = tiny_gpt.resolve_dataset({"dataset": info})
+        except SystemExit:  # not here, or rebuilt since: the stored path stays and the lines below say why
+            pass
         if same_folder(path, dataset):
             unchecked[label] = f"it was trained on an earlier build of {dataset} (another fingerprint)"
             continue
