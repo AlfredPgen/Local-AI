@@ -38,6 +38,7 @@ plotting invented values.
 """
 
 import argparse
+import bisect
 import datetime
 import html
 import json
@@ -1461,12 +1462,14 @@ def improvement_points(points, start=0, window=1000):
     in (s - width, s], over the distance between the two groups' mean steps (`window` steps when the
     evaluations divide it evenly; any other --eval-every would give the fall over more steps than it says)."""
     width = improvement_width(points, window)
+    ordered = sorted(points, key=lambda point: point[0])  # by step: each group is one slice, found by bisection
+    steps = [t for t, _ in ordered]
     out = []
     for s, _ in points:
         if s < start + 2 * width:
             continue
-        before = [(t, v) for t, v in points if s - 2 * width < t <= s - width]
-        recent = [(t, v) for t, v in points if s - width < t <= s]
+        first, middle, last = (bisect.bisect_right(steps, s - k * width) for k in (2, 1, 0))
+        before, recent = ordered[first:middle], ordered[middle:last]
         if before and recent:
             apart = np.mean([t for t, _ in recent]) - np.mean([t for t, _ in before])
             fall = np.mean([v for _, v in before]) - np.mean([v for _, v in recent])
@@ -1587,9 +1590,9 @@ def plan_lines(history, ck):
     scores = _series(history, "val_loss")
     rate = improvement_points(scores, int(tc.get("warmup_steps") or 0))
     if rate:
-        gain, detail = rate[-1][1], ""
+        gain, detail, width = rate[-1][1], "", improvement_width(scores)
         timed = [(h["step"], h["train_seconds"]) for h in history
-                 if _finite(h.get("train_seconds")) and _finite(step) and h["step"] >= step - improvement_width(scores)]
+                 if _finite(h.get("train_seconds")) and _finite(step) and h["step"] >= step - width]
         if len(timed) > 1 and timed[-1][1] > timed[0][1]:
             per_day = gain / 1000 * (timed[-1][0] - timed[0][0]) / (timed[-1][1] - timed[0][1]) * 86400
             detail = f"{per_day:.3f} per 24 h of training"

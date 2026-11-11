@@ -373,7 +373,39 @@ class Audit2Viewer(unittest.TestCase):
                 self.assertAlmostEqual(v, 1.0, places=9, msg=(every, s))
         self.assertEqual(view_pt.improvement_width(pts), 1000)
         self.assertEqual(view_pt.improvement_width(line), 5000, "evaluations further apart than 1,000 steps")
-        sparse = [dict(h, step=10 * h["step"], val_loss=100.0 - h["step"] / 100, val_mix=None, val_per_source=None)
+        # the work grows with the number of evaluations, not with its square: the list is walked a fixed number
+        # of times (not twice for every evaluation), and the values are those of the definition, also for
+        # evaluations out of step order and a step that is there twice
+
+        def by_definition(points, start, window=1000):
+            width, out = view_pt.improvement_width(points, window), []
+            for s, _ in points:
+                before = [(t, v) for t, v in points if s - 2 * width < t <= s - width]
+                recent = [(t, v) for t, v in points if s - width < t <= s]
+                if s >= start + 2 * width and before and recent:
+                    apart = np.mean([t for t, _ in recent]) - np.mean([t for t, _ in before])
+                    out.append((s, float((np.mean([v for _, v in before]) - np.mean([v for _, v in recent]))
+                                         * (window / apart))))
+            return out
+
+        class Walked(list):
+            walks = 0
+
+            def __iter__(self):
+                Walked.walks += 1
+                return super().__iter__()
+
+        curve = [(200 * i, 9.0 * math.exp(-i / 40) + 0.01 * (i % 5)) for i in range(120)]
+        self.assertEqual(view_pt.improvement_points(Walked(curve), start=400), by_definition(curve, 400))
+        self.assertLessEqual(Walked.walks, 4)
+        mixed = curve[60:] + curve[:60] + [(4000, 7.5), (300, 8.0)]
+        got = view_pt.improvement_points(mixed, start=400)
+        self.assertEqual([s for s, _ in got], [s for s, _ in by_definition(mixed, 400)])
+        np.testing.assert_allclose([v for _, v in got], [v for _, v in by_definition(mixed, 400)], rtol=1e-12)
+        with unittest.mock.patch.object(view_pt, "improvement_width", wraps=view_pt.improvement_width) as width:
+            view_pt.plan_lines(full, ck)
+        self.assertLessEqual(width.call_count, 2, "the Plan tile does not ask for it once per evaluation")
+        sparse =[dict(h, step=10 * h["step"], val_loss=100.0 - h["step"] / 100, val_mix=None, val_per_source=None)
                   for h in full]  # 2,000 steps apart, 1.0 down per 1,000 steps
         fig, ax = one_axes()
         view_pt.panel_improvement(ax, sparse, ck)
