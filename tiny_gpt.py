@@ -3365,7 +3365,11 @@ def plan_with_time_budget(args, manifest, device, amp_dtype, fixed_cfg=None, ver
         memory the same shape again with activation checkpointing on (unless the command line turned it off),
         then with the micro-batch halved down to 1, before the shape counts as not fitting (tokens None). Without
         the retries an out-of-memory error would silently pick a smaller MODEL, or refuse a given shape, where a
-        memory option would do."""
+        memory option would do. A given shape (explicit) first halves its micro-batch down to 1, which costs
+        no compute: a plan that halving alone makes fit stays the plan it always was and keeps all its tokens
+        (checkpointing costs about a quarter of them in the same time). Only where that used to be the end,
+        checkpointing follows, with the batch options as given, and its own halving."""
+        given = a
         while True:
             try:
                 return trial(a) + (a,)
@@ -3377,10 +3381,12 @@ def plan_with_time_budget(args, manifest, device, amp_dtype, fixed_cfg=None, ver
                 if not is_oom(exc):
                     raise
                 c, st, _ = plan_run(a, manifest, device, amp_dtype, fixed_cfg=fixed_cfg)
-                if not st["activation_checkpointing"] and a.activation_checkpointing != "off":
+                halve_first = explicit and st["micro_batch"] > 1
+                if not st["activation_checkpointing"] and a.activation_checkpointing != "off" and not halve_first:
                     notes.append(f"time budget: d_model {c.d_model} ran out of memory in the speed test; "
                                  "measured again with activation checkpointing on")
-                    a = argparse.Namespace(**{**vars(a), "activation_checkpointing": "on"})
+                    a = argparse.Namespace(**{**vars(a), "activation_checkpointing": "on",
+                                              "batch_size": given.batch_size, "grad_accum": given.grad_accum})
                 elif st["micro_batch"] > 1:
                     notes.append(f"time budget: d_model {c.d_model} ran out of memory in the speed test at "
                                  f"micro-batch {st['micro_batch']}; measured again with {st['micro_batch'] // 2}")

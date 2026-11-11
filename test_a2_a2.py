@@ -283,8 +283,9 @@ class Audit2TinyGptB(unittest.TestCase):
 
     def test_time_budget_retries_memory_options_for_a_given_shape(self):
         """F347: with an explicit shape or --init-from (fixed_cfg) an out-of-memory speed test is repeated with
-        activation checkpointing first, then with the micro-batch halved, as on the ladder; only a shape that fits
-        with nothing is an error."""
+        the micro-batch halved down to 1 (which costs no compute: a plan that halving alone makes fit is the one
+        it was before), and where that used to be the error, with activation checkpointing on and the batch as
+        planned for it, then halved again; only a shape that fits with nothing is an error."""
         one = {"tokenizer": {"vocab_size": 16384},
                "sources": {"md": {"train": {"tokens": 1_000_000_000}, "doc_tokens_percentiles": {"90": 1000}}}}
         seen = []
@@ -307,11 +308,36 @@ class Audit2TinyGptB(unittest.TestCase):
                     unittest.mock.patch.object(tiny_gpt, "have_triton", return_value=False):
                 return tiny_gpt.plan_with_time_budget(args, one, CPU, None, fixed_cfg=fixed_cfg)
 
-        # explicit shape, out of memory unless checkpointing: one retry, no halving
+        # explicit shape that fits when the micro-batch is small enough: halved, no checkpointing, the same tokens
+        # per step and training tokens as the plan whose speed test fits at once
+        _, st_fits, _ = plan(["--d-model", "512"], lambda micro, ck: False)
+        self.assertEqual([(micro, ck) for _, _, micro, ck in seen], [(st_fits["micro_batch"], False)])
+        self.assertGreater(st_fits["micro_batch"], 16)
+        cfg_s, st_s, lines_s = plan(["--d-model", "512"], lambda micro, ck: micro > 16 and not ck)
+        self.assertEqual((st_s["micro_batch"], st_s["activation_checkpointing"]), (16, False))
+        self.assertTrue(all(not ck for _, _, _, ck in seen), seen)
+        self.assertEqual((st_s["tokens_per_step"], st_s["planned_train_tokens"], st_s["steps"]),
+                         (st_fits["tokens_per_step"], st_fits["planned_train_tokens"], st_fits["steps"]))
+        self.assertFalse(any("activation checkpointing on" in ln for ln in lines_s), lines_s)
+        # out of memory at every micro-batch above 1, checkpointing or not: micro-batch 1 without checkpointing,
+        # as before (checkpointing is not tried while halving still helps)
+        cfg_1, st_1, _ = plan(["--d-model", "512"], lambda micro, ck: micro > 1)
+        self.assertEqual((st_1["micro_batch"], st_1["activation_checkpointing"]), (1, False))
+        self.assertTrue(all(not ck for _, _, _, ck in seen), seen)
+        # explicit shape, out of memory unless checkpointing: halved down to 1 first (what used to end in the
+        # error), then one more test with checkpointing on, which gives the plan of --activation-checkpointing on
+        _, st_on, _ = plan(["--d-model", "512", "--activation-checkpointing", "on"], lambda micro, ck: False)
+        test_on = list(seen)  # the one speed test of that plan
         cfg, st, lines = plan(["--d-model", "512"], lambda micro, ck: not ck)
         self.assertEqual(cfg.d_model, 512)
         self.assertTrue(st["activation_checkpointing"])
-        self.assertEqual([ck for _, _, _, ck in seen], [False, True])
+        micros = [micro for _, _, micro, _ in seen]
+        self.assertEqual(micros[:-1], [micros[0] >> i for i in range(len(micros) - 1)])
+        self.assertGreater(micros[0], 1)
+        self.assertEqual(micros[-2], 1)
+        self.assertEqual([ck for _, _, _, ck in seen], [False] * (len(seen) - 1) + [True])
+        self.assertEqual(seen[-1:], test_on)
+        self.assertEqual(st, st_on)
         self.assertTrue(any("d_model 512 ran out of memory in the speed test; measured again with activation "
                             "checkpointing on" in ln for ln in lines), lines)
         # only --layers given: the notes name the planned width, never 'd_model None'
