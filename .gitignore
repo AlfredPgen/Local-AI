@@ -34,3 +34,5 @@ logs/
 # reports that tools/edit_weights.py and tools/compare_edit.py write next to checkpoints (they name local files)
 *_edit.json
 *_vs_original*
+.compile_cache/
+*_tokens.png
