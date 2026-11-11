@@ -91,8 +91,9 @@ def http_get(url, data=None, timeout=300, tries=6):
     "too many requests" (429) or "busy" (503) the wait is at least as long as
     the server's Retry-After asks (a line says so, because a request waiting in
     a worker thread prints nothing else). One request waits at most 10 minutes
-    in this way over all its tries, then the backoff alone is left: these waits
-    are plain sleeps in worker threads, which Ctrl+C does not interrupt."""
+    in this way over all its tries, then the backoff alone is left: while papers
+    are fetched these waits are plain sleeps in worker threads, which Ctrl+C
+    does not interrupt."""
     delay, patience = 3.0, MAX_SERVER_PAUSE  # patience: seconds of Retry-After waiting this request has left
     for attempt in range(tries):
         _wait_turn()
