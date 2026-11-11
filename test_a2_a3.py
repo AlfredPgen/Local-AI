@@ -407,6 +407,32 @@ class Audit2TinyGptC(unittest.TestCase):
         self.assertTrue(first.endswith(" | no best saved yet"), first)
         self.assertLess(out_n.index(first), out_n.index("DASHBOARD LAUNCH"))
 
+    # ---------------- pause and save messages ----------------
+    def test_second_ctrl_c_waits_for_the_pause_save(self):
+        """F226 (with F250): Ctrl+C says that the state is being saved, and a second Ctrl+C during that save is
+        held until the file is written instead of aborting it; the paused run resumes exactly."""
+        self.pipeline()
+        args = list(self.common[1:]) + ["--steps", "8", "--no-probes"]
+
+        def lines(text):
+            return re.findall(r"step +(\d+)/8 \| train ([\d.]+) \| val ([\d.]+)", text)
+
+        code, out_u = self.patched_run("none", 0, args + ["--name", "IU"])
+        self.assertEqual(code, 0, out_u)
+        # Ctrl+C inside step 4 (its batch read), and a SIGINT while the pause save of step 3 is being written
+        code, out = self.patched_run("interrupt_twice", 4, args + ["--name", "IT"])
+        self.assertEqual(code, 0, out)
+        self.assertNotIn("Traceback", out)
+        self.assertIn("Ctrl+C: saving the training state at step 3, please wait ...\n", out)
+        self.assertIn("\nPaused after step 3 (last completed update); saved ", out)
+        self.assertLess(out.index("Ctrl+C: saving"), out.index("Paused after step 3 "))
+        self.assertRegex(out, r"(?m)^RUN \S+ interrupted at ")
+        self.assertEqual(self.load("IT.pt")["step"], 3)
+        code, out_r = self.patched_run("none", 0, self.resume_args("IT"))
+        self.assertEqual(code, 0, out_r)
+        self.assertTrue(lines(out_u))
+        self.assertEqual(lines(out_u), lines(out_r), "the paused run must reproduce the uninterrupted one")
+
 
 if __name__ == "__main__":
     unittest.main()

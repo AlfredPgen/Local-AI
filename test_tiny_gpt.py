@@ -56,7 +56,7 @@ before = {}
 def next_batch(self):
     out = real_next(self)  # drawn first: a retry must rewind the sampler
     calls["next"] += 1
-    if mode == "interrupt" and calls["next"] == n:
+    if mode in ("interrupt", "interrupt_twice") and calls["next"] == n:
         raise KeyboardInterrupt
     if mode == "oom" and calls["next"] <= n:
         raise RuntimeError("CUDA out of memory (simulated)")
@@ -87,6 +87,8 @@ def clip(params, *a, **k):
 def save(obj, path):
     if obj.get("checkpoint_type") == "training" and not path.endswith("_crash.pt"):
         calls["save"] += 1
+        if mode == "interrupt_twice" and calls["save"] == 1:  # a second Ctrl+C while the pause save is written
+            signal.raise_signal(signal.SIGINT)
         # savefail: the first n training-state saves fail; saveflaky: of the first n, two in every three fail
         if (mode == "savefail" and calls["save"] <= n) or (
                 mode == "saveflaky" and calls["save"] <= n and calls["save"] % 3 != 0):

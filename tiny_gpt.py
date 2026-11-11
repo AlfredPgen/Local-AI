@@ -5200,24 +5200,29 @@ def _train(args):
             seg = time.perf_counter()
     except KeyboardInterrupt:
         status = "interrupted"
-        if seg is not None:  # the time since the last counted point was training
-            train_seconds += time.perf_counter() - seg
-        if done_step < step:
-            # Ctrl+C arrived inside a step, before its update (which Ctrl+C never
-            # splits). Rewind the sampler, dropout RNG and loss sums so --resume
-            # replays exactly that step, and save the last completed step.
-            rewind(step_start)
-            opt.zero_grad(set_to_none=True)
-            step = done_step
-        if bool(torch.isfinite(last_gnorm)):
-            saved = save(ckpt_path, False, step)
-            print(f"\nPaused after step {step:,} (last completed update); saved {saved}.\n"
-                  f"Resume with: python tiny_gpt.py --name {args.name} --resume")
-        else:
-            crash = os.path.join(args.out_dir, f"{args.name}_crash.pt")
-            atomic_save(payload(step, inference_only=False), crash)
-            print(f"\nPaused after step {step:,}, but the gradients were not finite: the state went to {crash}; "
-                  f"{ckpt_path} still holds the last good training state.")
+        # A second Ctrl+C is held until the state of this pause is written: it used to abort the save, and the
+        # checkpoint kept the last periodic state (up to --save-minutes of training lost).
+        with held:
+            if seg is not None:  # the time since the last counted point was training
+                train_seconds += time.perf_counter() - seg
+            if done_step < step:
+                # Ctrl+C arrived inside a step, before its update (which Ctrl+C never
+                # splits). Rewind the sampler, dropout RNG and loss sums so --resume
+                # replays exactly that step, and save the last completed step.
+                rewind(step_start)
+                opt.zero_grad(set_to_none=True)
+                step = done_step
+            print(f"\nCtrl+C: saving the training state at step {step:,}, please wait ...")
+            if bool(torch.isfinite(last_gnorm)):
+                saved = save(ckpt_path, False, step)
+                print(f"Paused after step {step:,} (last completed update); saved {saved}.\n"
+                      f"Resume with: python tiny_gpt.py --name {args.name} --resume")
+            else:
+                crash = os.path.join(args.out_dir, f"{args.name}_crash.pt")
+                atomic_save(payload(step, inference_only=False), crash)
+                print(f"Paused after step {step:,}, but the gradients were not finite: the state went to {crash}; "
+                      f"{ckpt_path} still holds the last good training state.")
+        held.hit = False  # a Ctrl+C held during the save asked for the pause that has just been made
     except BaseException as exc:
         status = "failed"
         fail_note = f"{type(exc).__name__}: {str(exc)[:200]}"
