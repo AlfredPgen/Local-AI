@@ -4752,7 +4752,10 @@ def _train(args):
                         "cuda": device_rng_state(device) if device.type == "cuda" else None,
                         "mps": device_rng_state(device) if device.type == "mps" else None},
                 "batcher": batcher.state_dict(),
-                "interval": {"loss_sum": float(interval_loss), "micro": interval_micro},
+                # a mixture of experts adds the sums of its balance figures (optional keys: a dense run has none)
+                "interval": {"loss_sum": float(interval_loss), "micro": interval_micro,
+                             **({"lb_sum": float(interval_lb), "z_sum": float(interval_z),
+                                 "counts": interval_counts.tolist()} if moe else {})},
             })
         return base
 
@@ -4828,6 +4831,17 @@ def _train(args):
     if interval_state:  # resumed between evaluations: the next "train" value covers the whole interval
         interval_loss += float(interval_state.get("loss_sum", 0.0))
         interval_micro = int(interval_state.get("micro", 0))
+        if moe:
+            # the balance sums of the interval so far; a checkpoint from before they were saved resumes with them
+            # at zero, as it always did (its first moe figures after the pause are then too low)
+            if interval_state.get("lb_sum") is not None:
+                interval_lb.fill_(float(interval_state["lb_sum"]))
+            if interval_state.get("z_sum") is not None:
+                interval_z.fill_(float(interval_state["z_sum"]))
+            if interval_state.get("counts") is not None:
+                saved_counts = torch.tensor(interval_state["counts"], dtype=torch.long)
+                if saved_counts.shape == interval_counts.shape:
+                    interval_counts.copy_(saved_counts)
     held = DeferInterrupt()
     # first-step out-of-memory: halve the micro-batch down to about 2k tokens (the planner's preference: micro 2 x
     # 132 without checkpointing beats 4 x 66 with it), then recompute blocks, then halve further

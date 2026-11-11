@@ -731,6 +731,36 @@ class Audit2TinyGptC(unittest.TestCase):
         self.assertIn("RuntimeError: the block failed (simulated)", out_c)
         self.assertRegex(out_c, r"(?m)^RUN \S+ failed at \S+ \| step 2/3 \| ")
 
+    # ---------------- mixture of experts: the balance figures across a pause ----------------
+    def test_moe_balance_figures_survive_a_pause_inside_an_interval(self):
+        """F252: the sums behind moe_lb, moe_z, moe_load and dead_experts are saved with the training state, so
+        the first metrics row after a pause between two evaluations covers the whole interval, as the training
+        loss does; a checkpoint without the keys resumes as before."""
+        self.pipeline()
+        args = self.common + ["--experts", "4", "--steps", "16", "--eval-every", "8", "--no-probes"]
+        code, out = base.run(args + ["--name", "MU"])
+        self.assertEqual(code, 0, out)
+        code, out = base.run(args + ["--name", "MS", "--stop-after-steps", "12"])
+        self.assertEqual(code, 0, out)
+        interval = self.load("MS.pt")["interval"]
+        self.assertEqual(sorted(interval), ["counts", "lb_sum", "loss_sum", "micro", "z_sum"])
+        self.assertEqual(interval["micro"], 4)
+        # per MoE block: 4 steps of 512 tokens, 2 experts a token
+        self.assertEqual({sum(row) for row in interval["counts"]}, {4 * 512 * 2})
+        self.assertEqual({len(row) for row in interval["counts"]}, {4})
+        code, out = base.run(["tiny_gpt.py"] + self.resume_args("MS"))
+        self.assertEqual(code, 0, out)
+        whole, paused = self.rows("MU")[-1], self.rows("MS")[-1]
+        self.assertEqual((whole["step"], paused["step"]), (16, 16))
+        self.assertEqual(paused["train_loss"], whole["train_loss"])
+        for key in ("moe_lb", "moe_z", "moe_load_max"):
+            self.assertAlmostEqual(paused[key], whole[key], delta=1e-6, msg=key)
+        self.assertEqual(paused["moe_load"], whole["moe_load"])
+        self.assertEqual(paused["dead_experts"], whole["dead_experts"])
+        # a dense run keeps the two keys it had
+        self.console_runs()
+        self.assertEqual(sorted(self.load("C.pt")["interval"]), ["loss_sum", "micro"])
+
 
 if __name__ == "__main__":
     unittest.main()
