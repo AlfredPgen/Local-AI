@@ -4504,6 +4504,9 @@ def _train(args):
                 except RuntimeError as exc:  # torch.cuda.OutOfMemoryError / MPS OOM are RuntimeErrors
                     if "out of memory" not in str(exc).lower() or eval_batch <= 1:
                         raise
+                    # the traceback holds the frames of the failed forward pass, and they its activations: cleared
+                    # first, or emptying the allocator returns nothing of them
+                    traceback.clear_frames(exc.__traceback__)
                     free_device_memory(device)
                     eval_batch = max(1, eval_batch // 2)
                     print(f"Out of memory during evaluation; retrying with {eval_batch} windows at a time.")
@@ -4987,6 +4990,7 @@ def _train(args):
                     oom_retries += 1
                     if oom_retries > 2:
                         raise
+                    traceback.clear_frames(exc.__traceback__)  # the failed pass's frames hold its activations
                     opt.zero_grad(set_to_none=True)
                     x = y = logits = flat = lse = loss = ce = zsum = output = aux = None
                     free_device_memory(device)
@@ -5003,6 +5007,7 @@ def _train(args):
                 # earlier out-of-memory retry) is retried once in eager mode; an eager failure is raised as it is
                 if not (oom or train_model is not model):
                     raise
+                traceback.clear_frames(exc.__traceback__)  # the failed pass's frames hold its activations
                 opt.zero_grad(set_to_none=True)
                 x = y = logits = flat = lse = loss = ce = zsum = output = aux = None  # drop the failed batch and its graph before retrying
                 free_device_memory(device)
@@ -5293,6 +5298,7 @@ def _train(args):
         # the step's tensors and graph are dropped first: after an out-of-memory error the full state (optimizer
         # included) needs the room, and if even that fails the weights alone are still worth keeping
         x = y = logits = flat = lse = loss = ce = zsum = output = aux = None
+        traceback.clear_frames(exc.__traceback__)  # and what the frames of the failed call still hold
         gc.collect()
         try:
             try:

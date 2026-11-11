@@ -56,6 +56,64 @@ tiny_gpt.launch_dashboard = launch
 tiny_gpt.last_dashboard_push = lambda png_name: 0.0  # no git call
 tiny_gpt.main(sys.argv[3:])
 '''
+# tiny_gpt.main(args) in a child process whose transformer block fails at the places of the comma list: 'eval' (the
+# first evaluation), 'oom<n>' (out of memory in the n-th batch drawn) or 'crash<n>' (another error there). The
+# failing forward holds an activation of its own; whether that tensor is still alive is printed when the allocator
+# is emptied for the retry and when the crash state is saved
+FRAMES_RUN = r'''
+import sys
+import weakref
+
+sys.path.insert(0, sys.argv[1])
+import tiny_gpt  # noqa: E402
+
+plan = [item for item in sys.argv[2].split(",") if item]
+seen = {"draws": 0, "refs": []}
+real_forward, real_next = tiny_gpt.TransformerBlock.forward, tiny_gpt.TokenBatcher.next
+real_free, real_save = tiny_gpt.free_device_memory, tiny_gpt.atomic_save
+
+
+def next_batch(self):
+    seen["draws"] += 1
+    return real_next(self)
+
+
+def forward(self, x, rope, cache=None, mask=None):
+    for where in ("eval",) if not self.training else (f"oom{seen['draws']}", f"crash{seen['draws']}"):
+        if where in plan:
+            plan.remove(where)
+            activation = x * 2.0  # referenced by this frame alone
+            seen["refs"].append((where, weakref.ref(activation)))
+            raise RuntimeError("the block failed (simulated)" if where.startswith("crash")
+                               else "CUDA out of memory (simulated)")
+    return real_forward(self, x, rope, cache, mask)
+
+
+def report():
+    for where, ref in seen["refs"]:
+        print(f"FAULT CHECK: {where}: the activation of the failed forward is "
+              f"{'freed' if ref() is None else 'alive'}")
+    seen["refs"].clear()
+
+
+def free(device):
+    report()
+    return real_free(device)
+
+
+def save(obj, path):
+    if path.endswith("_crash.pt"):
+        report()
+    return real_save(obj, path)
+
+
+tiny_gpt.device_memory_budget = lambda device: (8 * 2 ** 30, "8.0 GiB (test)")
+tiny_gpt.TransformerBlock.forward = forward
+tiny_gpt.TokenBatcher.next = next_batch
+tiny_gpt.free_device_memory = free
+tiny_gpt.atomic_save = save
+tiny_gpt.main(sys.argv[3:])
+'''
 
 
 class Audit2TinyGptC(unittest.TestCase):
@@ -640,6 +698,38 @@ class Audit2TinyGptC(unittest.TestCase):
         self.assertEqual(code, 0, out)
         self.assertIn("plan: architecture taken from --init-from ", out)
         self.assertNotIn("RoPE base stays", out)
+
+    # ---------------- out-of-memory retries ----------------
+    def test_failed_step_is_released_before_the_retry(self):
+        """F236: the handlers that retry after an out-of-memory error (evaluation, first step, later step) and
+        the crash path clear the frames of the failed call first; the exception's traceback used to keep the
+        activations of the failed forward pass alive while the allocator was emptied."""
+        self.pipeline()
+        script = os.path.join(self.tmp, "frames_run.py")
+        with open(script, "w", encoding="utf-8") as f:
+            f.write(FRAMES_RUN)
+        args = list(self.common[1:]) + ["--steps", "3", "--eval-every", "3", "--no-probes"]
+        # the baseline evaluation, step 1 (the first batch drawn) and step 2 (the third: step 1 is drawn twice)
+        code, out = base.run([script, HERE, "eval,oom1,oom3"] + args + ["--name", "FR"])
+        self.assertEqual(code, 0, out)
+        for line in ("Out of memory during evaluation; retrying with ",
+                     "Out of memory at the first step; retrying with the loss computed ",
+                     "Out of memory at step 2; retrying the same step (1/2)."):
+            self.assertIn(line, out)
+        checks = [line for line in out.splitlines() if line.startswith("FAULT CHECK: ")]
+        self.assertEqual(checks, [f"FAULT CHECK: {where}: the activation of the failed forward is freed"
+                                  for where in ("eval", "oom1", "oom3")], out)
+        self.assertRegex(out, r"(?m)^RUN \S+ completed at \S+ \| step 3/3 \| ")
+        # an error that ends the run: released before the crash state is written, and the traceback is whole
+        code, out_c = base.run([script, HERE, "crash2"] + args + ["--name", "FC"])
+        self.assertNotEqual(code, 0)
+        self.assertIn("FAULT CHECK: crash2: the activation of the failed forward is freed\n", out_c)
+        self.assertLess(out_c.index("FAULT CHECK: crash2"), out_c.index("FC_crash.pt for inspection"))
+        self.assertIn("Traceback (most recent call last):", out_c)
+        self.assertRegex(out_c, r'File ".*frames_run\.py", line \d+, in forward')
+        self.assertRegex(out_c, r'File ".*tiny_gpt\.py", line \d+, in _train')
+        self.assertIn("RuntimeError: the block failed (simulated)", out_c)
+        self.assertRegex(out_c, r"(?m)^RUN \S+ failed at \S+ \| step 2/3 \| ")
 
 
 if __name__ == "__main__":
