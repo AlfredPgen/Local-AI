@@ -2042,9 +2042,11 @@ class EnergyMeter:
     def co2e_g(self):
         return self.kwh() * self.grid
 
-    def short(self):
+    def short(self, co2e=True):
+        """'11.25 kWh, 1,407 g CO2e, £2.98'; co2e=False leaves out the carbon (the energy x a fixed intensity)."""
         cost = self.cost_gbp()
-        return f"{self.kwh():.2f} kWh, {self.co2e_g():,.0f} g CO2e" + (f", £{cost:.2f}" if cost is not None else "")
+        return (f"{self.kwh():.2f} kWh" + (f", {self.co2e_g():,.0f} g CO2e" if co2e else "")
+                + (f", £{cost:.2f}" if cost is not None else ""))
 
     def describe(self):
         gpu = (f"GPU {self.gpu_index} measured with nvidia-smi every {self.period:g} s" if self.gpu_measured
@@ -4707,8 +4709,8 @@ def _train(args):
                         "baseline": True, "time": now_iso()})
         write_metrics(history[-1])
         print(f"step {start_step:>6}/{total_steps} | baseline before training | val {ev['loss']:.3f} @{start_step}"
-              f" | ppl {math.exp(min(ev['loss'], 50)):,.1f} | bpb {ev['bpb']:.3f} "
-              f"| uniform-guess loss would be {math.log(cfg.vocab_size):.3f} (not counted as best)")
+              f" | bpb {ev['bpb']:.3f} | uniform-guess loss would be {math.log(cfg.vocab_size):.3f} "
+              "(not counted as best)")
 
     def run_seconds():
         """Wall-clock time of the whole run so far: earlier sessions plus this one."""
@@ -5125,8 +5127,8 @@ def _train(args):
                 print(f"step {step:>6}/{total_steps} | train {train_loss:.3f} | val {ev['loss']:.3f} @{step}"
                       + (f" | val(mix) {ev['loss_mix']:.3f}" if ev.get("loss_mix") is not None else "")
                       + (f" | val(ema) {ev_ema['loss']:.3f}" if ev_ema is not None else "")
-                      + f" | ppl {entry['ppl']:,.2f} | bpb {ev['bpb']:.3f} | lr {lr:.2e} | {tok_s:,.0f} tok/s | "
-                      f"{meter.short()} | {elapsed_text()} | ETA {fmt_dur(eta)}{moe_text} | {status_text}")
+                      + f" | bpb {ev['bpb']:.3f} | lr {lr:.2e} | {tok_s:,.0f} tok/s | "
+                      f"{meter.short(co2e=False)} | {elapsed_text()} | ETA {fmt_dur(eta)}{moe_text} | {status_text}")
                 last_print = time.perf_counter()
                 if args.sample_every and (step % args.sample_every == 0 or step == total_steps):
                     gen = torch.Generator().manual_seed(sample_gen_seed)

@@ -7,6 +7,7 @@ as child processes, TestFixes for the unit tests.
 import io
 import json
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -214,6 +215,88 @@ class Audit2TinyGptC(unittest.TestCase):
             self.assertNotRegex(line, r"^plan: (batch:|weights:|ctx |ratios:)")
         self.assertNotRegex(out, r"plan: unique training tokens U = [\d,]+ \(")  # no per-source list
         self.assertEqual([line for line in self.header(out_r) if line.startswith("plan: ")], [])
+
+    @staticmethod
+    def metric_lines(text):
+        return [line for line in text.splitlines() if re.match(r"step +\d+/\d+ \| train ", line)]
+
+    def test_evaluation_line_without_perplexity_and_carbon(self):
+        """F231: the evaluation line and the baseline line carry no perplexity and the energy without its carbon;
+        both stay in the metrics file, and the carbon on the RUN end line."""
+        out, _, out_r, _ = self.console_runs()
+        self.assertEqual(len(self.metric_lines(out_r)), 2, out_r)
+        self.assertNotRegex(out + out_r, r"(?m)^step +\d+/\d+ \|[^\n]*\| ppl ")
+        self.assertNotRegex(out + out_r, r"(?m)^step +\d+/\d+ \|[^\n]*g CO2e")
+        self.assertRegex(out_r, r"(?m)^step +8/8 \| train [^\n]*\| \d+\.\d{2} kWh, £\d+\.\d{2} \|")
+        self.assertRegex(out_r, r"(?m)^RUN .* kWh, [\d,]+ g CO2e, £")
+        last = self.rows("C")[-1]
+        self.assertGreater(last["ppl"], 1.0)
+        self.assertIn("co2e_g", last)
+
+    def test_validation_losses_are_printed_to_four_decimals(self):
+        """F229: val, prev and best on the evaluation line and val on the baseline line have four decimals (at
+        three, a NEW BEST could show the same value as the one it beat); train and val(mix) keep three."""
+        out, _, out_r, _ = self.console_runs()
+        self.assertRegex(out, r"(?m)^step +0/8 \| baseline before training \| val \d+\.\d{4} @0 \|")
+        self.assertRegex(out_r, r"(?m)^step +4/8 \| train \d+\.\d{3} \| val \d+\.\d{4} @4 \| val\(mix\) \d+\.\d{3} \|")
+        self.assertRegex(out_r, r"(?m)^step +8/8 \|[^\n]*\| (NEW BEST \(prev \d+\.\d{4} @4\)|best \d+\.\d{4} @4)$")
+        rows = {row["step"]: row for row in self.rows("C")}
+        self.assertIn(f"| val {rows[8]['val_loss']:.4f} @8 |", out_r)
+        self.assertIn(f"| val {rows[0]['val_loss']:.4f} @0 |", out)
+
+    def test_evaluation_line_shows_the_fact_probe_accuracy(self):
+        """F230: the fact-probe accuracy of an evaluation is on its line, after bpb; view_pt still reads the line."""
+        import view_pt
+        _, _, out_r, _ = self.console_runs()
+        rows = {row["step"]: row for row in self.rows("C")}
+        for line in self.metric_lines(out_r):
+            self.assertRegex(line, r"\| bpb \d+\.\d{3} \| probes \d+\.\d% \| lr ")
+            step, total, train, val, at, lr = view_pt.NEW_LINE.search(line).groups()
+            self.assertEqual((step, total), (at, "8"))
+            self.assertIn(f"| probes {rows[int(step)]['probe_acc']:.1%} |", line)
+
+    def test_durations_in_days_and_clock_times(self):
+        """F309: a duration of two days or more is printed in days and hours, and the evaluation line carries the
+        clock time in place of the session's and the run's age (those stay on the RUN end line)."""
+        self.assertEqual(tiny_gpt.fmt_dur(1_486_500), "17d 04h")
+        self.assertEqual(tiny_gpt.fmt_dur(172_800), "2d 00h")
+        self.assertEqual(tiny_gpt.fmt_dur(172_799), "47h 59m")
+        self.assertRegex(tiny_gpt.clock(), "^" + CLOCK + "$")
+        _, _, out_r, _ = self.console_runs()
+        for line in self.metric_lines(out_r):
+            self.assertRegex(line, r"\| " + CLOCK + r" \| ETA \d+m \d{2}s \| ")
+            self.assertNotIn("elapsed", line)
+        self.assertRegex(out_r, r"(?m)^RUN .* \| this session \d+:\d{2}:\d{2} \| whole run: \d+:\d{2}:\d{2} in total")
+
+    def test_heartbeat_line_is_short_and_follows_the_first_step(self):
+        """F234: the heartbeat line carries the step, the share done, the training loss, the speed, the clock time
+        and the time to the next evaluation; a session prints one after its first completed step, unless that
+        step has an evaluation or a --log-every line."""
+        out, _, out_r, _ = self.console_runs()
+        for text, step in ((out, 1), (out_r, 3)):
+            beats = [line for line in text.splitlines() if line.startswith("  ... step")]
+            self.assertEqual(len(beats), 1, text)
+            self.assertRegex(beats[0], r"^  \.\.\. step +%d/8 \| +[\d.]+%% \| train \d+\.\d{3} \| [\d,]+ tok/s \| %s \| "
+                                       r"next val in \d+m \d{2}s$" % (step, CLOCK))
+            self.assertNotIn("tokens |", beats[0])
+        code, out_p = base.run(self.common + ["--name", "H", "--steps", "2", "--eval-every", "2", "--log-every", "1",
+                                              "--no-probes"])
+        self.assertEqual(code, 0, out_p)
+        self.assertNotIn("  ... step", out_p)
+        self.assertRegex(out_p, r"(?m)^step +1/2 \| 50\.0%% \| train \d+\.\d{3} \| [\d,]+ tok/s \| %s \| next val in "
+                                r"\d+m \d{2}s$" % CLOCK)
+        code, out_q = base.run(self.common + ["--name", "H0", "--steps", "2", "--eval-every", "2", "--no-probes",
+                                              "--heartbeat-seconds", "0"])
+        self.assertEqual(code, 0, out_q)
+        self.assertNotIn("  ... step", out_q)
+
+    def test_end_line_without_an_evaluation_says_none(self):
+        """F242: a session that ends before its first evaluation ends with 'best val none', not 'inf @None'."""
+        out, _, out_r, _ = self.console_runs()
+        self.assertRegex(out, r"(?m)^RUN \S+ stopped at \S+ \| step 2/8 \| best val none \| last val none \| this session ")
+        self.assertNotIn("inf @None", out + out_r)
+        self.assertRegex(out_r, r"(?m)^RUN \S+ completed at \S+ \| step 8/8 \| best val \d+\.\d{4} @\d \| last val "
+                                r"\d+\.\d{4} @8 \| ")
 
 
 if __name__ == "__main__":

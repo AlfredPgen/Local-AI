@@ -672,7 +672,7 @@ class TestPipeline(unittest.TestCase):
         self.assertIn("initialised from", out_i)
         self.assertIn("time budget 0.01 h", out_i)
         # energy and carbon: metrics line, run summary, table, and a checkpoint total that adds up across --resume
-        self.assertRegex(out, r"\| \d+\.\d{2} kWh, [\d,]+ g CO2e, £\d+\.\d{2} \|")
+        self.assertRegex(out, r"\| \d+\.\d{2} kWh, £\d+\.\d{2} \|")
         self.assertIn("whole run", out)
         self.assertIn("energy_kwh", table.splitlines()[0])
         self.assertIn("Earlier sessions of this run", out_r)
