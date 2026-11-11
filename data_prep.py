@@ -2264,7 +2264,8 @@ def _prune_line_counts(counts, keep):
 
 
 class _Unresumable(SystemExit):
-    """A --resume that cannot continue (its spool is missing or cut short): no resume hint is printed for it."""
+    """A stop that --resume cannot continue from (the spool is missing or cut short, or the build kept no
+    document): no resume hint is printed for it."""
 
 
 def prepare(argv=None):
@@ -2281,9 +2282,14 @@ def prepare(argv=None):
     except BaseException as exc:
         work = state.get("work")  # only a spool this run created (never one kept by an earlier --keep-work)
         if work and os.path.isdir(work):
-            if os.path.isfile(os.path.join(work, STATE_NAME)):
+            spool_dir = state.get("spool_dir", work)
+            # a dataset that has its manifest is complete and --resume refuses it: a failure after that point
+            # (the token summary, the report) gets no resume hint, and nothing can use its work files any more
+            finished = os.path.isfile(os.path.join(os.path.abspath(args.out), "manifest.json"))
+            late = ("Build stopped after manifest.json was written: the token files, the tokenizer and docs.tsv "
+                    "are complete and can be used; report.md and its audit tables may be missing")
+            if os.path.isfile(os.path.join(work, STATE_NAME)) and not finished:
                 if not isinstance(exc, _Unresumable):  # its own message says that --resume cannot continue
-                    spool_dir = state.get("spool_dir", work)
                     print(f"Build stopped after pass 2; its work files are kept ({_spool_size(spool_dir) / 1e9:,.1f} "
                           f"GB of spool in {spool_dir}). Continue from them with:\n"
                           f"  python data_prep.py --out {args.out} --resume")
@@ -2291,16 +2297,21 @@ def prepare(argv=None):
                 # the frames of the stopped build still hold the spool being read and the signature file open,
                 # and Windows cannot delete an open file: drop their local variables first
                 traceback.clear_frames(sys.exc_info()[2])
-                spool_dir = state.get("spool_dir", work)
                 _cleanup(work, spool_dir, False)
                 left = [os.path.join(work, f) for f in sorted(os.listdir(work))] if os.path.isdir(work) else []
                 if spool_dir != work and os.path.isdir(spool_dir):
                     left += [os.path.join(spool_dir, f) for f in sorted(os.listdir(spool_dir)) if f.startswith("spool")]
                 if left:
-                    print(f"Build stopped; {len(left)} work file(s) could not be removed: {', '.join(left[:5])}"
-                          f"{' ...' if len(left) > 5 else ''}. Rerun the same command to rebuild.")
+                    print(f"{late if finished else 'Build stopped'}; {len(left)} work file(s) could not be removed: "
+                          f"{', '.join(left[:5])}{' ...' if len(left) > 5 else ''}."
+                          f"{'' if finished else ' Rerun the same command to rebuild.'}")
+                elif finished:
+                    print(f"{late}; removed its work files ({work}).")
                 else:
                     print(f"Build stopped; removed the work spool {work}. Rerun the same command to rebuild.")
+            elif finished:
+                print(f"{late}. Its work files are kept in {work}"
+                      + (f" and {spool_dir}" if spool_dir != work else "") + ".")
         raise
     finally:
         _release_lock(state.get("lock"))
@@ -2779,8 +2790,8 @@ def _prepare(args, state=None):
                           command=command, earlier=earlier)
             _cleanup(work, spool_dir, args.keep_work)
             if nothing_kept and not args.scan_only:
-                raise SystemExit(f"No document passed the filters; see {os.path.join(out, 'report.md')} and docs.tsv. "
-                                 "Loosen the filters and rebuild into a new --out (or pass --overwrite).")
+                raise _Unresumable(f"No document passed the filters; see {os.path.join(out, 'report.md')} and "
+                                   "docs.tsv. Loosen the filters and rebuild into a new --out (or pass --overwrite).")
             print(f"\nScan-only report written to {os.path.join(out, 'report.md')}")
             return out
 

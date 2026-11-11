@@ -175,6 +175,42 @@ class Audit2DataPrep(unittest.TestCase):
         self.assertIn("already exists", str(stop.exception))
         self.assertNotIn("stopped after pass 2", str(stop.exception))
 
+    def test_failure_after_the_manifest_advises_no_resume_and_leaves_no_work_files(self):
+        """--resume refuses a dataset that has its manifest, so a failure after that point (here: the report)
+        must not advise it, and the work files nothing can continue from are removed (kept with --keep-work)."""
+        full = OSError(28, "No space left on device")
+        for name, extra in (("f080_late", []), ("f080_late_wd", ["--work-dir", self.folder("f080_late_work")]),
+                            ("f080_late_keep", ["--keep-work"])):
+            with self.subTest(name=name):
+                out = os.path.join(self.tmp, name)
+                with unittest.mock.patch.object(data_prep, "_write_report", side_effect=full):
+                    with redirect_stdout(io.StringIO()) as buf, self.assertRaises(OSError):
+                        data_prep.prepare(["--out", out] + extra + self.base_args())
+                printed = buf.getvalue()
+                self.assertNotIn("Continue from them", printed)
+                self.assertNotIn("python data_prep.py", printed)
+                self.assertIn("manifest.json was written", printed)
+                self.assertEqual(data_prep.read_manifest(out)["fingerprint"],
+                                 data_prep.read_manifest(self.plain())["fingerprint"])
+                data_prep.open_token_files(out, verify=True)  # the dataset is whole
+                work = os.path.join(out, "_work")
+                if "--keep-work" in extra:
+                    self.assertTrue(os.path.isfile(os.path.join(work, data_prep.STATE_NAME)))
+                    self.assertIn(f"kept in {work}", printed)
+                else:
+                    self.assertFalse(os.path.exists(work), printed)
+                    self.assertIn("removed its work files", printed)
+                if "--work-dir" in extra:
+                    self.assertEqual(os.listdir(extra[1]), [], "the spool sub-folder of --work-dir is gone too")
+
+    def test_build_that_keeps_no_document_advises_no_resume(self):
+        out = os.path.join(self.tmp, "f080_none")
+        with redirect_stdout(io.StringIO()) as buf, self.assertRaises(SystemExit) as stop:
+            data_prep.prepare(["--out", out, "--keep-work", "--min-chars", "100000000"] + self.base_args())
+        self.assertIn("No document passed the filters", str(stop.exception))
+        self.assertIn("Work files kept in", buf.getvalue())
+        self.assertNotIn("--resume", buf.getvalue())
+
     # ---------------- F081: --resume names the options it ignores ----------------
     def test_resume_names_the_options_it_ignores(self):
         out = os.path.join(self.tmp, "f081")
