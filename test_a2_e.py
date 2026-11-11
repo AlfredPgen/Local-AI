@@ -135,6 +135,38 @@ class Audit2Downloaders(unittest.TestCase):
         self.assertEqual(ax.read_report(report, limits), {ROW["id"]: "ok"})
         self.assertEqual(limits, {})
 
+    def test_f118_latex_failure_reason_holds_no_temporary_path(self):
+        """F118: pandoc starts a parse error with the name of the file it was given, so the recorded
+        reason must not begin with the temporary folder (the 80 characters would end before the error,
+        and no two rows would be alike). A pandoc that ran out of time is recorded as that, not as the
+        start of its command line."""
+        import subprocess
+        seen = []
+
+        def parse_error(cmd, **kwargs):  # pandoc's wording, with the source name as it was given
+            seen.append((cmd[1], os.path.isfile(os.path.join(kwargs["cwd"], cmd[1]))))
+            message = f'Error at "{cmd[1]}" (line 3, column 5):\nunexpected end of input\nexpecting a closing brace\n'
+            return subprocess.CompletedProcess(cmd, 64, b"", message.encode("utf-8"))
+
+        with unittest.mock.patch.object(ax.subprocess, "run", side_effect=parse_error):
+            result = self.convert(TEX.encode())
+        self.assertEqual(seen, [("paper.tex", True)])  # the name alone, and it is found from the working folder
+        self.assertEqual(result["status"], "ok")
+        self.assertTrue(result["method"].startswith(
+            'pdf (latex failed: RuntimeError: Error at "paper.tex" (line 3, column 5): unexpected end of input'),
+            result["method"])
+        self.assertNotIn(tempfile.gettempdir(), result["method"])
+        self.assertNotIn("arxiv_", result["method"])
+
+        def too_slow(cmd, **kwargs):
+            raise subprocess.TimeoutExpired(cmd, kwargs["timeout"])
+
+        with unittest.mock.patch.object(ax.subprocess, "run", side_effect=too_slow):
+            result = self.convert(TEX.encode())
+        self.assertEqual((result["status"], result["method"]),
+                         ("ok", f"pdf (latex failed: TimeoutExpired: timed out after {ax.PANDOC_SECONDS:g} s)"))
+        self.assertIsNone(ax._TIMEOUT_RE.fullmatch(result["method"]))  # not taken for a PDF that ran out of time
+
     def test_f124_pdf_route_drops_references_and_short_back_matter(self):
         """F124: Markdown from a PDF loses its reference list and short back-matter sections; a long
         section under a back-matter heading that is no reference list (PDF headings are often missing,

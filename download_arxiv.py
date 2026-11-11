@@ -688,9 +688,11 @@ def run_pandoc(tex, pandoc):
         src = os.path.join(tmp, "paper.tex")
         with open(src, "w", encoding="utf-8") as handle:
             handle.write(tex)
-        result = subprocess.run([pandoc, src, "-f", "latex", "-t", PANDOC_TO, "--wrap=none", "--sandbox",
-                                 "--shift-heading-level-by=1"], capture_output=True, timeout=PANDOC_SECONDS,
-                                cwd=tmp)
+        # the file by its name alone (cwd is its folder): pandoc starts every parse error with the name it was
+        # given, and the report keeps the start of that message as the reason
+        result = subprocess.run([pandoc, os.path.basename(src), "-f", "latex", "-t", PANDOC_TO, "--wrap=none",
+                                 "--sandbox", "--shift-heading-level-by=1"], capture_output=True,
+                                timeout=PANDOC_SECONDS, cwd=tmp)
     if result.returncode != 0:
         raise RuntimeError(result.stderr.decode("utf-8", "replace").strip()[:200] or "pandoc failed")
     return result.stdout.decode("utf-8", "replace")
@@ -843,7 +845,9 @@ def convert_paper(row, blob, out_dir, min_body, pandoc, pdf_seconds=PDF_SECONDS,
             md, method = latex_markdown(blob, row["title"], row.get("abstract", ""), pandoc)
         except (subprocess.TimeoutExpired, RuntimeError, ValueError, tarfile.TarError, EOFError, OSError,
                 zlib.error) as exc:
-            md, method = None, f"latex failed: {type(exc).__name__}: {_flat(str(exc))[:80]}"
+            # a time-out's own text is pandoc's command line (two long paths), not a reason
+            why = f"timed out after {exc.timeout:g} s" if isinstance(exc, subprocess.TimeoutExpired) else str(exc)
+            md, method = None, f"latex failed: {type(exc).__name__}: {_flat(why)[:80]}"
         if md is not None and len(md) - len(row["title"]) - len(row.get("abstract", "")) < min_body:
             md, method = None, "latex too short"
     if md is None:  # PDF-only submission, unreadable LaTeX or no source: the PDF
