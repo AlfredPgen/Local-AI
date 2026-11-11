@@ -3664,7 +3664,7 @@ def parse_args(argv=None):
                    help="adamw (default), or muon: Muon for the matrices inside the blocks and AdamW for the embedding "
                         "and norm gains, both driven by --lr and the schedule (Muon's step is scaled to AdamW's "
                         "update size); resumed runs keep their optimizer")
-    g.add_argument("--z-loss", type=float, default=1e-4,
+    g.add_argument("--z-loss", type=float,
                    help="weight of the z-loss stability term (0 disables; resumed runs keep their setting)")
     g.add_argument("--ema", metavar="DECAY|on|off",
                    help="exponential moving average of the weights (fp32, on the CPU, debiased so it never holds the "
@@ -4417,8 +4417,10 @@ def _train(args):
         mix_alpha = float(settings.get("mix_alpha", 1.0)) if resume_obj is not None else 1.0
     mix = mix_weights(mix_text, arrays["train"], {n: len(a) for n, a in arrays["train"].items()}, mix_alpha)
     byte_tables = tuple(torch.from_numpy(t) for t in tok.byte_tables())
-    z_loss = float(settings.setdefault("z_loss", args.z_loss if resume_obj is None else 0.0))
-    if resume_obj is not None and args.z_loss != settings["z_loss"] and args.z_loss != 1e-4:
+    # a new run: 1e-4 unless --z-loss says otherwise; a resumed run from before the setting existed had none
+    z_loss = float(settings.setdefault("z_loss", (1e-4 if args.z_loss is None else args.z_loss)
+                                       if resume_obj is None else 0.0))
+    if resume_obj is not None and args.z_loss is not None and args.z_loss != settings["z_loss"]:
         print(f"Note: --z-loss ignored on --resume; this run keeps z_loss {settings['z_loss']:g}.")
     if resume_obj is None and args.eval_tokens is None:  # new run: the size follows the tokens between evaluations
         largest_val = max((len(a) - 1 for a in arrays["val"].values()), default=0)

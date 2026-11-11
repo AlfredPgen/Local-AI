@@ -582,6 +582,17 @@ class Audit2TinyGptC(unittest.TestCase):
         out_flags, _ = self.notes_runs()
         self.assertRegex(out_flags, r"(?m)^budget: 8 steps x 512 tokens \(8 x 1 x 64\) = 4,096 tokens = ")
 
+    def test_z_loss_given_on_resume_is_noted_whatever_its_value(self):
+        """F257: --z-loss has no default of its own to compare with, so a resumed run that is given the value a
+        new run would use (1e-4) is told that its own setting stays; without the option nothing is said."""
+        self.assertIsNone(tiny_gpt.parse_args(["--name", "x", "--out-dir", self.tmp]).z_loss)
+        out_flags, out_plain = self.notes_runs()
+        self.assertIn("Note: --z-loss ignored on --resume; this run keeps z_loss 0.\n", out_flags)
+        self.assertNotIn("--z-loss", out_plain)
+        self.assertEqual(self.load("N.pt")["train_config"]["z_loss"], 0.0)
+        _, tail, _, _ = self.console_runs()  # a new run without the option
+        self.assertIn('"z_loss": 0.0001', tail)
+
 
 if __name__ == "__main__":
     unittest.main()
