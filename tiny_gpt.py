@@ -5127,7 +5127,9 @@ def _train(args):
                 print(f"step {step:>6}/{total_steps} | train {train_loss:.3f} | val {ev['loss']:.4f} @{step}"
                       + (f" | val(mix) {ev['loss_mix']:.3f}" if ev.get("loss_mix") is not None else "")
                       + (f" | val(ema) {ev_ema['loss']:.4f}" if ev_ema is not None else "")
-                      + f" | bpb {ev['bpb']:.3f} | lr {lr:.2e} | {tok_s:,.0f} tok/s | "
+                      + f" | bpb {ev['bpb']:.3f}"
+                      + (f" | probes {probe_acc:.1%}" if probe_acc is not None else "")
+                      + f" | lr {lr:.2e} | {tok_s:,.0f} tok/s | "
                       f"{meter.short(co2e=False)} | {elapsed_text()} | ETA {fmt_dur(eta)}{moe_text} | {status_text}")
                 last_print = time.perf_counter()
                 if args.sample_every and (step % args.sample_every == 0 or step == total_steps):
