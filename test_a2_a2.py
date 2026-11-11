@@ -706,3 +706,49 @@ class Audit2TinyGptB(unittest.TestCase):
                 config = json.load(handle)
             self.assertEqual((config["step"], config["weights"], config["metrics"]),
                              (7, "raw", {"best_val": 5.5, "best_step": 6}), folder)
+
+    def test_export_keeps_dataset_settings_and_weights_label(self):
+        """F284: an export folder records the dataset (name and fingerprint only: no folder of this machine),
+        the training settings and which weights it holds, and load_exported hands them on, so the dataset can
+        be found again; a checkpoint or an older export folder without them still loads."""
+        runs = os.path.join(self.tmp, "export_keys")
+        dataset = os.path.join(runs, "ds_toy")
+        os.makedirs(dataset)
+        fingerprint = "f" * 64
+        with open(os.path.join(dataset, "manifest.json"), "w", encoding="utf-8") as handle:
+            json.dump({"format": tiny_gpt.data_prep.FORMAT, "format_version": tiny_gpt.data_prep.FORMAT_VERSION,
+                       "fingerprint": fingerprint}, handle)
+        settings = {"steps": 10, "optimizer": "muon", "betas": [0.9, 0.95], "lr": 1e-3, "doc_mask": False,
+                    "mix": None}
+        self._toy_checkpoint(runs, train_config=settings, weights="ema", ema_decay=0.999,
+                             dataset={"path": dataset + os.sep, "fingerprint": fingerprint,
+                                      "train_tokens": {"md": 1000}, "val_tokens": {"md": 100}})
+        export = os.path.join(runs, "exp")
+        self._quiet(tiny_gpt.cmd_export, self._args(runs, "--export", export))
+        with open(os.path.join(export, "config.json"), encoding="utf-8") as handle:
+            config = json.load(handle)
+        self.assertEqual(config["dataset"], {"path": "ds_toy", "fingerprint": fingerprint})
+        self.assertEqual(config["train_config"], settings)
+        back = tiny_gpt.load_exported(export)
+        self.assertEqual((back["dataset"], back["train_config"], back["weights"]),
+                         (config["dataset"], settings, "ema"))
+        with unittest.mock.patch.object(tiny_gpt, "HERE", runs):  # found by its name, checked by its fingerprint
+            self.assertEqual(tiny_gpt.resolve_dataset(back), os.path.join(runs, "ds_toy"))
+        self.assertEqual(tiny_gpt.load_for_inference(export)[3]["train_config"], settings)
+        # a checkpoint that records neither, and an export folder written before the keys existed
+        plain = os.path.join(self.tmp, "export_keys_plain")
+        self._toy_checkpoint(plain)
+        export_plain = os.path.join(plain, "exp")
+        self._quiet(tiny_gpt.cmd_export, self._args(plain, "--export", export_plain))
+        with open(os.path.join(export_plain, "config.json"), encoding="utf-8") as handle:
+            config = json.load(handle)
+        self.assertNotIn("dataset", config)
+        self.assertNotIn("train_config", config)
+        del config["weights"]
+        with open(os.path.join(export_plain, "config.json"), "w", encoding="utf-8") as handle:
+            json.dump(config, handle)
+        old = tiny_gpt.load_exported(export_plain)
+        self.assertEqual((old["dataset"], old["train_config"], old["weights"]), (None, None, "raw"))
+        with self.assertRaises(SystemExit) as caught:
+            tiny_gpt.resolve_dataset(old)
+        self.assertIn("records no dataset", str(caught.exception))

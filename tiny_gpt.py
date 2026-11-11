@@ -3856,7 +3856,9 @@ def load_exported(folder):
     return {"format": CHECKPOINT_FORMAT, "format_version": FORMAT_VERSION, "checkpoint_type": "inference",
             "model_config": config["model_config"], "model": tensors,
             "tokenizer": {**config["tokenizer"], "proto": proto}, "step": config.get("step"),
-            "metrics": config.get("metrics", {}), "exported_from": config.get("source_checkpoint")}
+            "metrics": config.get("metrics", {}), "exported_from": config.get("source_checkpoint"),
+            "dataset": config.get("dataset"), "train_config": config.get("train_config"),
+            "weights": config.get("weights", "raw")}
 
 
 def load_any(path, trust=False, mmap=False):
@@ -3919,6 +3921,13 @@ def cmd_export(args):
               "metrics": {"best_val": metrics.get("best_val", obj.get("best_val")),
                           "best_step": metrics.get("best_step", obj.get("best_val_step"))},
               "exported": now_iso()}
+    dataset = obj.get("dataset")
+    if isinstance(dataset, dict) and dataset.get("path"):
+        # the folder's name and the fingerprint find the dataset again (resolve_dataset); no folder of this machine
+        config["dataset"] = {"path": os.path.basename(os.path.normpath(dataset["path"])),
+                             "fingerprint": dataset.get("fingerprint")}
+    if obj.get("train_config"):
+        config["train_config"] = obj["train_config"]
     with open(os.path.join(out, "config.json"), "w", encoding="utf-8") as handle:
         json.dump(config, handle, indent=2)
     back, _ = read_safetensors(os.path.join(out, "model.safetensors"))
