@@ -501,6 +501,65 @@ class Audit2TinyGptC(unittest.TestCase):
         self.assertEqual(code, 0, out)
         self.assertEqual(self.load("R239.pt")["step"], 6)
 
+    # ---------------- notes about options a resumed or continued run does not take ----------------
+    def notes_runs(self):
+        """A finished toy run N (8 steps, z-loss off, RoPE base 500, a weight decay that is not the default),
+        then two resumes of it that have nothing left to train and so only print their notes and header: one
+        with options a resumed run ignores, one plain. Returns the two outputs."""
+        if "notes" not in self.cache:
+            self.pipeline()
+            code, out = base.run(self.common + ["--name", "N", "--steps", "8", "--eval-every", "4", "--no-probes",
+                                                "--z-loss", "0", "--rope-base", "500", "--weight-decay", "0.1"])
+            self.assertEqual(code, 0, out)
+            code, out_flags = base.run(["tiny_gpt.py"] + self.resume_args("N") + [
+                "--grad-clip", "0.123", "--decay-frac", "0.5", "--weight-decay", "0.9", "--rope-base", "500",
+                "--ffn-hidden", "64", "--beta2", "0.5", "--z-loss", "1e-4"])
+            self.assertEqual(code, 0, out_flags)
+            code, out_plain = base.run(["tiny_gpt.py"] + self.resume_args("N"))
+            self.assertEqual(code, 0, out_plain)
+            for text in (out_flags, out_plain):
+                self.assertIn("nothing to train", text)
+            self.cache["notes"] = (out_flags, out_plain)
+        return self.cache["notes"]
+
+    def init_runs(self):
+        """Two short runs continued from N with --init-from: from its best file with options that belong to
+        the checkpoint's architecture, and from its training state (step 8) for two more steps."""
+        if "init" not in self.cache:
+            self.notes_runs()
+            short = self.common + ["--eval-every", "2", "--no-probes"]
+            code, out_best = base.run(short + ["--name", "I1", "--init-from", os.path.join(self.runs, "N_best.pt"),
+                                               "--steps", "2", "--d-model", "128", "--tie-embeddings", "off",
+                                               "--rope-base", "2000"])
+            self.assertEqual(code, 0, out_best)
+            code, out_state = base.run(short + ["--name", "I2", "--init-from", os.path.join(self.runs, "N.pt"),
+                                                "--train-tokens", "1024"])
+            self.assertEqual(code, 0, out_state)
+            self.cache["init"] = (out_best, out_state)
+        return self.cache["init"]
+
+    def test_ignored_options_are_named_on_resume_and_init_from(self):
+        """F238: --resume names every option it does not take, also those with a default (when the value given
+        is neither the default nor the run's own), and a plain --resume prints no note; --init-from says which
+        architecture options the checkpoint overrides."""
+        out_flags, out_plain = self.notes_runs()
+        note = [line for line in out_flags.splitlines() if "ignored on --resume (the checkpoint's" in line]
+        self.assertEqual(len(note), 1, out_flags)
+        for flag in ("--grad-clip", "--decay-frac", "--weight-decay", "--rope-base", "--ffn-hidden", "--beta2"):
+            self.assertIn(flag, note[0])
+        for flag in ("--beta1", "--schedule", "--decay-shape", "--d-model"):
+            self.assertNotIn(flag, note[0])
+        self.assertNotIn("ignored on --resume", out_plain)  # although the run's weight decay is not the default
+        self.assertEqual(self.load("N.pt")["train_config"]["weight_decay"], 0.1)
+        out_best, _ = self.init_runs()
+        plan = [line for line in self.header(out_best) if line.startswith("plan: ")]
+        for start in ("plan: --d-model 128 ignored: ", "plan: --tie-embeddings off ignored: ",
+                      "plan: --rope-base 2000 ignored: "):
+            self.assertEqual(sum(line.startswith(start) for line in plan), 1, plan)
+        self.assertFalse([line for line in plan if line.startswith(("plan: --layers", "plan: --heads",
+                                                                    "plan: --kv-heads", "plan: --ffn-hidden"))])
+        self.assertIn("model: d_model 64, 2 layers, 4 heads / 2 KV, ctx 64, vocabulary 700", self.header(out_best))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -3523,6 +3523,12 @@ def plan_table(vocab, device, amp_dtype, r, max_epochs, optimizer="adamw"):
 # ---------------------------------------------------------------------------
 # Argument parsing
 # ---------------------------------------------------------------------------
+# The defaults of the options a run fixes when it starts and --resume does not take. parse_args reads them from
+# here, and a resumed run compares a value with them: one that is neither the default nor the run's own was typed.
+FIXED_OPTION_DEFAULTS = {"schedule": "wsd", "decay_frac": 0.2, "decay_shape": "1-sqrt",
+                         "weight_decay": WEIGHT_DECAY_DEFAULT, "beta1": 0.9, "beta2": 0.95, "grad_clip": 1.0}
+
+
 def parse_args(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     g = p.add_argument_group("mode")
@@ -3631,16 +3637,19 @@ def parse_args(argv=None):
                         "cosine); on --resume it may still be changed before the decay phase begins")
     g.add_argument("--warmup-steps", type=int,
                    help="default: 2 %% of the steps, between 50 and 2,000 and at most a tenth of the steps")
-    g.add_argument("--schedule", choices=("wsd", "cosine"), default="wsd")
-    g.add_argument("--decay-frac", type=float, default=0.2, help="WSD: share of steps in the final decay")
-    g.add_argument("--decay-shape", choices=("1-sqrt", "cosine", "linear"), default="1-sqrt")
-    g.add_argument("--weight-decay", type=float, default=WEIGHT_DECAY_DEFAULT,
+    g.add_argument("--schedule", choices=("wsd", "cosine"), default=FIXED_OPTION_DEFAULTS["schedule"])
+    g.add_argument("--decay-frac", type=float, default=FIXED_OPTION_DEFAULTS["decay_frac"],
+                   help="WSD: share of steps in the final decay")
+    g.add_argument("--decay-shape", choices=("1-sqrt", "cosine", "linear"),
+                   default=FIXED_OPTION_DEFAULTS["decay_shape"])
+    g.add_argument("--weight-decay", type=float, default=FIXED_OPTION_DEFAULTS["weight_decay"],
                    help="decoupled weight decay on the matrices (default %g: lr x weight decay as at the published "
                         "rates, the table rate being %g times those); resumed runs keep their setting"
                         % (WEIGHT_DECAY_DEFAULT, LR_TABLE_FACTOR))
-    g.add_argument("--beta1", type=float, default=0.9)
-    g.add_argument("--beta2", type=float, default=0.95)
-    g.add_argument("--grad-clip", type=float, default=1.0, help="clip the gradient norm to this (0 = off)")
+    g.add_argument("--beta1", type=float, default=FIXED_OPTION_DEFAULTS["beta1"])
+    g.add_argument("--beta2", type=float, default=FIXED_OPTION_DEFAULTS["beta2"])
+    g.add_argument("--grad-clip", type=float, default=FIXED_OPTION_DEFAULTS["grad_clip"],
+                   help="clip the gradient norm to this (0 = off)")
     g.add_argument("--activation-checkpointing", choices=("auto", "on", "off"), default="auto",
                    help="recompute each block in the backward pass instead of storing its activations: much less "
                         "memory, 21-32 %% more step time (auto: only when the model would not otherwise fit with a "
@@ -4305,11 +4314,18 @@ def _train(args):
                 print(f"Note: micro-batch {old_micro} x {old_accum} -> {new_micro} x {new_accum} (same {tps:,} tokens "
                       "per step; the random windows drawn after this resume differ from an uninterrupted run, "
                       "same mixture).")
-        ignored = [f"--{k.replace('_', '-')}" for k in ("d_model", "layers", "heads", "kv_heads", "ctx", "lr",
+        ignored = [f"--{k.replace('_', '-')}" for k in ("d_model", "layers", "heads", "kv_heads", "ctx",
+                                                        "ffn_hidden", "rope_base", "lr",
                                                         "dropout", "warmup_steps",
                                                         "epochs", "train_tokens", "time_budget_hours",
                                                         "tokens_per_step")
                    if getattr(args, k) is not None]
+        # options with a default: named when the value is neither that default (not typed, as far as can be told)
+        # nor the run's own, so a plain --resume of a run started under an older default says nothing
+        betas = list(settings.get("betas") or (None, None))
+        kept = {**{k: settings.get(k) for k in FIXED_OPTION_DEFAULTS}, "beta1": betas[0], "beta2": betas[1]}
+        ignored += [f"--{k.replace('_', '-')}" for k, default in FIXED_OPTION_DEFAULTS.items()
+                    if getattr(args, k) != default and getattr(args, k) != kept[k]]
         if args.tie_embeddings == "off" and cfg.tie_embeddings:
             ignored.append("--tie-embeddings off")
         if args.qk_norm is not None and (args.qk_norm == "on") != cfg.qk_norm:
@@ -4364,6 +4380,14 @@ def _train(args):
         for flag, value, have in (("--router", args.router, cfg.router), ("--balance", args.balance, cfg.balance)):
             if value is not None and value != have:
                 plan_lines.append(f"{flag} {value} ignored: the checkpoint's model keeps {have}")
+        for flag, value, have in (("--d-model", args.d_model, cfg.d_model), ("--layers", args.layers, cfg.n_layers),
+                                  ("--heads", args.heads, cfg.n_heads), ("--kv-heads", args.kv_heads, cfg.n_kv_heads),
+                                  ("--ffn-hidden", args.ffn_hidden, cfg.ffn_hidden),
+                                  ("--rope-base", args.rope_base, cfg.rope_base)):
+            if value is not None and value != have:
+                plan_lines.append(f"{flag} {value:g} ignored: the checkpoint's model keeps {have:g}")
+        if args.tie_embeddings == "off" and cfg.tie_embeddings:
+            plan_lines.append("--tie-embeddings off ignored: the checkpoint's model keeps its tied embedding")
         if cfg.ctx != stored_ctx:
             plan_lines.append(f"model was trained at ctx {stored_ctx}; continuing at {cfg.ctx} (RoPE tables rebuilt "
                               "for the new length, weights unchanged)")
