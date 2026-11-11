@@ -14,7 +14,7 @@ import sys
 import tempfile
 import unittest
 import unittest.mock
-from contextlib import redirect_stdout
+from contextlib import ExitStack, redirect_stdout
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -840,6 +840,37 @@ class Audit2Downloaders(unittest.TestCase):
         self.assertEqual((calls, grown), (8, fresh()))
         self.assertEqual(run()[:2], (0, grown))
         self.assertFalse([name for name in os.listdir(os.path.join(self.tmp, "metadata")) if name.endswith(".part")])
+
+    def test_f144_stopped_write_of_the_matches_leaves_no_part_file(self):
+        """F144: a run that is stopped, or fails, while it writes the scored matches removes its unfinished
+        file (matches.tsv.<pid>.part, up to a gigabyte on the real harvest: the next run has another
+        process number and would never touch it); the matches of the run before stay as they were."""
+        records, keywords, _ = self.keyword_records()
+        folder, path = os.path.dirname(records), os.path.join(self.tmp, "list.tsv")
+        cache = os.path.join(folder, "matches.tsv")
+
+        def score(**failing):
+            """keyword_list scoring again, with the named os functions raising."""
+            with ExitStack() as stack:
+                stack.enter_context(redirect_stdout(io.StringIO()))
+                for name, failure in failing.items():
+                    stack.enter_context(unittest.mock.patch.object(pmc.os, name, side_effect=failure))
+                return pmc.keyword_list(records, keywords, 3, 3, 100, "density", path, rebuild=True)
+
+        for failure in (KeyboardInterrupt(), OSError(28, "No space left on device")):  # no matches.tsv yet
+            with self.assertRaises(type(failure)):
+                score(fsync=failure)
+            self.assertEqual(os.listdir(folder), ["records.jsonl.gz"])
+        rows = score()
+        with open(cache, "rb") as f:
+            good = f.read()
+        for failing in ({"fsync": KeyboardInterrupt()}, {"replace": PermissionError(13, "the file is in use")}):
+            with self.assertRaises(type(next(iter(failing.values())))):
+                score(**failing)
+            self.assertEqual(sorted(os.listdir(folder)), ["matches.tsv", "records.jsonl.gz"])
+            with open(cache, "rb") as f:
+                self.assertEqual(f.read(), good)
+        self.assertEqual(score(), rows)
 
     # ---------------- download_rxiv.py ----------------
     def test_f145_rxiv_cache_first_pass_reads_doi_and_version_without_parsing(self):

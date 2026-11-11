@@ -376,14 +376,21 @@ def _score_matches(records_path, kw, rank, key, cache):
         kept.sort(key=lambda p: (-p[0], -p[1]["cited"], p[1]["pmcid"]))
     head = {**key, "n": n, "matched": len(kept)}
     part = f"{cache}.{os.getpid()}.part"
-    with open(part, "w", encoding="utf-8", newline="\n") as handle:
-        handle.write(json.dumps(head) + "\n")
-        for _, r in kept:
-            handle.write("\t".join((r["pmcid"], r["pmid"], r["year"], str(r["cited"]), r["journal"], r["title"]))
-                         + "\n")
-        handle.flush()
-        os.fsync(handle.fileno())
-    os.replace(part, cache)
+    try:
+        with open(part, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write(json.dumps(head) + "\n")
+            for _, r in kept:
+                handle.write("\t".join((r["pmcid"], r["pmid"], r["year"], str(r["cited"]), r["journal"], r["title"]))
+                             + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(part, cache)
+    except BaseException:  # stopped (Ctrl+C) or failed (disk full, matches.tsv in use): no later run has this
+        try:               # process number, so the unfinished file (up to a gigabyte) would stay for good
+            os.remove(part)
+        except OSError:
+            pass
+        raise
     return head
 
 
