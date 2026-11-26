@@ -144,6 +144,23 @@ published unit rates for a tariff and region (`--tariff`, `--region`) or a fixed
 round from open datasets), text generation with optional watermarking, detection of the model's own text
 (`detect_text.py`) and export to safetensors.
 
+**7. Removing repetition loops (`tools/edit_weights.py`, `tools/compare_edit.py`).** Small models often fall into
+loops, repeating the same phrase. `edit_weights.py` lets the model continue held-out prompts, marks each generated
+position as "loop" (its 4-gram appeared earlier) or "fresh", and searches two kinds of edit per layer: zeroing the
+MLP neurons most active in loops, or projecting the loop-versus-fresh direction out of the layer's residual writers.
+Each candidate is scored on new prompts for loop rate and bits per byte (a candidate that costs more than
+`--max-bpb-loss` is rejected; a random edit of the same size is the control), and the best is saved as a NEW
+checkpoint with a JSON report; the original is only read. `compare_edit.py` then compares the two on prompts the
+edit never saw: loop rate, bits per byte and the fact benchmark, each with a paired 95 % interval, plus a picture
+and sample continuations side by side.
+
+```
+python tools/edit_weights.py tinyGPT_muon_best.pt tinyGPT_muon_best_noloop.pt
+python tools/compare_edit.py tinyGPT_muon_best.pt tinyGPT_muon_best_noloop.pt
+```
+
+Both read the validation documents of the dataset the model was trained on, so that dataset must be on disk.
+
 ## Data sources and licences
 
 | Source | Licence |
