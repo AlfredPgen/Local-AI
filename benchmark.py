@@ -884,8 +884,19 @@ def score_mcq(model, tok, items, device, amp_dtype, floor=True, batch_size=32):
     import tiny_gpt
     probes = [{"category": it["category"], "difficulty": "unrated", "prompt": mcq_prompt(it), "answer": it["answer"],
                "distractors": [o for o in it["options"] if o != it["answer"]]} for it in items]
+    t0, last = time.time(), [0.0]
+
+    def progress(done, total):
+        # longest sequences come first, so the estimate starts high and falls as the batches get shorter
+        now = time.time()
+        if now - last[0] >= 30 or done == total:
+            last[0] = now
+            left = (now - t0) / done * (total - done)
+            print(f"    {done:,}/{total:,} sequences ({done / total:.0%}) | {now - t0:,.0f} s so far | "
+                  f"at most ~{left / 60:,.0f} min left in this set", flush=True)
+
     _, results = tiny_gpt.score_probes(model, tok, probes, device, amp_dtype, batch_size=batch_size, floor=floor,
-                                       template=MCQ_TEMPLATE)
+                                       template=MCQ_TEMPLATE, progress=progress)
     rows = []
     for it, r in zip(items, results):
         rows.append({"id": it["id"], "category": it["category"], "tags": it.get("tags", []),
@@ -1071,15 +1082,37 @@ def fmt(x, spec=".4f"):
     return "" if x is None or (isinstance(x, float) and math.isnan(x)) else format(x, spec)
 
 
-def append_results(path, rows):
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    new = not os.path.exists(path)
-    with open(path, "a", encoding="utf-8-sig" if new else "utf-8", newline="") as handle:
+def append_results(path, rows, wait_minutes=10):
+    """Append rows to the results CSV. A file another program holds open (Excel locks it on Windows) is retried
+    every 10 s for up to wait_minutes; after that the rows go to <name>.pending-<time>.csv beside it, never lost."""
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    deadline, warned = time.time() + wait_minutes * 60, False
+    while True:
+        new = not os.path.exists(path)
+        try:
+            with open(path, "a", encoding="utf-8-sig" if new else "utf-8", newline="") as handle:
+                writer = csv.DictWriter(handle, fieldnames=RESULT_COLUMNS, extrasaction="ignore")
+                if new:
+                    writer.writeheader()
+                for row in rows:
+                    writer.writerow({k: home_short(v) if isinstance(v, str) else v for k, v in row.items()})
+            return path
+        except PermissionError:
+            if time.time() >= deadline:
+                break
+            if not warned:
+                print(f"  {path} is open in another program: close it; retrying every 10 s for "
+                      f"{wait_minutes} min", flush=True)
+                warned = True
+            time.sleep(10)
+    side = f"{os.path.splitext(path)[0]}.pending-{time.strftime('%Y%m%d-%H%M%S')}.csv"
+    with open(side, "w", encoding="utf-8-sig", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=RESULT_COLUMNS, extrasaction="ignore")
-        if new:
-            writer.writeheader()
+        writer.writeheader()
         for row in rows:
             writer.writerow({k: home_short(v) if isinstance(v, str) else v for k, v in row.items()})
+    print(f"  {path} stayed locked: these rows were written to {side} instead", flush=True)
+    return side
 
 
 def write_item_csv(path, rows):

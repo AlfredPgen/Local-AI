@@ -1128,14 +1128,14 @@ def panel_finetune_loss(ax, ck):
     if tr:
         ax.plot(*zip(*tr), color=SERIES[0], lw=2, marker="o", ms=3.5, label="training (mean over the epoch)")
     if va:
-        ax.plot(*zip(*va), color=SERIES[1], lw=2, marker="o", ms=3.5, label="held-out (after each epoch)")
+        ax.plot(*zip(*va), color=SERIES[1], lw=2, marker="o", ms=3.5, label="held-out")
         ax.annotate(f"{va[-1][1]:.3f}", va[-1], xytext=(-4, 8), textcoords="offset points", ha="right",
                     fontsize=_SIZE["note"], color=INK2)
     ax.set_xlabel(f"{method} optimizer step" if any(h.get("step") is not None for h in rows) else "epoch")
     ax.set_ylabel("cross-entropy of the answer tokens (nats)" if method == "SFT" else f"{method} loss")
     place_legend(ax)
     titled(ax, f"Fine-tuning loss ({method})",
-           f"{len(rows)} epochs from {path_name(ft.get('base'))}; the other history panels show its pre-training")
+           f"{sum(h.get('train_loss') is not None for h in rows)} epochs from {path_name(ft.get('base'))}; the other history panels show its pre-training")
 
 
 # upper limit of the loss axis once five evaluations lie below it (the first ones start near 10) and while the

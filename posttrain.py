@@ -39,6 +39,7 @@ import datetime
 import json
 import os
 import random
+import re
 import sys
 import time
 
@@ -193,6 +194,63 @@ def smoltalk(cap, kw, max_chars=4000, scan_limit=400_000):
     return out, seen
 
 
+CLOSING = re.compile(r"^\s*(thanks|thank you|thx|great,? thanks|bye|goodbye|that'?s (all|helpful|great))\b", re.I)
+
+
+def conversation_pairs(rng, cap_greetings=800, cap_general=5000, max_chars=2000, scan_limit=200_000):
+    """Single-turn pairs that teach conversation (the fine-tuning template has one question and one answer):
+    from SmolTalk's everyday-conversations, the opening greeting (capped: they are nearly all 'Hi' -> 'Hello!
+    How can I help you today?'), the second turn (the user's actual request, which stands on its own) and
+    thanks/goodbye turns; plus short general smol-magpie-ultra conversations (no keyword filter), so everyday
+    questions get an answer in kind rather than biology."""
+    greet, rest = [], []
+    for r in _stream("HuggingFaceTB/smoltalk", "everyday-conversations"):
+        msgs = _messages(r.get("messages"))
+        pairs = [(msgs[i]["content"], msgs[i + 1]["content"]) for i in range(len(msgs) - 1)
+                 if msgs[i].get("role") == "user" and msgs[i + 1].get("role") == "assistant"]
+        for t, (user, reply) in enumerate(pairs):
+            if not user or not reply:
+                continue
+            row = {"prompt": _text(user), "response": _text(reply), "source": "conversation"}
+            if t == 0:
+                greet.append(row)
+            elif t == 1 or CLOSING.match(user):
+                rest.append(row)
+    rng.shuffle(greet)
+    general, seen = [], 0
+    for r in _stream("HuggingFaceTB/smoltalk", "smol-magpie-ultra"):
+        seen += 1
+        if len(general) >= cap_general or seen > scan_limit:
+            break
+        msgs = _messages(r.get("messages"))
+        user = next((m["content"] for m in msgs if m.get("role") == "user"), "")
+        reply = next((m["content"] for m in msgs if m.get("role") == "assistant"), "")
+        if user and reply and len(user) + len(reply) <= max_chars and seen % 7 == 0:  # spread over the stream
+            general.append({"prompt": _text(user), "response": _text(reply), "source": "general"})
+    return greet[:cap_greetings], rest, general
+
+
+def build_chat_data(args):
+    """posttrain_data/sft_chat.jsonl: sft.jsonl plus the conversation pairs, shuffled (sft.jsonl is kept)."""
+    rng = random.Random(args.seed)
+    with open(os.path.join(args.data_dir, "sft.jsonl"), encoding="utf-8") as f:
+        sft = [json.loads(line) for line in f if line.strip()]
+    with open(os.path.join(args.data_dir, "eval_mcq.jsonl"), encoding="utf-8") as f:
+        eval_prompts = {json.loads(line)["prompt"].lower() for line in f if line.strip()}
+    t0 = time.time()
+    print("SmolTalk everyday-conversations and short general conversations ...", flush=True)
+    greet, rest, general = conversation_pairs(rng, args.greetings, args.general)
+    known = {r["prompt"].lower() for r in sft}
+    added = [r for r in greet + rest + general
+             if r["prompt"].lower() not in eval_prompts and (r in greet or r["prompt"].lower() not in known)]
+    rows = sft + added
+    rng.shuffle(rows)
+    out = os.path.join(args.data_dir, "sft_chat.jsonl")
+    _write_jsonl(out, rows)
+    print(f"  {len(greet):,} greetings, {len(rest):,} everyday requests and thanks, {len(general):,} general "
+          f"({time.time() - t0:,.0f} s)\n{out}: {len(sft):,} + {len(added):,} = {len(rows):,} pairs", flush=True)
+
+
 def ultrafeedback(cap, kw, max_chars=4000):
     out, seen = [], 0
     for r in _stream("HuggingFaceH4/ultrafeedback_binarized", split="train_prefs"):
@@ -304,10 +362,14 @@ def evaluate(checkpoints, args):
     mcq = [{"category": r["category"].split(":")[0], "difficulty": "unrated", "prompt": r["prompt"],
             "answer": r["answer"], "distractors": r["distractors"]} for r in evals]
     facts = tiny_gpt.read_probes(args.probes) if os.path.isfile(args.probes) else []
-    rows, answers = [], {}
+    rows, answers, curves = [], {}, {}
     for path in checkpoints:
         t0 = time.time()
-        model, tok, cfg, _ = tiny_gpt.load_for_inference(path, device, args.trust_checkpoint)
+        model, tok, cfg, obj = tiny_gpt.load_for_inference(path, device, args.trust_checkpoint)
+        ft = obj.get("finetune") if isinstance(obj, dict) else None
+        if isinstance(ft, dict) and ft.get("history"):
+            curves[path] = (str(ft.get("method", "")).upper(), ft["history"])
+        del obj
         model.eval()
         # the floor shuffles the question's words only: the template wraps each question after the shuffling
         acc, results = tiny_gpt.score_probes(model, tok, mcq, device, amp_dtype, floor=True,
@@ -348,6 +410,93 @@ def evaluate(checkpoints, args):
     with open(report, "w", encoding="utf-8", newline="\n") as handle:
         handle.write("\n".join(lines) + "\n")
     print(f"report: {report}")
+    try:
+        picture = draw_report(rows, curves, os.path.join(args.data_dir, "posttrain_report.png"), len(mcq),
+                              len(facts))
+        print(f"figure: {picture}")
+    except Exception as exc:  # noqa: BLE001 - the numbers are in the report; a failed picture must not lose them
+        print(f"figure not drawn ({type(exc).__name__}: {exc})")
+
+
+def draw_report(rows, curves, path, n_mcq, n_facts):
+    """posttrain_report.png: held-out loss during each fine-tune (one panel per method, from the curve stored in
+    the checkpoint) and the accuracy of every checkpoint on the held-out multiple choice and the fact benchmark,
+    with the shuffled-question floor and a 95 % interval."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import matplotlib.ticker  # noqa: F401 - PercentFormatter
+    import numpy as np
+    import tiny_gpt
+    import view_pt as vp
+    methods = [m for m in ("SFT", "DPO") if any(c[0] == m for c in curves.values())]
+    fig, axes = plt.subplots(1, len(methods) + 1, figsize=(5.2 * (len(methods) + 1), 4.4), dpi=130,
+                             facecolor=vp.SURFACE)
+    axes = list(np.atleast_1d(axes))
+    for ax, method in zip(axes, methods):
+        vp.style_axes(ax)
+        for k, (p, (m, hist)) in enumerate((p, c) for p, c in curves.items() if c[0] == method):
+            va = sorted((h["step"], h["val_loss"]) for h in hist
+                        if h.get("val_loss") is not None and h.get("step") is not None)
+            tr = [(h["step"], h["train_loss"]) for h in hist if h.get("train_loss") is not None]
+            if va:
+                ax.plot(*zip(*va), color=vp.SERIES[0], lw=2, marker="o", ms=3, label="held-out")
+                ax.annotate(f"{va[-1][1]:.3f}", va[-1], xytext=(-4, 8), textcoords="offset points", ha="right",
+                            fontsize=7.5, color=vp.INK2)
+            if tr:
+                ax.plot(*zip(*tr), color=vp.SERIES[1], lw=0, marker="s", ms=5, label="training (epoch mean)")
+            # accuracy during the run (finetune.py --score-every), on its own axis at the right
+            acc = {key: sorted((h["step"], h[key]) for h in hist if h.get(key) is not None and h.get("step") is not None)
+                   for key in ("multiple choice", "facts")}
+            if any(acc.values()):
+                ax2 = ax.twinx()
+                ax2.spines["top"].set_visible(False)
+                ax2.tick_params(colors=vp.INK2, labelsize=7.5, length=3, width=0.6)
+                for key, color in (("multiple choice", vp.SERIES[2]), ("facts", vp.SERIES[3])):
+                    if acc[key]:
+                        ax.plot([], [], color=color, lw=1.4, ls="--", marker="^", ms=3, label=f"{key} (right)")
+                        ax2.plot(*zip(*acc[key]), color=color, lw=1.4, ls="--", marker="^", ms=3)
+                ax2.set_ylim(0, 1)
+                ax2.yaxis.set_major_formatter(matplotlib.ticker.PercentFormatter(1.0, decimals=0))
+                ax2.set_ylabel("held-out accuracy", fontsize=8.5, color=vp.INK2)
+        ax.set_xlabel(f"{method} optimizer step", fontsize=8.5, color=vp.INK2)
+        ax.set_ylabel("answer-token cross-entropy (nats)" if method == "SFT" else "DPO loss", fontsize=8.5,
+                      color=vp.INK2)
+        ax.set_ylim(bottom=0)
+        ax.legend(loc="lower left", fontsize=7, frameon=False)
+        vp.titled(ax, f"{method}: held-out loss", "lower is better; a rise while training loss falls = memorising")
+    ax = axes[-1]
+    vp.style_axes(ax)
+    names = [os.path.basename(r[0]).replace(".pt", "") for r in rows]
+    x = np.arange(len(rows))
+    width = 0.38
+    for off, (label, acc_i, floor_i, n, color) in zip(
+            (-width / 2, width / 2),
+            ((f"multiple choice ({n_mcq:,} held-out)", 1, 2, n_mcq, vp.SERIES[0]),
+             (f"fact benchmark ({n_facts})", 4, 5, n_facts, vp.SERIES[2]))):
+        accs = [r[acc_i] for r in rows]
+        if any(a is None for a in accs):
+            continue
+        lo_hi = [tiny_gpt.wilson_interval(round(a * n), n) for a in accs]
+        ax.bar(x + off, accs, width, color=color, label=label,
+               yerr=[[a - lo for a, (lo, _) in zip(accs, lo_hi)], [hi - a for a, (_, hi) in zip(accs, lo_hi)]],
+               error_kw={"elinewidth": 0.8, "capsize": 2, "ecolor": vp.INK2})
+        for xi, r in zip(x, rows):
+            if r[floor_i] is not None:
+                ax.plot([xi + off - width / 2, xi + off + width / 2], [r[floor_i]] * 2, color=vp.INK, lw=1.4)
+        for xi, a in zip(x, accs):
+            ax.text(xi + off, a + 0.015, f"{a:.1%}", ha="center", va="bottom", fontsize=7, color=vp.INK2)
+    ax.axhline(0.25, color=vp.MUTED, lw=0.8, ls="--", label="chance (4 options)")
+    ax.plot([], [], color=vp.INK, lw=1.4, label="floor (question shuffled)")
+    ax.set_xticks(x, names, fontsize=8)
+    ax.set_ylim(0, max(0.6, max(r[1] for r in rows) + 0.12))
+    ax.yaxis.set_major_formatter(matplotlib.ticker.PercentFormatter(1.0, decimals=0))
+    ax.legend(loc="upper left", fontsize=7, frameon=False)
+    vp.titled(ax, "Accuracy by checkpoint", "bars: accuracy with 95 % interval; black tick: shuffled-question floor")
+    fig.tight_layout()
+    fig.savefig(path, facecolor=vp.SURFACE)
+    plt.close(fig)
+    return path
 
 
 # ---------------------------------------------------------------------------
@@ -383,7 +532,8 @@ def run(args):
     if tiny_gpt.select_device(args.device).type != "cpu" and finetune.gpu_busy(args.out_dir):
         raise SystemExit(tiny_gpt.GPU_BUSY_MESSAGE)
     # --force: the GPU was checked above; this process's own cached memory from SFT must not count as busy for DPO
-    common = ["--out-dir", args.out_dir, "--device", args.device, "--force", "--seed", str(args.seed)] \
+    common = ["--out-dir", args.out_dir, "--device", args.device, "--force", "--seed", str(args.seed),
+              "--score-every", str(args.score_every), "--score-mcq", os.path.join(args.data_dir, "eval_mcq.jsonl")] \
         + (["--overwrite"] if args.overwrite else []) + (["--trust-checkpoint"] if args.trust_checkpoint else [])
     # finetune returns the file it wrote: a locked target is saved under another name, and DPO and the
     # evaluation must use that new file, not the old one
@@ -392,7 +542,8 @@ def run(args):
     else:
         sft_path = finetune.main(["sft", "--base", args.base, "--data", os.path.join(args.data_dir, "sft.jsonl"),
                                   "--name", args.name + "_sft", "--epochs", str(args.sft_epochs), "--batch",
-                                  str(args.batch), "--val-fraction", "0.02"] + common)
+                                  str(args.batch), "--val-fraction", "0.02"]
+                                 + (["--lr", str(args.sft_lr)] if args.sft_lr else []) + common)
     dpo_path = finetune.main(["dpo", "--base", sft_path, "--data", os.path.join(args.data_dir, "dpo.jsonl"),
                               "--name", args.name + "_dpo", "--epochs", str(args.dpo_epochs), "--batch",
                               str(args.batch), "--val-fraction", "0.02"] + common)
@@ -416,15 +567,23 @@ def parse_args(argv=None):
     r.add_argument("--sft-epochs", type=int, default=2)
     r.add_argument("--dpo-epochs", type=int, default=1)
     r.add_argument("--batch", type=int, default=16)
+    r.add_argument("--sft-lr", type=float, default=None,
+                   help="SFT peak learning rate (default: finetune.py's by model size; pick it with a sweep)")
+    r.add_argument("--score-every", type=int, default=1000,
+                   help="steps between held-out accuracy readings during SFT and DPO (multiple choice and facts, "
+                        "about 30 s each on a laptop GPU); 0: only the final evaluation")
     r.add_argument("--overwrite", action="store_true")
     r.add_argument("--reuse-sft", action="store_true",
                    help="use an existing <name>_sft.pt made from this --base and start at DPO")
     e = sub.add_parser("eval", help="evaluate checkpoints")
     e.add_argument("checkpoints", nargs="+")
     e.add_argument("--force", action="store_true", help="use the GPU even if another job seems to be using it")
-    for s in (d, r, e):
+    c = sub.add_parser("chat-data", help="sft_chat.jsonl: sft.jsonl plus everyday conversation pairs")
+    c.add_argument("--greetings", type=int, default=800, help="greeting pairs (nearly all alike)")
+    c.add_argument("--general", type=int, default=5000, help="short general SmolTalk conversations")
+    for s in (d, r, e, c):
         s.add_argument("--data-dir", default=DEFAULT_DATA)
-    for s in (d, r):
+    for s in (d, r, c):
         s.add_argument("--seed", type=int, default=0)
     for s in (r, e):
         s.add_argument("--probes", default=os.path.join(HERE, "probes_biology.tsv"))
@@ -445,6 +604,8 @@ def main(argv=None):
         build_data(args)
     elif args.cmd == "run":
         run(args)
+    elif args.cmd == "chat-data":
+        build_chat_data(args)
     else:
         import finetune
         import tiny_gpt

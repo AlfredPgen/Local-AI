@@ -51,7 +51,11 @@ They describe the current run: dataset `datasets/bio_all`, run name `tinyGPT_muo
 | `detect_text.py` | Watermark and likelihood tests for text written by the model |
 | `calibrate_probes.py` | Difficulty labels for the fact benchmark, from open reference models |
 | `gpu_check.py` | GPU clocks, power limits and a short training benchmark |
-| `test_tiny_gpt.py` | Test suite: `python -m unittest test_tiny_gpt` (CPU only; see Tests) |
+| `chat_app.py` | Chat with a checkpoint in the browser (local only; answers stream word by word) |
+| `tools/lr_sweep.py` | Learning-rate sweep for SFT: short fine-tunes compared on held-out loss and accuracy |
+| `tools/watch_finetune.py` | Live plot of a running fine-tune (loss, held-out accuracy, learning rate), read from its log |
+| `tools/download_stackexchange.py` | Stack Overflow and other Stack Exchange sites (score-filtered Markdown) for pre-training |
+| `tools/download_hf.py` | Other Hugging Face data: MedRAG textbooks, PubMed abstracts, Cosmopedia, FineMath, SmolTalk |
 | `keywords.txt` | 22,650 terms in 80 categories (biology, genetics and gene symbols, proteins, microbes, diseases, chemistry and drugs, nutrition, species, statistics, causal inference, machine learning, GWAS and sequencing software, cross-ancestry methods, HLA, drug discovery, pharmacogenomics, biomechanics, pipelines and reporting, visual explanation, 3D modelling, databases, biobanks, companies, scientists' names) that decide which web, Wikipedia, arXiv, bioRxiv, medRxiv and YouTube documents are on topic |
 | `doc_sources.tsv` | The documentation sources for `download_docs.py` (tool, kind, url, licence, notes) |
 | `tools/` | Keyword-list checks (`kw_check.py`, `kw_covered.py`, `term_evidence.py`) and a link check for `doc_sources.tsv` (`url_check.py`) |
@@ -169,18 +173,7 @@ Check the licences before sharing a model trained on this data.
 
 ## Tests
 
-```
-python -m unittest test_tiny_gpt                              # the fast set
-$env:TINYGPT_SLOW_TESTS = "1"; python -m unittest test_tiny_gpt   # everything (PowerShell)
-```
-
-133 tests. The fast set (125, on the CPU) takes about 4-5 minutes; the six integration tests, which launch real
-training runs as child processes, run only with `TINYGPT_SLOW_TESTS=1` (the full suite then takes about 15-20
-minutes). Two GPU checks also need `TINYGPT_GPU_TESTS=1` and are never run while a training run uses the GPU. They
-cover data preparation (filters, duplicates, splits, identical results for any number of workers), converters, the
-model and training loop (resumption on the same windows and state, Muon, mixture of experts, the memory savings,
-skipped non-finite steps), the planner (shape ladder, learning rate, batch, time budget, Mac and CPU devices),
-evaluation, fine-tuning, detection and checkpoint safety.
+The test suite is kept locally and is not part of this repository.
 
 ## Licence
 

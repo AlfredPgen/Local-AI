@@ -2293,7 +2293,7 @@ def shuffled_prompt(prompt, k):
 
 
 @torch.no_grad()
-def score_probes(model, tok, probes, device, amp_dtype, batch_size=64, floor=True, template=None):
+def score_probes(model, tok, probes, device, amp_dtype, batch_size=64, floor=True, template=None, progress=None):
     """Cloze fact probes: is the correct continuation more probable (per
     character) than every distractor? A proxy for factual reliability, not a
     hallucination rate. All (probe, option) sequences are scored in right-padded
@@ -2305,7 +2305,11 @@ def score_probes(model, tok, probes, device, amp_dtype, batch_size=64, floor=Tru
 
     template (a format string with {prompt}, e.g. finetune.TEMPLATE) wraps each
     prompt after any shuffling, so only the question's words are shuffled and
-    the template stays intact; results keep the unwrapped prompt."""
+    the template stays intact; results keep the unwrapped prompt.
+
+    Sequences are batched in order of length (longest first), so a batch is not
+    padded to its one long member; progress(done, total), if given, is called
+    after every batch with counts of scored sequences."""
     was_training = model.training
     model.eval()
     prefix = [tok.bos_id] if tok.bos_id >= 0 else []
@@ -2321,8 +2325,12 @@ def score_probes(model, tok, probes, device, amp_dtype, batch_size=64, floor=Tru
             context = prefix + tok.encode(template.format(prompt=text) if template else text)
             for j, cont in enumerate(options):
                 ids = (context + cont)[-model.ctx - 1:]
-                seqs.append((i, v, j, ids, len(cont), chars[j]))
+                # an option longer than the context window: only its last len(ids) - 1 tokens can be scored (the
+                # first token of the window has no prediction), and its characters are counted in proportion
+                n_cont = min(len(cont), len(ids) - 1)
+                seqs.append((i, v, j, ids, n_cont, chars[j] * n_cont / max(len(cont), 1)))
     scores = [[[None] * (1 + len(p["distractors"])) for _ in range(versions)] for p in probes]
+    seqs.sort(key=lambda s: -len(s[3]))  # similar lengths share a batch: little padding
     for start in range(0, len(seqs), batch_size):
         chunk = seqs[start:start + batch_size]
         width = max(len(s[3]) for s in chunk) - 1
@@ -2347,6 +2355,8 @@ def score_probes(model, tok, probes, device, amp_dtype, batch_size=64, floor=Tru
         sums = torch.zeros(len(chunk), device=device).index_add_(0, rows_t, target_logp).cpu()
         for b, (i, v, j, _, _, n_chars) in enumerate(chunk):
             scores[i][v][j] = float(sums[b]) / n_chars
+        if progress is not None:
+            progress(start + len(chunk), len(seqs))
     results = []
     for probe, per_version in zip(probes, scores):
         s = per_version[0]

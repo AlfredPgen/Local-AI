@@ -2074,6 +2074,11 @@ def parse_args(argv=None):
     g.add_argument("--jsonl", action="append", default=[], help="glob of .jsonl / .jsonl.gz / .json.gz files "
                                                                  "(repeatable), e.g. peS2o shards")
     g.add_argument("--jsonl-name", default="jsonl", help="source name for --jsonl data, e.g. pes2o")
+    g.add_argument("--jsonl-source", action="append", default=[], metavar="NAME=GLOB",
+                   help="a further named JSONL source (repeatable; the same NAME again adds a pattern), e.g. "
+                        "stackexchange=D:\\se\\*\\*.jsonl.gz. Curated like a Markdown folder: read in full and "
+                        "not keyword-filtered under --keyword-sources web. A --text-root sub-folder holding "
+                        ".jsonl / .jsonl.gz / .json.gz files (and no Markdown or text) becomes one by itself")
     g.add_argument("--jsonl-max-docs", type=int, default=0)
     g.add_argument("--text-column", default="text")
     g.add_argument("--title-column", default="title")
@@ -2087,7 +2092,8 @@ def parse_args(argv=None):
     g.add_argument("--include-keywords", help="file (one term per line) or comma-separated terms")
     g.add_argument("--exclude-keywords", help="file or comma-separated terms; any match skips the record")
     g.add_argument("--keyword-sources", default="web",
-                   help="'web' = every source except Markdown/text folders (default), 'all', or names like wiki,web")
+                   help="'web' = every source except Markdown/text folders and --jsonl-source sources (default), "
+                        "'all', or names like wiki,web")
     g.add_argument("--keyword-min-hits", type=int, default=3)
     g.add_argument("--keyword-min-distinct", type=int, default=2)
     g.add_argument("--title-weight", type=int, default=3)
@@ -2169,13 +2175,62 @@ def text_root_folders(root):
     return sources, skipped
 
 
+JSONL_PATTERNS = ("*.jsonl", "*.jsonl.gz", "*.json.gz")
+
+
+def jsonl_folder_patterns(folder):
+    """The file patterns of a folder of JSONL records (in it or one level down, e.g. one sub-folder per site),
+    or [] when it is not one: no such files there, or Markdown/text files beside them (then it is a text folder)."""
+    text_ends = tuple(p[1:].lower() for p in MD_PATTERNS_DEFAULT)
+    record_ends = tuple(p[1:] for p in JSONL_PATTERNS)
+    found = set()
+
+    def scan(path, level):  # False at the first text file (stops early in big text folders)
+        try:
+            entries = list(os.scandir(path))
+        except OSError:
+            return True
+        for e in entries:
+            if e.is_file():
+                lower = e.name.lower()
+                if lower.endswith(text_ends):
+                    return False
+                for end in record_ends:
+                    if lower.endswith(end):
+                        found.add(os.path.join(folder, level, "*" + end))
+        return True
+
+    if not scan(folder, ""):
+        return []
+    for e in os.scandir(folder):
+        if e.is_dir() and not e.name.startswith((".", "_")) and not scan(e.path, "*"):
+            return []
+    return sorted(found)
+
+
+def parse_jsonl_sources(values):
+    """{name: [glob, ...]} from --jsonl-source NAME=GLOB values, in order (a repeated NAME adds a pattern)."""
+    out = {}
+    for value in values:
+        name, sep, pattern = value.partition("=")
+        if not sep or not re.fullmatch(SOURCE_NAME_RE, name.strip()) or not pattern.strip():
+            raise ValueError(f"--jsonl-source {value!r}: expected NAME=GLOB with a short NAME (letters, digits, _ "
+                             "or -)")
+        out.setdefault(name.strip(), []).append(pattern.strip())
+    return out
+
+
 def _validate(args, parser):
     if args.text_root:
         if not os.path.isdir(args.text_root):
             parser.error(f"--text-root not found: {args.text_root}")
         found, skipped = text_root_folders(args.text_root)
         for name, folder in found:
-            args.md_dir.append(f"{name}={folder}")
+            patterns = jsonl_folder_patterns(folder)
+            if patterns:  # records, not text files: a curated JSONL source of that name
+                args.jsonl_source += [f"{name}={p}" for p in patterns]
+            else:
+                args.md_dir.append(f"{name}={folder}")
         for name, why in skipped:
             print(f"WARNING: --text-root sub-folder {name!r} is not read: {why}.", flush=True)
         args.md_recursive = True
@@ -2203,8 +2258,15 @@ def _validate(args, parser):
         # for _resume_args: what an option gets that the saved build does not hold (never this command's value)
         args.resume_defaults = {dest: parser.get_default(dest) for dest in vars(args)}
         return
-    if not (args.md_dir or args.wiki_dir or args.parquet or args.jsonl):
-        parser.error("give at least one source: --md-dir, --wiki-dir, --parquet or --jsonl")
+    if not (args.md_dir or args.wiki_dir or args.parquet or args.jsonl or args.jsonl_source):
+        parser.error("give at least one source: --md-dir, --wiki-dir, --parquet, --jsonl or --jsonl-source")
+    try:
+        for name, patterns in parse_jsonl_sources(args.jsonl_source).items():
+            for pattern in patterns:
+                if not glob.glob(pattern):
+                    parser.error(f"--jsonl-source {name}: no files match {pattern}")
+    except ValueError as exc:
+        parser.error(str(exc))
     for flag, value in (("--parquet-name", args.parquet_name), ("--jsonl-name", args.jsonl_name)):
         if not re.fullmatch(SOURCE_NAME_RE, value):
             parser.error(f"{flag} must be a short identifier (letters, digits, _ or -)")
@@ -2371,9 +2433,10 @@ def _prepare(args, state=None):
         if spec == "all":
             return True
         if spec == "web":
-            return kind != "markdown"
+            return kind not in ("markdown", "jsonl_named")  # curated sources are read in full
         return name.lower() in wanted
 
+    jsonl_sources = parse_jsonl_sources(args.jsonl_source)
     readers = []
     for text_name in text_sources:
         readers.append((text_name, "markdown"))
@@ -2383,6 +2446,8 @@ def _prepare(args, state=None):
         readers.append((args.parquet_name, "parquet"))
     if args.jsonl:
         readers.append((args.jsonl_name, "jsonl"))
+    for jsonl_name in jsonl_sources:
+        readers.append((jsonl_name, "jsonl_named"))
     names = [n for n, _ in readers]
     if len({n.lower() for n in names}) != len(names):  # train.Books.bin and train.books.bin are one file on Windows
         raise SystemExit(f"Two sources share a name, ignoring case ({names}); rename a NAME=FOLDER source, "
@@ -2530,11 +2595,12 @@ def _prepare(args, state=None):
                 stream = iter_table_source(name, table, use_kw, max_docs, select, min_score,
                                            args.sample_fraction, args.seed, stats, args.threads)
             else:
-                paths = sorted({p for pattern in args.jsonl for p in glob.glob(pattern)})
+                patterns = args.jsonl if kind == "jsonl" else jsonl_sources[name]
+                paths = sorted({p for pattern in patterns for p in glob.glob(pattern)})
                 if not paths:
-                    raise SystemExit(f"No JSONL files match {args.jsonl}")
-                sources[name]["paths"] = args.jsonl
-                max_docs = args.jsonl_max_docs
+                    raise SystemExit(f"No JSONL files match {patterns}")
+                sources[name]["paths"] = patterns
+                max_docs = args.jsonl_max_docs if kind == "jsonl" else 0
                 stream = iter_jsonl(paths, args.text_column, args.title_column, args.id_column, max_docs, stats,
                                     use_kw, name=name, threads=args.threads, sample_fraction=args.sample_fraction,
                                     seed=args.seed)

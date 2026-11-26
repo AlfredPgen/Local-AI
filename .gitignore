@@ -36,3 +36,7 @@ logs/
 *_vs_original*
 .compile_cache/
 *_tokens.png
+
+# the test suite is kept locally, not on GitHub
+test_*.py
+*_test.py

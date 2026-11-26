@@ -212,6 +212,14 @@ def train(args):
     amp_dtype, amp_name, need_scaler = tiny_gpt.choose_precision(device, args.precision)
     scaler = torch.amp.GradScaler(device.type) if need_scaler else None  # fp16 needs loss scaling
     model, tok, cfg, base_obj = tiny_gpt.load_for_inference(args.base, device, args.trust_checkpoint)
+    if device.type == "cuda":
+        # Windows drivers do not raise out-of-memory when the GPU is full: they move memory into shared system
+        # RAM and every step becomes dozens of times slower. Capping PyTorch at what is free now (less a margin
+        # for the desktop) turns that into a real OOM, which the micro-batch halving below then handles.
+        index = device.index if device.index is not None else torch.cuda.current_device()
+        free, total = torch.cuda.mem_get_info(index)
+        cap = torch.cuda.memory_reserved(index) + free - 384 * 2 ** 20
+        torch.cuda.set_per_process_memory_fraction(max(0.1, min(1.0, cap / total)), index)
     # keep only what save() needs: the raw weights (and any optimizer state) would sit in RAM until the end
     base_obj = {k: base_obj.get(k) for k in ("dataset", "step", "train_config", "metrics", "finetune")}
     gc.collect()
@@ -251,7 +259,21 @@ def train(args):
         lr_note = ""
     model.train()
     model.grad_checkpoint = args.activation_checkpointing
-    mem = {"micro": min(args.micro_batch or args.batch, args.batch)}  # halved, or checkpointing added, on OOM
+    # a piece of a batch holds at most mem["micro"] examples and mem["tokens"] padded tokens (examples x widest):
+    # an out-of-memory error halves the token budget, so short batches still go through in one or two pieces and
+    # only wide ones are split finely (a fixed example count, once halved for one long batch, made every later
+    # batch run in pieces of 1-2 short examples: 4-8x more passes, the GPU half idle)
+    mem = {"micro": min(args.micro_batch or args.batch, args.batch), "tokens": float("inf")}
+
+    def split(items):
+        """Pieces of length-sorted `items` within mem's example and token limits (one example always fits)."""
+        out, cur = [], []
+        for it in items:
+            if cur and (len(cur) >= mem["micro"] or (len(cur) + 1) * item_length(it) > mem["tokens"]):
+                out.append(cur)
+                cur = []
+            cur.append(it)
+        return out + [cur] if cur else out
     # --freeze-router: a mixture-of-experts model keeps its pre-trained routing (the router matrices get no
     # gradient; the balancing bias buffers are never updated here in any case). Off by default: OLMoE's released
     # SFT trained the router along with the experts, without a balance loss.
@@ -295,10 +317,18 @@ def train(args):
     if args.mode == "dpo":
         # the reference is the starting model; score every pair once before the first update
         model.eval()
+        n_pairs, done, t_ref, beat = len(train_items) + len(val_items), 0, time.time(), time.time()
+        print(f"scoring {n_pairs:,} pairs with the starting model (DPO's reference) before training ...", flush=True)
         with torch.no_grad():
             for items in (train_items, val_items):
                 i = 0
                 while i < len(items):
+                    if time.time() - beat >= 60 and done:  # a progress line about once a minute
+                        beat = time.time()
+                        rate = (beat - t_ref) / done
+                        print(f"  ... reference: {done:,}/{n_pairs:,} pairs ({done / n_pairs:.0%}) | elapsed "
+                              f"{tiny_gpt.fmt_hms(beat - t_ref)} | left {tiny_gpt.fmt_hms(rate * (n_pairs - done))}",
+                              flush=True)
                     chunk = items[i:i + mem["micro"]]
                     oom = False
                     try:
@@ -317,6 +347,8 @@ def train(args):
                         continue
                     items[i:i + len(chunk)] = [(c, r, a, b) for (c, r, *_), a, b in zip(chunk, rc, rr)]
                     i += len(chunk)
+                    done += len(chunk)
+        print(f"reference scored in {tiny_gpt.fmt_hms(time.time() - t_ref)}", flush=True)
         model.train()
         free_memory(device)
     val_items.sort(key=item_length)  # held-out batches of similar length: less padding, same averages
@@ -344,17 +376,18 @@ def train(args):
         return sum(len(ids) - n_prompt for ids, n_prompt, *_ in items) if args.mode == "sft" else len(items)
 
     def train_batch(items):
-        """Gradients of one optimizer step's batch, accumulated over micro-batches of
-        mem['micro'] examples (each weighted by its share of the batch's units); on
-        out-of-memory the micro-batch is halved, then activation checkpointing is
-        switched on, and the batch starts again. Returns the batch's mean loss."""
+        """Gradients of one optimizer step's batch, accumulated over pieces (split:
+        each weighted by its share of the batch's units); on out-of-memory the token
+        budget drops to half the failed piece, or, when that piece was one example,
+        activation checkpointing is switched on, and the batch starts again. Returns
+        the batch's mean loss."""
         items = sorted(items, key=item_length)  # pieces of similar length: less padding, the same gradient
         while True:
             opt.zero_grad(set_to_none=True)
             total_units = units_of(items)
-            loss_sum, loss = 0.0, None
+            loss_sum, loss, part = 0.0, None, []
             try:
-                for part in pieces(items, mem["micro"]):
+                for part in split(items):
                     loss, part_sum, n, _ = step_loss(part)
                     weight = n / max(total_units, 1)
                     if scaler is not None:
@@ -364,26 +397,28 @@ def train(args):
                     loss_sum += part_sum
                 return loss_sum / max(total_units, 1)
             except RuntimeError as exc:
-                if not is_oom(exc) or (mem["micro"] == 1 and model.grad_checkpoint):
+                if not is_oom(exc) or (len(part) <= 1 and model.grad_checkpoint):
                     raise
             # out of memory: drop the failed piece's graph (held by `loss` and, inside the except block, by the
             # error's traceback) and its gradients before the retry, or the retry runs out of memory too
             loss = None
             opt.zero_grad(set_to_none=True)
             free_memory(device)
-            if mem["micro"] > 1:
-                mem["micro"] //= 2
-                print(f"out of memory: micro-batch {mem['micro']} (gradients accumulated to {args.batch})")
+            if len(part) > 1:
+                mem["tokens"] = len(part) * item_length(part[-1]) // 2
+                print(f"out of memory: pieces of at most {mem['tokens']:,} tokens (gradients accumulated to "
+                      f"{args.batch} examples)")
             else:
                 model.grad_checkpoint = True
-                print("out of memory at micro-batch 1: activation checkpointing on")
+                print(f"out of memory on one {item_length(part[-1]) if part else 0}-token example: activation "
+                      "checkpointing on")
 
     def evaluate_items(items):
         model.eval()
         total, units, extra = 0.0, 0, {}
         with torch.no_grad():
-            for i in range(0, len(items), mem["micro"]):
-                _, loss_sum, n, info = step_loss(items[i:i + mem["micro"]])
+            for part in split(items):  # items are sorted by length (val_items)
+                _, loss_sum, n, info = step_loss(part)
                 total, units = total + loss_sum, units + n
                 for k, v in info.items():
                     extra[k] = extra.get(k, 0.0) + v
@@ -391,12 +426,53 @@ def train(args):
         pairs = len(items)
         return total / max(units, 1), {k: v / max(pairs, 1) for k, v in extra.items()}
 
+    # --score-every: held-out accuracy during the run (multiple choice with the answer template, as posttrain's
+    # eval scores it, and the fact probes), so the curve shows more than the loss
+    scoring = []
+    if args.score_every:
+        with open(args.score_mcq, encoding="utf-8") as f:
+            questions = [json.loads(line) for line in f if line.strip()]
+        scoring = [("multiple choice", [{"category": r["category"].split(":")[0], "difficulty": "unrated",
+                                         "prompt": r["prompt"], "answer": r["answer"],
+                                         "distractors": r["distractors"]} for r in questions], TEMPLATE),
+                   ("facts", tiny_gpt.read_probes(tiny_gpt.DEFAULT_PROBES), None)]
+        mem["score_batch"] = 32
+
+    def accuracy():
+        out = {}
+        for key, probes, template in scoring:
+            while True:
+                failed = False
+                try:
+                    with torch.no_grad():
+                        out[key] = tiny_gpt.score_probes(model, tok, probes, device, amp_dtype,
+                                                         batch_size=mem["score_batch"], floor=False,
+                                                         template=template)[0]
+                except RuntimeError as exc:
+                    if not is_oom(exc) or mem["score_batch"] == 1:
+                        raise
+                    failed = True
+                if not failed:
+                    break
+                free_memory(device)  # outside the except block, so the failed batch's tensors can go
+                mem["score_batch"] //= 2
+        model.train()
+        return out
+
+    def measure(score_now):
+        loss_, info_ = evaluate_items(val_items)
+        if scoring and score_now:
+            info_.update(accuracy())
+        return loss_, info_
+
     info = {"method": args.mode, "base": os.path.abspath(args.base), "data": os.path.abspath(args.data),
             "examples": len(rows), "epochs": args.epochs, "lr": args.lr, "template": TEMPLATE,
             **({"beta": args.beta} if args.mode == "dpo" else {})}
     history, step, t0 = [], 0, time.time()
     epoch_files = {partial_path}  # plus the other names atomic_save used while <name>_partial.pt was locked
-    val_loss, val_info = evaluate_items(val_items)
+    val_loss, val_info = measure(True)
+    if scoring:  # the starting point of the accuracy curve (the loss's is the epoch-0 held-out loss)
+        history.append({"epoch": 0, "step": 0, "train_loss": None, "val_loss": val_loss, **val_info})
     print(f"epoch 0 | held-out loss {val_loss:.4f}" + "".join(f" | {k} {v:.3f}" for k, v in val_info.items()))
     t_train = last_beat = time.time()  # the rate excludes the initial evaluation
     for epoch in range(1, args.epochs + 1):
@@ -430,7 +506,13 @@ def train(args):
                       f"elapsed {tiny_gpt.fmt_hms(now - t0)} | left {tiny_gpt.fmt_hms(rate * (total - step))}",
                       flush=True)
                 last_beat = now
-        val_loss, val_info = evaluate_items(val_items)
+            due_score = bool(args.score_every) and step % args.score_every == 0
+            if ((args.eval_every and step % args.eval_every == 0) or due_score) and step != total:
+                mid_loss, mid_info = measure(due_score)
+                history.append({"epoch": epoch, "step": step, "train_loss": None, "val_loss": mid_loss, **mid_info})
+                print(f"step {step:,} | held-out loss {mid_loss:.4f}"
+                      + "".join(f" | {k} {v:.3f}" for k, v in mid_info.items()), flush=True)
+        val_loss, val_info = measure(True)
         history.append({"epoch": epoch, "step": step, "train_loss": sum(running) / len(running),
                         "val_loss": val_loss, **val_info})
         print(f"epoch {epoch} | train loss {history[-1]['train_loss']:.4f} | held-out loss {val_loss:.4f}"
@@ -467,7 +549,25 @@ def ask(args):
     check_gpu_free(device, args)
     amp_dtype, _, _ = tiny_gpt.choose_precision(device, args.precision, training=False)  # generation only
     model, tok, cfg, _ = tiny_gpt.load_for_inference(args.checkpoint, device, args.trust_checkpoint)
-    print(answer_question(model, tok, args.question, device, amp_dtype, args.max_new_tokens, args.seed))
+    model.eval()
+    if args.question:
+        print(answer_question(model, tok, args.question, device, amp_dtype, args.max_new_tokens, args.seed))
+        return
+    # chat: one question at a time (the model was fine-tuned on single questions, so earlier turns are not passed
+    # back to it); a new sampling seed for every answer, so asking again gives another answer
+    print(f"{os.path.basename(args.checkpoint)} loaded. Type a question and press Enter; an empty line or "
+          "'quit' ends. Each question is answered on its own (no memory of earlier ones).")
+    seed = args.seed
+    while True:
+        try:
+            question = input("\nyou> ").strip()
+        except (EOFError, KeyboardInterrupt):
+            break
+        if not question or question.lower() in ("quit", "exit"):
+            break
+        with torch.no_grad():
+            print("model> " + answer_question(model, tok, question, device, amp_dtype, args.max_new_tokens, seed))
+        seed += 1
 
 
 def main(argv=None):
@@ -488,17 +588,25 @@ def main(argv=None):
         s.add_argument("--epochs", type=int, default=3)
         s.add_argument("--batch", type=int, default=8, help="examples per optimizer step")
         s.add_argument("--micro-batch", type=int,
-                       help="examples per forward pass (default: --batch); gradients are accumulated to --batch, "
-                            "and an out-of-memory error halves it automatically")
+                       help="at most this many examples per forward pass (default: --batch); gradients are "
+                            "accumulated to --batch, and an out-of-memory error caps the tokens per pass at half "
+                            "the failed pass, so only long examples are split finely")
         s.add_argument("--activation-checkpointing", action="store_true",
                        help="recompute blocks in the backward pass (less memory, slower; switched on "
-                            "automatically after an out-of-memory error at micro-batch 1)")
+                            "automatically after an out-of-memory error on a single example)")
         s.add_argument("--lr", type=float, default=None,
                        help="learning rate (default by model size: 1e-4 below 300M parameters, 5e-5 up to 1B, 2e-5 "
                             "above; DPO one tenth)")
         s.add_argument("--beta", type=float, default=0.1, help="DPO: strength of the preference")
         s.add_argument("--weight-decay", type=float, default=0.0)
         s.add_argument("--val-fraction", type=float, default=0.1)
+        s.add_argument("--score-every", type=int, default=0,
+                       help="steps between held-out accuracy readings (multiple choice from --score-mcq and the "
+                            "fact probes; also at the start and at epoch ends); 0: none")
+        s.add_argument("--score-mcq", default=os.path.join(HERE, "posttrain_data", "eval_mcq.jsonl"),
+                       help="held-out multiple-choice questions for --score-every (posttrain.py's eval_mcq.jsonl)")
+        s.add_argument("--eval-every", type=int, default=500,
+                       help="steps between held-out loss readings within an epoch (0: only at epoch ends)")
         s.add_argument("--max-new-tokens", type=int, default=80)
         s.add_argument("--no-length-grouping", action="store_true",
                        help="plain shuffled batches (default: batches of examples of similar length, so less "
@@ -507,7 +615,7 @@ def main(argv=None):
                        help="mixture-of-experts models: keep the routers as pre-trained (default: they train too)")
         s.add_argument("--overwrite", action="store_true")
     a = sub.add_parser("ask")
-    a.add_argument("question")
+    a.add_argument("question", nargs="?", help="one question (without it: a chat, one question after another)")
     a.add_argument("--checkpoint", required=True)
     a.add_argument("--max-new-tokens", type=int, default=120)
     for s in (sub.choices["sft"], sub.choices["dpo"], a):
